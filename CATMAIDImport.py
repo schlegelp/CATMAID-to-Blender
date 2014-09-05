@@ -2,7 +2,8 @@
 
 ### V3.51 05/09/2014
 ### - changed server url to 'https://...'
-### - removed su
+### - removed subtype 'PASSWORD' from CATMAID Login as this seems to be bugged in Blender 2.71
+###   -> forces you to enter passwords in reverse
 
 ### V3.5 23/07/14
 ### - added orthographic perspective for export
