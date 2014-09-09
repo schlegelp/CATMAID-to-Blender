@@ -1,9 +1,13 @@
 ### CATMAID to Blender Import Script - Version History:
 
+### V3.52 09/09/2014
+### - added check for latest version (update.txt at Github repository)
+
 ### V3.51 05/09/2014
 ### - changed server url to 'https://...'
 ### - removed subtype 'PASSWORD' from CATMAID Login as this seems to be bugged in Blender 2.71
 ###   -> forces you to enter passwords in reverse
+
 
 ### V3.5 23/07/14
 ### - added orthographic perspective for export
@@ -130,8 +134,8 @@ server_url = 'https://neurocean.janelia.org/catmaidL1'
 bl_info = {
  "name": "Import Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 4),
- "blender": (2, 6, 8),
+ "version": (3, 5, 2),
+ "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server",
  "warning": "",
@@ -149,7 +153,28 @@ class CATMAIDimportPanel(bpy.types.Panel):
      
      
     def draw(self, context):
-        layout = self.layout                
+        layout = self.layout   
+        
+        #Version Check
+        config = bpy.data.scenes[0].CONFIG_VariableManager        
+        layout.label(text="Your Script Version: %s" % str(round(config.current_version,3)))
+        if config.latest_version == 0:
+            layout.label(text="Latest Version on Github: Unable to Retrieve")
+        else:
+            layout.label(text="Latest Version on Github: %s" % str(config.latest_version)) 
+            
+        if config.last_stable_version > config.current_version:
+            layout.label(text="Your are behind the last working", icon = 'ERROR')  
+            layout.label(text="       version of the Script!")          
+            layout.label(text="Please Download + Replace with the")
+            layout.label(text="latest Version of CATMAIDImport.py:")
+            layout.label(text="https://github.com/schlegelp/CATMAID-to-Blender")
+        elif config.latest_version > config.current_version and config.new_features != '':
+            layout.label(text="New Features in Latest Version: %s" % config.new_features)
+            
+        if config.message != '':
+            print('Message from Github: %s' % config.message)
+
                
         layout.label('Materials')
         row = layout.row(align=True)
@@ -187,14 +212,52 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'LOAD_FACTORY')#.number=1
         
-        layout.label(text=" Export to SVG:")
+        layout.label(text="Export to SVG:")
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("exportall.to_svg", text = 'Export Morphology')
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("connectors.to_svg", text = 'Export Connectors')
+        row.operator("connectors.to_svg", text = 'Export Connectors')        
+        
+        
+class VariableManager(bpy.types.PropertyGroup):    
+    current_version = bpy.props.FloatProperty(name="Your Script Version", default=0,min=0, description="Current Version of the Script you are using")
+    latest_version = bpy.props.FloatProperty(name="Latest Version", default=0,min=0, description="Latest Version on Github")
+    last_stable_version = bpy.props.FloatProperty(name="Last Stable Version", default=0,min=0, description="Last Stable Version of the Script")
+    message = bpy.props.StringProperty(name="Message", default="", description="Message from Github") 
+    new_features = bpy.props.StringProperty(name="New Features", default="", description="New features in latest Version of the Script on Github")     
 
+def get_version_info():
+    #Read current version from bl_info and convert from tuple into float
+    current_version = str(bl_info['version'][0]) + '.'
+    for i in range(len(bl_info['version'])-1):
+        current_version += str(bl_info['version'][i+1])
+    current_version = float(current_version)    
+    print('Current version of the Script: ', current_version)
+    try:        
+        update_url = 'https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/update.txt'    
+        update_file = urllib.request.urlopen(update_url) 
+        file_content = update_file.read().decode("utf-8")    
+            
+        latest_version = re.search('current_version.*?{(.*?)}',file_content).group(1)
+        last_stable = re.search('last_stable.*?{(.*?)}',file_content).group(1)   
+        new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)   
+        message = re.search('message.*?{(.*?)}',file_content).group(1)       
+        print('Latest version on Github: ', latest_version)              
+    except:
+        print('Error fetching info on latest version')
+        latest_version = 0
+        last_stable = 0
+        new_features = ''
+        message = ''
+
+    config = bpy.data.scenes[0].CONFIG_VariableManager     
+    config.current_version = current_version
+    config.latest_version = float(latest_version)
+    config.last_stable_version = float(last_stable)
+    config.message = message
+    config.new_features = new_features
 
 class CatmaidInstance:
     """ A class giving access to a CATMAID instance.
@@ -2726,6 +2789,9 @@ class ColorBySpatialDistribution(Operator):
           
         
 def register():
+ bpy.utils.register_class(VariableManager)
+ bpy.types.Scene.CONFIG_VariableManager = bpy.props.PointerProperty(type=VariableManager)       
+    
  bpy.utils.register_class(CATMAIDimportPanel)
  #bpy.utils.register_class(ImportFromTXT)
  #bpy.utils.register_class(ImportFromNeuroML)
@@ -2743,6 +2809,7 @@ def register():
  bpy.utils.register_class(UpdateNeurons)
  bpy.utils.register_class(ColorBySpatialDistribution)
  bpy.utils.register_class(TestHttpRequest)
+ get_version_info()
  
 def unregister():
  bpy.utils.unregister_class(CATMAIDimportPanel) 
