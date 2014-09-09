@@ -161,7 +161,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         if config.latest_version == 0:
             layout.label(text="Latest Version on Github: Unable to Retrieve")
         else:
-            layout.label(text="Latest Version on Github: %s" % str(config.latest_version)) 
+            layout.label(text="Latest Version on Github: %s" % str(round(config.latest_version,3))) 
             
         if config.last_stable_version > config.current_version:
             layout.label(text="Your are behind the last working", icon = 'ERROR')  
@@ -238,8 +238,7 @@ def get_version_info():
     try:        
         update_url = 'https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/update.txt'    
         update_file = urllib.request.urlopen(update_url) 
-        file_content = update_file.read().decode("utf-8")    
-            
+        file_content = update_file.read().decode("utf-8")        
         latest_version = re.search('current_version.*?{(.*?)}',file_content).group(1)
         last_stable = re.search('last_stable.*?{(.*?)}',file_content).group(1)   
         new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)   
@@ -1894,6 +1893,9 @@ class ConnectToCATMAID(Operator):
     
     def execute(self, context):               
         global remote_instance, server_url, connected
+        
+        #Check for latest version of the Script
+        get_version_info()
         
         print('Connecting to CATMAID server')
         print('HTTP user: %s' % self.local_http_user)
