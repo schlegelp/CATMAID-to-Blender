@@ -3,5 +3,5 @@
 
 current_version = {3.5}
 last_stable = {3.5}
-new_features ={None}
-message={}
+new_features = {None}
+message = {}
