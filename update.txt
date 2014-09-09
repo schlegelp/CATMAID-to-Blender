@@ -1,0 +1,7 @@
+#Provides current version, last stable version, 
+#recently added features and a message if need be
+
+current_version = {3.5}
+last_stable = {3.5}
+new_features ={None}
+message={}
