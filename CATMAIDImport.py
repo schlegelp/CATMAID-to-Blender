@@ -1,5 +1,9 @@
 ### CATMAID to Blender Import Script - Version History:
 
+### V3.6 20/10/2014
+### - added option to color neurons by #of synapses with given partner(s) 
+### - added option to export to svg using the colors from Blender
+
 ### V3.52 09/09/2014
 ### - added check for latest version (update.txt at Github repository)
 
@@ -134,7 +138,7 @@ server_url = 'https://neurocean.janelia.org/catmaidL1'
 bl_info = {
  "name": "Import Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 5, 2),
+ "version": (3, 6, 0),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server",
@@ -149,10 +153,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
     bl_label = "CATMAID Import"
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
-    bl_context = "scene"          
+    bl_context = "scene"      
      
-     
-    def draw(self, context):
+    def draw(self, context):       
+        
         layout = self.layout   
         
         #Version Check
@@ -175,6 +179,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
         if config.message != '':
             print('Message from Github: %s' % config.message)
 
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("check.version", text = "Check Version", icon ='VISIBLE_IPO_ON')
                
         layout.label('Materials')
         row = layout.row(align=True)
@@ -187,6 +195,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
         row.operator("color.by_spatial", text = "By Spatial Distr.", icon ='COLOR')
+        
+        row = layout.row(align=False)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='COLOR')
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
@@ -228,35 +240,54 @@ class VariableManager(bpy.types.PropertyGroup):
     message = bpy.props.StringProperty(name="Message", default="", description="Message from Github") 
     new_features = bpy.props.StringProperty(name="New Features", default="", description="New features in latest Version of the Script on Github")     
 
-def get_version_info():
-    #Read current version from bl_info and convert from tuple into float
-    current_version = str(bl_info['version'][0]) + '.'
-    for i in range(len(bl_info['version'])-1):
-        current_version += str(bl_info['version'][i+1])
-    current_version = float(current_version)    
-    print('Current version of the Script: ', current_version)
-    try:        
-        update_url = 'https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/update.txt'    
-        update_file = urllib.request.urlopen(update_url) 
-        file_content = update_file.read().decode("utf-8")        
-        latest_version = re.search('current_version.*?{(.*?)}',file_content).group(1)
-        last_stable = re.search('last_stable.*?{(.*?)}',file_content).group(1)   
-        new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)   
-        message = re.search('message.*?{(.*?)}',file_content).group(1)       
-        print('Latest version on Github: ', latest_version)              
-    except:
-        print('Error fetching info on latest version')
-        latest_version = 0
-        last_stable = 0
-        new_features = ''
-        message = ''
+class get_version_info(Operator):
+    """
+    Operator for Checking Addon Version on Github. 
+    Can be run by clicking the button. Will also be
+    called when connection to CATMAID servers is attempted.    
+    """
 
-    config = bpy.data.scenes[0].CONFIG_VariableManager     
-    config.current_version = current_version
-    config.latest_version = float(latest_version)
-    config.last_stable_version = float(last_stable)
-    config.message = message
-    config.new_features = new_features
+    bl_idname = "check.version" 
+    bl_label = "Check Version on Github" 
+    
+    def execute(self,context):
+        self.check_version()        
+        return{'FINISHED'}
+    
+    def check_version(context):
+        #Read current version from bl_info and convert from tuple into float
+        print('Checking Version on Github...')
+        current_version = str(bl_info['version'][0]) + '.'
+        for i in range(len(bl_info['version'])-1):
+            current_version += str(bl_info['version'][i+1])
+        current_version = float(current_version)    
+        print('Current version of the Script: ', current_version)
+        try:        
+            update_url = 'https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/update.txt'    
+            update_file = urllib.request.urlopen(update_url) 
+            file_content = update_file.read().decode("utf-8")        
+            latest_version = re.search('current_version.*?{(.*?)}',file_content).group(1)
+            last_stable = re.search('last_stable.*?{(.*?)}',file_content).group(1)   
+            new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)   
+            message = re.search('message.*?{(.*?)}',file_content).group(1)       
+            print('Latest version on Github: ', latest_version)              
+        except:
+            print('Error fetching info on latest version')
+            latest_version = 0
+            last_stable = 0
+            new_features = ''
+            message = ''
+
+        config = bpy.data.scenes[0].CONFIG_VariableManager    
+        config.current_version = current_version
+        config.latest_version = float(latest_version)
+        config.last_stable_version = float(last_stable)
+        config.message = message
+        config.new_features = new_features
+        
+    @classmethod
+    def poll(cls, context):                
+        return context.active_object is not None    
 
 class CatmaidInstance:
     """ A class giving access to a CATMAID instance.
@@ -436,13 +467,16 @@ class UpdateNeurons(Operator):
         if self.all_neurons is True:
             for neuron in bpy.data.objects:
                 if neuron.name.startswith('#'):
-                    skid = re.search('#(.*?) -',neuron.name).group(1)
-                    existing_neurons[neuron.name] = {}
-                    existing_neurons[neuron.name]['skid'] = skid
-                    if 'resampling' in neuron:
-                        existing_neurons[neuron.name]['resampling'] = neuron['resampling']
-                    else:
-                        existing_neurons[neuron.name]['resampling'] = 1
+                    try:
+                        skid = re.search('#(.*?) -',neuron.name).group(1)
+                        existing_neurons[neuron.name] = {}
+                        existing_neurons[neuron.name]['skid'] = skid
+                        if 'resampling' in neuron:
+                            existing_neurons[neuron.name]['resampling'] = neuron['resampling']
+                        else:
+                            existing_neurons[neuron.name]['resampling'] = 1
+                    except:
+                        print('Unable to process neuron ', neuron.name)
     
             ### Select all Neuron-related objects (Skeletons, Inputs/Outputs) and deselect everything else                          
             for object in bpy.data.objects:
@@ -544,6 +578,7 @@ class RetrieveNeuron(Operator):
             else:
                 print( "Retrieving Treenodes for %s [%i of %i]" % (skid,self.count,len(skeletons_to_retrieve)))
                 error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors)
+                self.count += 1
                 
                 if error_temp != '':
                     errors.append(error_temp)
@@ -1613,7 +1648,8 @@ class RetrievePartners(Operator):
     bl_idname = "retrieve.partners"  
     bl_label = "What partners to retrieve?"
     bl_options = {'UNDO'}
-     
+    
+    selected = BoolProperty(name="From Selected Neurons?", default = False)   
     inputs = BoolProperty(name="Retrieve Upstream Partners?", default = True)          
     outputs = BoolProperty(name="Retrieve Downstream Partners?", default = True)
     minimum_synapses = IntProperty(name="Synapse Threshold", default = 5)
@@ -1624,26 +1660,43 @@ class RetrievePartners(Operator):
     def execute(self, context):  
         global remote_instance
         
-        if bpy.context.active_object is None:
+        if self.selected is True and len(bpy.context.selected_objects) != 0:
+            count = 0
+            to_process = []
+            print('Loading partners for all selected neurons...')            
+            for object in bpy.context.selected_objects:
+                if object.name.startswith('#'):
+                    to_process.append(object)   
+            for neuron in to_process: 
+                print('Retrieving partners for %s [%i of %i]...' % (neuron.name,count,len(to_process)))
+                skid = re.search('#(.*?) -',neuron.name).group(1)
+                self.get_partners(skid)
+                count += 1
+        elif bpy.context.active_object is None:
             print ('No Object Active')        
         elif '#' not in bpy.context.active_object.name:
             print ('Active Object not a Neuron')
-        else:
+        elif self.selected is False:
             active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-            connectivity_post = { 'source[0]': active_skeleton, 'threshold': self.minimum_synapses , 'boolean_op': 'logic_OR' }             
-            remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
-            print( "Retrieving Partners..." )
-            connectivity_data = []
-            connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
-
-            if connectivity_data:
-                print("Connectivity successfully retrieved")
-                self.extract_partners(active_skeleton, connectivity_data, self.inputs, self.outputs, self.make_curve)
-            else:
-                print('No data retrieved') 
+            self.get_partners(active_skeleton)
+        
                         
         return {'FINISHED'}  
     
+    def get_partners(self, skid):
+        connectivity_post = { 'source[0]': skid, 'threshold': self.minimum_synapses , 'boolean_op': 'logic_OR' }             
+        remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
+        print( "Retrieving Partners..." )
+        connectivity_data = []
+        connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
+
+        if connectivity_data:
+            print("Connectivity successfully retrieved")
+            self.extract_partners(skid, connectivity_data, self.inputs, self.outputs, self.make_curve)
+        else:
+            print('No data retrieved') 
+        
+        
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
     
@@ -1895,7 +1948,7 @@ class ConnectToCATMAID(Operator):
         global remote_instance, server_url, connected
         
         #Check for latest version of the Script
-        get_version_info()
+        get_version_info.check_version(context)
         
         print('Connecting to CATMAID server')
         print('HTTP user: %s' % self.local_http_user)
@@ -1933,6 +1986,7 @@ class ExportAllToSVG(Operator, ExportHelper):
     
     all_neurons = BoolProperty(name="Process All Neurons", default = False)
     random_colors = BoolProperty(name="Use Random Colors", default = False)
+    colors_from_mesh = BoolProperty(name="Use Mesh Colors", default = False)
     merge = BoolProperty(name="Merge into One", default = False)
     basic_radius = FloatProperty(name="Base Soma Size", default = 1.5) 
     line_width = FloatProperty(name="Base Line Width", default = 0.35)       
@@ -2016,6 +2070,19 @@ class ExportAllToSVG(Operator, ExportHelper):
                     #color = 'rgb' + str((random.randrange(0,255),random.randrange(0,255),random.randrange(0,255)))
                     color = 'rgb' + str(colormap[0])
                     colormap.pop(0)
+                elif self.colors_from_mesh is True:
+                    try:
+                        #Take material in first mat slot
+                        mat = neuron.material_slots[0].material
+                        mesh_color = mat.diffuse_color
+                        color = 'rgb' + str((
+                                             int(mesh_color[0]*255),
+                                             int(mesh_color[1]*255), 
+                                             int(mesh_color[2]*255)
+                                           ))   
+                    except:
+                        print('Unable to retrieve color for ', neuron.name)
+                        color = 'rgb' + str((0, 0, 0)) 
                 else:
                     ### Standard color
                     color = 'rgb' + str((0, 0, 0)) 
@@ -2617,6 +2684,129 @@ class RenderAllNeurons(Operator):
                 object.hide_render = False
         
         return{'FINISHED'}
+
+class ColorBySynapseCount(Operator):
+    """Color neurons by # of Synapses with given partner(s)"""  
+    bl_idname = "color.by_synapse_count"  
+    bl_label = "Color Neurons by # of Synapses with given Partner(s)" 
+    bl_options = {'UNDO'}
+    
+    ### 'filter' takes argument to filter for up- and downstream partners      
+    filter_include = StringProperty(name="Include Filter (comma separated)", default = "")
+    filter_exclude = StringProperty(name="Exclude Filter (comma separated)", default = "")
+    use_upstream = BoolProperty(name="Consider Upstream", default = True)
+    use_downstream = BoolProperty(name="Consider Downstream", default = True)
+    
+    def execute (self, context):
+        synapse_count = {}    
+        connectivity_post = {} 
+        connectivity_post['threshold'] = 0
+        connectivity_post['boolean_op'] = 'logic_OR'         
+
+        filter_include_list = self.filter_include.split(',')
+        if self.filter_exclude != '':
+            filter_exclude_list = self.filter_exclude.split(',')
+        else:
+            filter_exclude_list = []
+
+        print('Include tags: ', filter_include_list)        
+        print('Exclude tags: ', filter_exclude_list)
+        
+        ### Set all Materials to Black first
+        #for material in bpy.data.materials:
+        #    material.diffuse_color = (0,0,0)  
+        
+        i = 0
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)
+                    synapse_count[skid] = 0        
+                    tag = 'source[%i]' % i
+                    connectivity_post[tag] = skid
+                    i += 1   
+                except:
+                    pass            
+            
+        remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
+        print( "Retrieving Partners for %i neurons..." % len(synapse_count))
+        connectivity_data = []
+        connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
+
+        if connectivity_data:
+            print("Connectivity successfully retrieved")            
+        else:
+            print('No data retrieved')  
+        
+        if self.use_upstream is True:    
+            for entry in connectivity_data['incoming']:
+                
+                #Filter Neuron Name
+                include_flag = False
+                for tag in filter_include_list:
+                    if tag in connectivity_data['incoming'][entry]['name']:
+                        include_flag = True
+                exclude_flag = False        
+                for tag in filter_exclude_list:
+                    if tag in connectivity_data['incoming'][entry]['name']:
+                        exclude_flag = True       
+                     
+                if include_flag is True and exclude_flag is False:            
+                    for skid in connectivity_data['incoming'][entry]['skids']:
+                        synapse_count[skid] += connectivity_data['incoming'][entry]['skids'][skid]
+                        
+        if self.use_downstream is True:    
+            for entry in connectivity_data['outgoing']:
+                
+                #Filter Neuron Name
+                include_flag = False
+                for tag in filter_include_list:
+                    if tag in connectivity_data['outgoing'][entry]['name']:
+                        include_flag = True
+                exclude_flag = False        
+                for tag in filter_exclude_list:
+                    if tag in connectivity_data['outgoing'][entry]['name']:
+                        exclude_flag = True   
+                                    
+                if include_flag is True and exclude_flag is False:           
+                    for skid in connectivity_data['outgoing'][entry]['skids']:
+                        synapse_count[skid] += connectivity_data['outgoing'][entry]['skids'][skid]        
+
+        #get max value in synapse count for gradient calculation
+        max_count = 0
+        for entry in synapse_count:
+            if synapse_count[entry] > max_count:
+                max_count = synapse_count[entry]
+        
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):
+                try:                
+                    skid = re.search('#(.*?) -',object.name).group(1)
+                    mat = object.active_material
+                    if synapse_count[skid] != 0:
+                        hue = calc_hue(synapse_count[skid],max_count,(110,0))
+                        s = 1
+                        v = 1
+                        hsv = colorsys.hsv_to_rgb(hue,s,v)
+                        mat.diffuse_color[0] = hsv[0]
+                        mat.diffuse_color[1] = hsv[1]
+                        mat.diffuse_color[2] = hsv[2]      
+                    else:
+                        mat.diffuse_color = (0.5,0.5,0.5)              
+                except:
+                    print('Unable to process object: ', object.name)
+
+        return{'FINISHED'}
+    
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)  
+    
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
     
 
 class ColorBySpatialDistribution(Operator):
@@ -2788,12 +2978,46 @@ class ColorBySpatialDistribution(Operator):
     
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)    
-          
+
+
+def calc_hue (value, max_value, lut):
+
+    #Get number of intervals
+    n_intervals = (len(lut)-1)
+
+    #Get interval for this value
+    interval = math.ceil(n_intervals/max_value * value)
+
+    #Set hue range based on interval
+    if interval != 0:
+        min_hue = lut[interval-1]
+        max_hue = lut[interval]
+        this_interval_max_value = interval/n_intervals * max_value
+    #Make sure that if value == 0 the first interval is choosen
+    else:
+        interval = 1
+        min_hue = lut[0]
+        max_hue = lut[1]
+        this_interval_max_value = interval/n_intervals * max_value
+
+    if max_hue > min_hue:
+        hue_range = max_hue - min_hue
+    else:
+        hue_range = (360-min_hue) + max_hue
+
+    hue_test = min_hue + (hue_range/this_interval_max_value * value)
+    hue = min_hue/360 + (hue_range/360/this_interval_max_value * value)
+
+    #print('N_Intervals: %i; Interval: %i; Min/Max Hue: %i/%i; Value: %f;max_value: %f; Hue: %f/%f' % (n_intervals,interval,min_hue,max_hue,value,this_interval_max_value,hue_test,hue))
+
+    return hue          
         
 def register():
- bpy.utils.register_class(VariableManager)
+ bpy.utils.register_module(__name__)
+ #bpy.utils.register_class(VariableManager)
  bpy.types.Scene.CONFIG_VariableManager = bpy.props.PointerProperty(type=VariableManager)       
-    
+
+ """    
  bpy.utils.register_class(CATMAIDimportPanel)
  #bpy.utils.register_class(ImportFromTXT)
  #bpy.utils.register_class(ImportFromNeuroML)
@@ -2810,10 +3034,14 @@ def register():
  bpy.utils.register_class(RetrieveByAnnotation)
  bpy.utils.register_class(UpdateNeurons)
  bpy.utils.register_class(ColorBySpatialDistribution)
+ bpy.utils.register_class(ColorBySynapseCount)
  bpy.utils.register_class(TestHttpRequest)
- get_version_info()
+ """
+ 
  
 def unregister():
+ bpy.utils.unregister_module(__name__)    
+ """
  bpy.utils.unregister_class(CATMAIDimportPanel) 
  #bpy.utils.unregister_class(ImportFromTXT)
  bpy.utils.unregister_class(Create_Mesh)
@@ -2830,8 +3058,15 @@ def unregister():
  bpy.utils.unregister_class(RetrieveByAnnotation)
  bpy.utils.unregister_class(UpdateNeurons)
  bpy.utils.unregister_class(ColorBySpatialDistribution) 
+ bpy.utils.unregister_class(ColorBySynapseCount)
  bpy.utils.unregister_class(TestHttpRequest)
- 
+ """
+ if bpy.context.scene.get('CONFIG_VariableManager') != None:     
+    del bpy.context.scene['CONFIG_VariableManager']
+ try:
+    del bpy.types.Scene.CONFIG_VariableManager
+ except:
+    pass
 
 
 if __name__ == "__main__":
