@@ -1684,7 +1684,7 @@ class RetrievePartners(Operator):
         return {'FINISHED'}  
     
     def get_partners(self, skid):
-        connectivity_post = { 'source[0]': skid, 'threshold': self.minimum_synapses , 'boolean_op': 'logic_OR' }             
+        connectivity_post = { 'source[0]': skid, 'threshold': self.minimum_synapses , 'boolean_op': 'logic_AND' }             
         remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
         print( "Retrieving Partners..." )
         connectivity_data = []
