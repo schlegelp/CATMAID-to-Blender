@@ -1,8 +1,33 @@
+"""
+    CATMAID to Blender Import Script - connects to CATMAID servers and retrieves
+    skeleton data
+    Copyright (C) 2014 Philipp Schlegel
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+    
+
 ### CATMAID to Blender Import Script - Version History:
+
+### V3.6 09/12/2014
+    - added license information
 
 ### V3.6 20/10/2014
 ### - added option to color neurons by #of synapses with given partner(s) 
 ### - added option to export to svg using the colors from Blender
+### - fixed bug in version check: was called to early when not __main__:
+###   - version check is now done manually via button OR whenever 'Connect 2 Catmaid' is
+###     called
 
 ### V3.52 09/09/2014
 ### - added check for latest version (update.txt at Github repository)
@@ -92,6 +117,8 @@
 ### - NOTE: Creation of the Neurons seems to be the bottleneck
 ### - added 'Render All Function'. What it does:
 ###     - Creates Cameras if neccessary and then does single neuron renders of all neurons
+
+"""
 
 import bpy
 import os
@@ -601,7 +628,20 @@ class RetrieveNeuron(Operator):
             print('Retrieving name of skeleton %s' % str(skeleton_id))
             neuron_name = get_neuronnames([neuron_name])[0]
         
-        error = ''
+        error = ''       
+        
+        cellname = skeleton_id + ' - ' + neuron_name  
+        #truncated neuron name down to 63 letters if necessary
+        if len(cellname) >= 60:
+            cellname = cellname[0:56] +'...'
+            print('Object name too long - truncated: ', cellname)
+        
+        object_name = '#' + cellname
+            
+        if object_name in bpy.data.objects:
+            print('Neuron already exists! Skipping.')
+            return error
+        
         if import_connectors is True:
             remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id ,1,0)
         else:
@@ -1644,7 +1684,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
 
 class RetrievePartners(Operator):      
-    """Retrieves Partners of active Neuron from CATMAID database"""
+    """Retrieves Partners of either active Neuron or all selected Neurons from CATMAID database"""
     bl_idname = "retrieve.partners"  
     bl_label = "What partners to retrieve?"
     bl_options = {'UNDO'}
@@ -1783,8 +1823,7 @@ class CATMAIDtoBlender:
     def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True):
         
         index = 1            
-        cellname = skid + ' - ' + neuron_name 
-        object_name = '#' + cellname        
+        cellname = skid + ' - ' + neuron_name                
         origin = (0,0,0)
         faces = []  
         XYZcoords = []
@@ -1796,6 +1835,13 @@ class CATMAIDtoBlender:
         child_count = {}   
         nodes_list = {}    
         list_of_childs = {} 
+        
+        #Truncate object name is necessary 
+        if len(cellname) >= 60:
+            cellname = cellname[0:56] +'...'
+            print('Object name too long - truncated: ', cellname)
+        
+        object_name = '#' + cellname     
         
         if object_name in bpy.data.objects:
             print('Neuron %s already exists!' % cellname)
@@ -2046,16 +2092,31 @@ class ExportAllToSVG(Operator, ExportHelper):
             to_process = []
             return
         
+        #Sort objects in to_process by color
+        sorted_by_color = {}
+        for object in to_process:           
+            try:                
+                color = str(object.active_material.diffuse_color)
+            except:
+                color = 'None'
+            if color not in sorted_by_color:
+                sorted_by_color[color] = []
+            sorted_by_color[color].append(object)
+        
+        to_process_sorted = []
+        for color in sorted_by_color:
+            to_process_sorted += sorted_by_color[color]
+        
         neuron_count = 0
 
-        for neuron in to_process:            
+        for neuron in to_process_sorted:            
             if re.search('#.*',neuron.name) and neuron.type == 'CURVE':
                 neuron_count += 1
             
         colormap = ColorCreator.random_colors(neuron_count)
         print(str(neuron_count) + ' colors created')
 
-        for neuron in to_process:
+        for neuron in to_process_sorted:
             ### Create List of Lines
             polyline_front = []
             polyline_top = []
