@@ -5,7 +5,7 @@ Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATM
 
 ## Installation:
 1. Download CATMAIDImport.py and place in \Blender\...\scripts\addons
-2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings'
+2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 ## Before First Use:
 Open CATMAIDImport.py, change 'server_url' to your server's url and restart Blender (if neccessary)
