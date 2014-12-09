@@ -8,8 +8,8 @@ Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATM
 2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 ## Before First Use:
-Open CATMAIDImport.py, change 'server_url' to your server's url and restart Blender (if neccessary)
-![server_url](https://cloud.githubusercontent.com/assets/7161148/5356721/c4fd5664-7f9f-11e4-9aa7-7e24e769d3f1.PNG)
+Open CATMAIDImport.py, search for 'server_url' variable and set to your server's url and restart Blender
+![server_url](https://cloud.githubusercontent.com/assets/7161148/5357317/7ab20c38-7fa6-11e4-82d7-3b7d3e039a69.PNG)
 
 ## Quickstart Guide:
 Import/Export panel will show up under the 'Scene' tab in the 'Properties' windows
