@@ -19,6 +19,20 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V3.7 10/01/2014
+    - added option to SVG exports to color by density of given CURVE object (e.g. DCV tracings)
+    - added option to SVG morphology export to color arbors by ratio between post- and presynaptic sites
+        - Keep in mind that the subdivision into arbors can be misleading, especially for very large arbors
+    - added option to choose which views should be exported
+    - added perspective to connector-to-svg export
+    - added new perspective 'Perspective-Dorsal' and made it standard:
+        - looks at the brain from behind at an elevated angle - comparable to squeeze mounting 
+    - added option to filter for synapse threshold when exporting connectors by using e.g. '>3'    
+    - fixed bug that occured when exporting connectors and a treenode has more than one connector upstream and led to all but one connectors be ignored
+
+### V3.6 16/12/2014
+    - fixed bugs in connector export
+
 ### V3.6 09/12/2014
     - added license information
 
@@ -163,12 +177,12 @@ connected = False
 server_url = 'https://neurocean.janelia.org/catmaidL1'
 
 bl_info = {
- "name": "Import Neuron from CATMAID",
+ "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 6, 0),
+ "version": (3, 7, 0),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
- "description": "Imports Neuron from CATMAID server",
+ "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
  "warning": "",
  "wiki_url": "",
  "tracker_url": "",
@@ -758,13 +772,15 @@ class RetrieveByAnnotation(Operator):
 
 
 class RetrieveConnectors(Operator):      
-    """Retrieves Connectors of active Neuron from CATMAID database"""
+    """Retrieves Connectors of active/all Neuron from CATMAID database"""
     bl_idname = "retrieve.connectors"  
     bl_label = "Connectors will be created in Layer 3!!!"
      
     all_neurons = BoolProperty(name="Process All", default = False)
     random_colors = BoolProperty(name="Random Colors", default = False)
     basic_radius = FloatProperty(name="Basic Radius", default = 0.01)
+    get_inputs = BoolProperty(name="Retrieve Inputs", default = True)
+    get_outputs = BoolProperty(name="Retrieve Ouputs", default = True)
     
     @classmethod        
     def poll(cls, context):
@@ -817,12 +833,12 @@ class RetrieveConnectors(Operator):
         ### Get coordinates, divide into pre-/postsynapses and bring them into Blender space: switch y and z, divide by 10.000/10.000/-10.000
         for connection in node_data[1]:
             
-            if connection[2] == 1:
+            if connection[2] == 1 and self.get_inputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
                 connector_pre_coords[connection[1]]['coords'] = (connection[3]/10000,connection[5]/10000,connection[4]/-10000)            
 
-            if connection[2] == 0:
+            if connection[2] == 0 and self.get_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
                 connector_post_coords[connection[1]]['coords'] = (connection[3]/10000,connection[5]/10000,connection[4]/-10000)            
@@ -862,12 +878,19 @@ class RetrieveConnectors(Operator):
 
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
+    
+def availableObjects(self, context):
+    available_objects = []
+    for obj in bpy.data.objects:
+        name = obj.name
+        available_objects.append((name,name,name))
+    return available_objects    
 
 
 class ConnectorsToSVG(Operator, ExportHelper):      
     """Retrieves Connectors of active Neuron from CATMAID database and outputs SVG"""
     bl_idname = "connectors.to_svg"  
-    bl_label = "Export Connectors to SVG"
+    bl_label = "Export Connectors (=Synapses) to SVG"
 
     # ExportHelper mixin class uses this
     filename_ext = ".svg"    
@@ -878,14 +901,38 @@ class ConnectorsToSVG(Operator, ExportHelper):
     merge = BoolProperty(name="Merge into One", default = True)
     color_by_input = BoolProperty(name="Color by Input", default = True)
     color_by_strength = BoolProperty(name="Color by Total # Connections", default = False)
+    color_by_density = BoolProperty(name = "Color by Density", 
+                                    default = False, 
+                                    description = "Colors Edges between Nodes by # of Nodes of given Object (choose below)")
+    object_for_density = EnumProperty(name = "Object for Density", 
+                                      items = availableObjects,
+                                      description = "Choose Object for Coloring Edges by Density")
+    proximity_radius_for_density = FloatProperty(name="Proximity Threshold", 
+                                                 default = 0.25,
+                                                 description = "Maximum allowed distance between Edge and a Node")
     export_inputs = BoolProperty(name="Export Inputs", default = True)
     export_outputs = BoolProperty(name="Export Outputs", default = False)
     scale_outputs = BoolProperty(name="Scale Presynapses", default = False)    
     basic_radius = FloatProperty(name="Base Node Radius", default = 0.5) 
     export_ring_gland = BoolProperty(name="Export Ring Gland", default = False)
     export_neuron = BoolProperty(name="Include Neuron", default = True)
-    filter_upstream = StringProperty(name="Filter Inputs:", default = '')
+    filter_upstream = StringProperty(name="Filter Inputs:", default = '',
+                                     description="Set Filter for Inputs (syntax: to exclude start with ! / to set synapse threshold start with > / without these filter applies to neuron names (case INsensitive)) ")
     #filter_downstream = StringProperty(name="Filter Outputs:", default = '')
+    
+    x_persp_offset = FloatProperty(name="Horizontal Perspective", default = 0.5, max = 2, min = -2)  
+    y_persp_offset = FloatProperty(name="Vertical Perspective", default = -0.01, max = 2, min = -2)
+    views_to_export = EnumProperty(name="Views to export",
+                                   items = (("Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal"),
+                                            ("Front/Top/Lateral","Front/Top/Lateral","Front/Top/Lateral"),
+                                            ("Front","Front","Front"),
+                                            ("Top","Top","Top"),
+                                            ("Lateral","Lateral","Lateral"),
+                                            ("Perspective-Front","Perspective-Front","Perspective-Front"),
+                                            ("Perspective-Dorsal","Perspective-Dorsal","Perspective-Dorsal")
+                                            ),
+                                    default =  "Front/Top/Lateral/Perspective-Dorsal",
+                                    description = "Choose which views should be included in final SVG")
     
     neuron_names = {}
     
@@ -907,14 +954,18 @@ class ConnectorsToSVG(Operator, ExportHelper):
         if bpy.context.active_object is None and self.all_neurons is False:
             print ('No Object Active')       
         elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.all_neurons is False:
-            print ('Active Object not a Neuron') 
-        
+            print ('Active Object not a Neuron')         
         elif self.all_neurons is False:                       
             active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
             connector_data[active_skeleton] = self.get_connectors(active_skeleton)
-            self.export_to_svg(connector_data)   
-        
-        if self.all_neurons is True:             
+
+            if self.export_neuron is True:        
+                neurons_svg_string = self.create_svg_for_neuron([bpy.context.active_object])                    
+            else:
+                neurons_svg_string = {}                
+            
+            self.export_to_svg(connector_data,neurons_svg_string)           
+        elif self.all_neurons is True:             
             
             for neuron in bpy.data.objects:
                 if neuron.name.startswith('#'):
@@ -969,10 +1020,23 @@ class ConnectorsToSVG(Operator, ExportHelper):
             if connection[2] == 1 and self.export_inputs is True:
                 ### For Sources the Treenodes the Connector is connecting TO are listed
                 ### Reason: One connector can connector to the same neuron (at different treenodes) multiple times!!!
+                ### !!!Attention: Treenode can be connected to multiple connectors (up- and downstream)
                 
+                if connection[0] not in connector_pre_coords:
+                    connector_pre_coords[connection[0]] = {}
+                    
+                if connection[0] == 9714991:
+                    print(connection)
+                    
+                #Format: connector_pre_coord[target_treenode_id][upstream_connector_id] = coords of target treenode
+                connector_pre_coords[connection[0]][connection[1]] = {} 
+                connector_pre_coords[connection[0]][connection[1]]['coords'] = nodes_list[connection[0]] #these are treenode coords, NOT connector coords
+                
+                """
                 connector_pre_coords[connection[0]] = {}
                 connector_pre_coords[connection[0]]['connector_id'] = connection[1]
-                connector_pre_coords[connection[0]]['coords'] = nodes_list[connection[0]]
+                connector_pre_coords[connection[0]]['coords'] = nodes_list[connection[0]]                
+                """               
 
                 ### This format is necessary for CATMAID url postdata:
                 ### Dictonary: 'connector_ids[x]' : connectorid
@@ -1033,20 +1097,37 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     
                 self.check_ancestry(skids_to_check) 
                 print('Done')
-            
+                
+                total_synapse_count = {}
+                neurons_included = []  
+                
+                #Create weight map for subsequent threshold filtering
+                for connector in connector_data_pre:
+                    ### If connector IDs match. Keep in mind: A single treenode can receive input from more than one connector!!!                    
+                    input = connector[1]['presynaptic_to']
+                    ### Count number of connections for each presynaptic neuron                    
+                    if input not in total_synapse_count:                                                
+                        total_synapse_count[input] = 1
+                    else:
+                        total_synapse_count[input] += 1
+                            
+                print(total_synapse_count)
+          
                 ### Create list of sources for all target treenodes:                     
                 for treenode in connector_pre_coords:
                     #print('Searching for treenode %s connected to connector %s' % (str(treenode),str(connector_pre_coords[treenode]['connector_id']) ) )
-                    presynaptic_to[treenode] = []
+                    if treenode not in presynaptic_to:
+                        presynaptic_to[treenode] = []
                     entries_to_delete[treenode] = True
-                    neurons_included = []
+
                     
                     ### Connector_data_XXX is a list NOT a dictionary, so we have to cycle through it
-                    for connector in connector_data_pre:
-                    
+                    for connector in connector_data_pre:                    
                         ### If connector IDs match. Keep in mind: A single treenode can receive input from more than one connector!!!
-                        if connector[0] == connector_pre_coords[treenode]['connector_id']:                                                
-     
+                        #if connector[0] == connector_pre_coords[treenode]['connector_id']:                                                
+                        if connector[0] in connector_pre_coords[treenode]:
+                            connector_pre_coords[treenode][connector[0]]['presynaptic_to'] = connector[1]['presynaptic_to']
+                            
                             if self.filter_upstream:
                                 print('Filtering Connector %s (presynaptic to %s) for %s' % (connector[0], connector[1]['presynaptic_to'] ,self.filter_upstream))                     
 
@@ -1056,17 +1137,36 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                 ### Check for match with filter:
                                 ### If filter startswith '!' then those neurons will be excluded
                                 if self.filter_upstream.startswith('!'):
-                                    if connector[1]['presynaptic_to'] != None and self.filter_upstream[1:] not in self.neuron_names[connector[1]['presynaptic_to']]:
+                                    if connector[1]['presynaptic_to'] != None and self.filter_upstream[1:].lower() not in self.neuron_names[connector[1]['presynaptic_to']].lower():
                                         print('NO match with -- %s -- : %s' % (connector[1]['presynaptic_to'],self.neuron_names[connector[1]['presynaptic_to']]))
                                         presynaptic_to[treenode].append(connector[1]['presynaptic_to'])
                                         entries_to_delete[treenode] = False 
-                                        neurons_included.append(self.neuron_names[connector[1]['presynaptic_to']])                                                                           
+                                        neurons_included.append(self.neuron_names[connector[1]['presynaptic_to']])
+                                    else:
+                                        #If connector is below threshold: remove him from dict[treenode]
+                                        connector_pre_coords[treenode].pop(connector[0])  
+                                elif self.filter_upstream.startswith('>'):
+                                    try:
+                                        synapse_threshold = int(self.filter_upstream[1:])
+                                        if total_synapse_count[connector[1]['presynaptic_to']] >= synapse_threshold:
+                                            print('Above threshold: -- %s -- : %s (%i)' % (connector[1]['presynaptic_to'],self.neuron_names[connector[1]['presynaptic_to']],total_synapse_count[connector[1]['presynaptic_to']]))
+                                            presynaptic_to[treenode].append(connector[1]['presynaptic_to'])
+                                            entries_to_delete[treenode] = False
+                                            neurons_included.append(self.neuron_names[connector[1]['presynaptic_to']])
+                                        else:
+                                            #If connector is below threshold: remove him from dict[treenode]
+                                            connector_pre_coords[treenode].pop(connector[0])
+                                    except:
+                                        print('Unable to convert filter string to int')
                                 else:                                    
-                                    if connector[1]['presynaptic_to'] != None and self.filter_upstream in self.neuron_names[connector[1]['presynaptic_to']]:
+                                    if connector[1]['presynaptic_to'] != None and self.filter_upstream.lower() in self.neuron_names[connector[1]['presynaptic_to']].lower():
                                         print('match with -- %s -- : %s' % (connector[1]['presynaptic_to'],self.neuron_names[connector[1]['presynaptic_to']]))
                                         presynaptic_to[treenode].append(connector[1]['presynaptic_to'])
                                         entries_to_delete[treenode] = False
                                         neurons_included.append(self.neuron_names[connector[1]['presynaptic_to']])
+                                    else:
+                                        #If connector is below threshold: remove him from dict[treenode]
+                                        connector_pre_coords[treenode].pop(connector[0])
                             
                             else:
                                 presynaptic_to[treenode].append(connector[1]['presynaptic_to'])
@@ -1079,11 +1179,12 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         #print('Deleted entry for treenode %s' % treenode)
                         connector_pre_coords.pop(treenode)
                         count += 1
-                print('%i connectors left (%s filtered)' % (len(connector_pre_coords),count))
+                print('%i target treenodes left (%s removed by Filter)' % (len(connector_pre_coords),count))
                 
-                print('Neurons remaining after filtering:')
-                for neuron in neurons_included:
-                    print(neuron)   
+                if self.filter_upstream:
+                    print('Neurons remaining after filtering:')
+                    print(set(neurons_included))
+
 
             return((number_of_targets, connector_pre_coords, connector_post_coords, presynaptic_to))
            
@@ -1110,14 +1211,31 @@ class ConnectorsToSVG(Operator, ExportHelper):
         
         offsetY_for_lateral = 0
         offsetX_for_lateral = 0   
+        
+        offsetY_for_persp = 150
+        offsetX_for_persp = 0   
 
         offsetY_forMergeLegend = -150 
+        
+        if "Perspective-Dorsal" in self.views_to_export:
+            #For dorsal perspective change offsets:
+            y_persp_offset = -1 * self.x_persp_offset
+            x_persp_offset = 0            
+            #y_center sets the pivot along y axis (0-25) -> all this does is move the object along y axis, does NOT change perspective
+            y_center = 5  
+        else:
+            x_persp_offset = self.x_persp_offset
+            y_persp_offset = self.y_persp_offset
         
         if self.merge is True:
             offsetIncrease = 0
         else:
-            offsetIncrease = 120        
+            offsetIncrease = 250        
         basic_radius = self.basic_radius
+        
+        density_gradient = {'start_rgb': (0,255,0),
+                            'end_rgb':(255,0,0)}
+        density_data = []        
 
         brain_shape_top_string = '<g id="brain shape top">\n <polyline points="28.3,-5.8 34.0,-7.1 38.0,-9.4 45.1,-15.5 50.8,-20.6 57.7,-25.4 59.6,-25.6 63.2,-22.8 67.7,-18.7 70.7,-17.2 74.6,-14.3 78.1,-12.8 84.3,-12.6 87.7,-15.5 91.8,-20.9 98.1,-32.4 99.9,-38.3 105.2,-48.9 106.1,-56.4 105.6,-70.1 103.2,-75.8 97.7,-82.0 92.5,-87.2 88.8,-89.1 82.6,-90.0 75.0,-89.9 67.4,-89.6 60.8,-85.6 55.3,-77.2 52.4,-70.2 51.9,-56.7 55.0,-47.0 55.9,-36.4 56.0,-32.1 54.3,-31.1 51.0,-33.4 50.7,-42.5 52.7,-48.6 49.9,-58.4 44.3,-70.8 37.4,-80.9 33.1,-84.0 24.7,-86.0 14.2,-83.9 8.3,-79.1 2.9,-68.3 1.3,-53.5 2.5,-46.9 3.0,-38.3 6.3,-28.2 10.9,-18.7 16.3,-9.7 22.2,-6.4 28.3,-5.8" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="88.8,-89.1 90.9,-97.7 92.9,-111.3 95.6,-125.6 96.7,-139.4 95.9,-152.0 92.8,-170.2 89.4,-191.0 87.2,-203.7 80.6,-216.6 73.4,-228.3 64.5,-239.9 56.4,-247.3 48.8,-246.9 39.0,-238.3 29.6,-226.9 24.7,-212.0 22.9,-201.2 23.1,-186.9 18.7,-168.3 14.1,-150.4 12.6,-138.0 13.7,-121.5 16.3,-105.1 18.3,-84.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         brain_shape_front_string = '<g id="brain shape front"> \n <polyline points="51.5,24.0 52.0,21.3 52.0,17.6 50.2,11.2 46.8,6.5 40.5,2.5 33.8,1.1 25.4,3.4 18.8,8.0 13.2,12.5 8.3,17.9 4.3,23.8 1.8,29.3 1.4,35.6 1.6,42.1 4.7,48.3 7.9,52.5 10.8,56.9 13.1,64.3 14.3,73.2 12.8,81.0 16.2,93.6 20.9,101.5 28.2,107.5 35.3,112.7 42.2,117.0 50.8,119.3 57.9,119.3 67.1,118.0 73.9,114.1 79.0,110.4 91.1,102.7 96.3,94.2 96.3,85.3 94.0,81.4 95.4,74.8 96.6,68.3 97.5,64.7 100.9,59.7 103.8,52.5 105.4,46.7 106.1,38.8 105.4,32.4 103.1,26.4 98.9,21.0 94.1,16.3 88.3,11.1 82.0,6.5 74.8,3.3 67.8,3.1 61.7,5.1 56.8,9.6 53.4,15.2 52.2,19.7 52.3,25.3 51.4,24.1 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="46.6,34.0 45.5,36.1 43.2,38.6 41.1,43.3 39.7,48.7 39.7,51.0 42.6,55.2 51.4,59.5 54.9,60.9 60.8,60.8 62.9,58.2 62.9,52.6 60.3,47.6 57.7,43.9 56.1,40.2 55.1,35.9 55.1,34.4 51.8,33.6 49.1,33.5 46.6,34.0 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'         
@@ -1130,6 +1248,77 @@ class ConnectorsToSVG(Operator, ExportHelper):
         print('Writing SVG to file %s' % self.filepath)
         f = open(self.filepath, 'w', encoding='utf-8')  
         f.write(svg_header)     
+        
+        #Create list of nodes for given density object
+        if self.color_by_density is True:
+            density_color_map = {}
+            max_density = 0
+            try:
+                for spline in bpy.data.objects[self.object_for_density].data.splines:
+                    for node in spline.points:
+                        #node.co = vector(x,y,z,?)
+                        if node.co not in density_data:
+                            density_data.append(node.co)
+                print(density_data)
+            except:
+                print('Unable to create density data for object!')  
+            
+            #Fill density_color_map with density counts first and get max_density
+            for neuron in connector_data:
+                #Presynaptic connectors (=Treenodes)    
+                for target_treenode in connector_data[neuron][1]:
+                    for connector in connector_data[neuron][1][target_treenode]:
+                        if connector not in density_color_map:
+                            connector_co = connector_data[neuron][1][target_treenode][connector]['coords']
+                            density_count = 0
+                            for node in density_data:
+                                dist1 = math.sqrt(
+                                                  (connector_co[0]-node[0])**2 +
+                                                  (connector_co[1]-node[1])**2 +
+                                                  (connector_co[2]-node[2])**2
+                                                 )
+                                if dist1 < self.proximity_radius_for_density:
+                                    density_count += 1   
+                                    
+                            if density_count > max_density:
+                                max_density = density_count
+                                
+                            density_color_map[connector] = density_count
+                
+                #Postsynaptic connectors            
+                for connector in connector_data[neuron][2]:
+                    if connector not in density_color_map:
+                        connector_co = connector_data[neuron][2][connector]['coords']
+                        density_count = 0
+                        for node in density_data:
+                            dist1 = math.sqrt(
+                                              (connector_co[0]-node[0])**2 +
+                                              (connector_co[1]-node[1])**2 +
+                                              (connector_co[2]-node[2])**2
+                                             )
+                            if dist1 < self.proximity_radius_for_density:
+                                density_count += 1   
+                                
+                        if density_count > max_density:
+                            max_density = density_count
+                            
+                        density_color_map[connector] = density_count
+                            
+            #Convert density_color_map from density counts to colors
+            for connector in density_color_map:
+                density_count = density_color_map[connector]                
+                if max_density > 0 and density_count > 0:
+                    density_color = (
+                                    int(density_gradient['start_rgb'][0] + (density_gradient['end_rgb'][0] - density_gradient['start_rgb'][0])/max_density * density_count),                    
+                                    int(density_gradient['start_rgb'][1] + (density_gradient['end_rgb'][1] - density_gradient['start_rgb'][1])/max_density * density_count),                         
+                                    int(density_gradient['start_rgb'][2] + (density_gradient['end_rgb'][2] - density_gradient['start_rgb'][2])/max_density * density_count)                             
+                                                )
+                else:
+                    #print('No density data within given radius found!')
+                    density_color = (0,0,0)
+                    
+                density_color_map[connector] = density_color
+                               
 
         ### Create random color map for every input / red is reserved for all outputs            
         if self.color_by_input is True or self.color_by_strength is True:            
@@ -1138,22 +1327,22 @@ class ConnectorsToSVG(Operator, ExportHelper):
             max_values = {}
             presynaptic_to = {}
             
-            print('Creating random input/weight color map...')
+            print('Creating input/weight color map...')
             
             for neuron in connector_data:   
                 presynaptic_to[neuron] = connector_data[neuron][3]  
-                print(presynaptic_to[neuron])
+                #print(presynaptic_to[neuron])
                 input_weight_map[neuron] = {}
                 max_values[neuron] = []
                                         
-                for target_treenode in presynaptic_to[neuron]:
-                    
+                for target_treenode in presynaptic_to[neuron]:                    
                     for input in presynaptic_to[neuron][target_treenode]: 
-                    
+                                            
                         ### Create random color map for all source neurons
                         if input not in input_color_map:
                             input_color_map[input] = (random.randrange(0,255), random.randrange(0,255),random.randrange(0,255)) 
                             outputs_color = (255, 0, 0)
+                        ### ATTENTION: this input color map is replaced down the page by a non-random version!
 
                         ### Count number of connections for each presynaptic neuron                    
                         if input not in input_weight_map[neuron]:                                                
@@ -1175,8 +1364,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     half_max = 0
                             
                 ### Create color scheme from green to red based on min/max
-                for input in input_weight_map[neuron]:
-                    
+                for input in input_weight_map[neuron]:                    
                     ### If Input weight is bigger than half max then gradually reduce green channel, red channel stays max
                     if input_weight_map[neuron][input]['connections'] > half_max:
                         red_channel = 255
@@ -1187,8 +1375,34 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         red_channel = int((255/half_max) * (input_weight_map[neuron][input]['connections']))  
                                 
                     input_weight_map[neuron][input]['color'] = (red_channel, green_channel, 0)
-                    print('Calculating color for input (%s) %s of neuron %s: %s' % (str(input_weight_map[neuron][input]['connections']), \
-                           str(input), str(neuron), str(input_weight_map[neuron][input]['color'])))          
+                    """
+                    print('Calculating weight-based color for input %s (%s synapses) of neuron %s: %s' % (str(input), str(input_weight_map[neuron][input]['connections']), \
+                           str(neuron), str(input_weight_map[neuron][input]['color'])))          
+                    """
+
+        #Create more evenly distributed input_color_map:
+        new_input_color_map = ColorCreator.random_colors(len(input_color_map))
+        
+        shapes = ShapeCreator.create_shapes(2,self.basic_radius)        
+        input_shape_map = {}
+        
+        #print('Shapes: ', shapes)
+                
+        shape_index = 0 
+        for input in input_color_map:            
+            input_color_map[input] = new_input_color_map[0]
+            new_input_color_map.pop(0)            
+            
+            shape_index += 1            
+            if shape_index == 1:
+                input_shape_map[input] = 'circle'
+            elif shape_index == 2:
+                input_shape_map[input] = shapes[0]
+            elif shape_index == 3:
+                input_shape_map[input] = shapes[1]
+                shape_index = 0
+        
+        #print('Input shape map: ', input_shape_map)
 
         neuron_count = len(connector_data)
         
@@ -1197,7 +1411,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             neuron_count *= 2        
             
         colormap = ColorCreator.random_colors(neuron_count)
-        print(str(neuron_count) + ' colors created')        
+        print(str(neuron_count) + ' random colors created')        
  
         ### Retrieve Ancestry(name for exported neurons):
         print('Retrieving Ancestry of all upstream neurons...')
@@ -1221,7 +1435,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             ### Set colors here - if color_by_input is False
             ### If self.random_colors is True and self.color_by_input is False and self.color_by_weight is False:
             if self.random_colors is True and self.color_by_input is False:
-                
+                                
                 if self.export_outputs is True:
                     outputs_color = colormap[0]
                     colormap.pop(0)
@@ -1242,7 +1456,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             line_to_write = '<g id="%s neuron" transform="translate(%i,%i)">' % (neuron,offsetX,offsetY)
             f.write(line_to_write + '\n')
                         
-            ### Add Connectors from front view
+            ### Add Connectors from FRONT view
             line_to_write = '<g id="%s front" transform="translate(%i,%i)">' % (neuron,offsetX_for_front,offsetY_for_front)            
             f.write(line_to_write + '\n')            
             ### Add Neuron's morphology if required            
@@ -1254,19 +1468,39 @@ class ConnectorsToSVG(Operator, ExportHelper):
             line_to_write = '<g id="Inputs">' 
             f.write(line_to_write + '\n')                        
             
-            for target_treenode in connectors_pre:                
-                
-                if self.color_by_input is True or self.color_by_strength is True:
-                    source_neuron = presynaptic_to[neuron][target_treenode][0]
-                    inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, input_weight_map,neuron)
-                    source_neurons_list[source_neuron] = input_color_map[source_neuron]
-                                    
-                connector_x = round(connectors_pre[target_treenode]['coords'][0] * 10,1)
-                connector_y = round(connectors_pre[target_treenode]['coords'][2] * - 10,1)                                
-                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
-                              % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
-                              str(inputs_color_stroke),str(inputs_width_stroke))
-                f.write(line_to_write + '\n')
+            for target_treenode in connectors_pre:
+                for connector in connectors_pre[target_treenode]: 
+                    if self.color_by_input is True or self.color_by_strength is True:
+                        #source_neuron = presynaptic_to[neuron][target_treenode][0]
+                        source_neuron = connectors_pre[target_treenode][connector]['presynaptic_to']
+                        inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, input_weight_map,neuron)
+                        source_neurons_list[source_neuron] = input_color_map[source_neuron]
+                        
+                    elif self.color_by_density is True:
+                        inputs_color = density_color_map[connector]
+                                        
+                    connector_x = round(connectors_pre[target_treenode][connector]['coords'][0] * 10,1)
+                    connector_y = round(connectors_pre[target_treenode][connector]['coords'][2] * - 10,1)                      
+                    
+                    #If color by input is true, also use different shapes
+                    if self.color_by_input is True:                                 
+                        if input_shape_map[source_neuron] != 'circle':          
+                            shape_temp = ''
+                            for node in input_shape_map[source_neuron]:
+                                shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
+                            line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(shape_temp),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))                                                        
+                        else:
+                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))
+                        
+                    else:                 
+                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                  % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                  str(inputs_color_stroke),str(inputs_width_stroke))
+                    f.write(line_to_write + '\n')
 
             line_to_write = '</g>' 
             f.write(line_to_write + '\n')   
@@ -1277,6 +1511,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
             for connector in connectors_post:
                 connector_x = round(connectors_post[connector]['coords'][0] * 10,1)
                 connector_y = round(connectors_post[connector]['coords'][2] * - 10,1)
+                
+                if self.color_by_density is True:
+                    outputs_color = density_color_map[connector]
                 
                 ### Connectors with 5 targets will be double the size
                 if self.scale_outputs is True:
@@ -1301,7 +1538,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             line_to_write = '</g>'
             f.write(line_to_write + '\n \n \n')
 
-            ### Add Connectors from lateral view
+            ### Add Connectors from LATERAL view
             line_to_write = '<g id="%s lateral" transform="translate(%i,%i)">' % (neuron,offsetX_for_lateral,offsetY_for_lateral)
             f.write(line_to_write + '\n')
             ### Add Neuron's morphology if required
@@ -1313,21 +1550,38 @@ class ConnectorsToSVG(Operator, ExportHelper):
             line_to_write = '<g id="Inputs">' 
             f.write(line_to_write + '\n')
             
-            for target_treenode in connectors_pre:
-                                
-                if self.color_by_input is True or self.color_by_strength is True:
-                    source_neuron = presynaptic_to[neuron][target_treenode][0]
-                    inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, \
-                                                                                                input_weight_map,neuron)
-                    source_neurons_list[source_neuron] = input_color_map[source_neuron]
+            for target_treenode in connectors_pre:                                                
+                for connector in connectors_pre[target_treenode]: 
+                    if self.color_by_input is True or self.color_by_strength is True:
+                        #source_neuron = presynaptic_to[neuron][target_treenode][0]
+                        source_neuron = connectors_pre[target_treenode][connector]['presynaptic_to']
+                        inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, input_weight_map,neuron)
+                        source_neurons_list[source_neuron] = input_color_map[source_neuron]
 
-                connector_x = round(connectors_pre[target_treenode]['coords'][1] * 10,1)
-                connector_y = round(connectors_pre[target_treenode]['coords'][2] * - 10,1)
-                
-                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
-                             % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
-                             str(inputs_color_stroke),str(inputs_width_stroke))
-                f.write(line_to_write + '\n')
+                    elif self.color_by_density is True:
+                        inputs_color = density_color_map[connector]                             
+                                        
+                    connector_x = round(connectors_pre[target_treenode][connector]['coords'][1] * 10,1)
+                    connector_y = round(connectors_pre[target_treenode][connector]['coords'][2] * - 10,1)                                
+                    #If color by input is true, also use different shapes
+                    if self.color_by_input is True:                                 
+                        if input_shape_map[source_neuron] != 'circle':          
+                            shape_temp = ''
+                            for node in input_shape_map[source_neuron]:
+                                shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
+                            line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(shape_temp),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))                                                        
+                        else:
+                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))
+                        
+                    else:                 
+                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                  % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                  str(inputs_color_stroke),str(inputs_width_stroke))
+                    f.write(line_to_write + '\n')                
 
             line_to_write = '</g>' 
             f.write(line_to_write + '\n')   
@@ -1338,6 +1592,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
             for connector in connectors_post:
                 connector_x = round(connectors_post[connector]['coords'][1] * 10,1)
                 connector_y = round(connectors_post[connector]['coords'][2] * - 10,1)
+                
+                if self.color_by_density is True:
+                    outputs_color = density_color_map[connector]
+                
                 if self.scale_outputs is True:
                     radius = basic_radius * (0.8 + connectors_weight[connector]/5) #connectors with 5 targets will be double the size
                 else:
@@ -1359,8 +1617,105 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
             line_to_write = '</g>'
             f.write(line_to_write + '\n \n \n')
+            
+            
+            ### Add Connectors from PERSPECTIVE view
+            line_to_write = '<g id="%s perspective" transform="translate(%i,%i)">' % (neuron,offsetX_for_persp,offsetY_for_persp)
+            f.write(line_to_write + '\n')
+            ### Add Neuron's morphology if required
+            if self.export_neuron is True:
+                f.write('<g id="neuron">')
+                f.write(neurons_svg_string[neuron]['perspective'])
+                f.write('</g> \n')
+            ### Export Inputs from perspective view
+            line_to_write = '<g id="Inputs">' 
+            f.write(line_to_write + '\n')
+            
+            for target_treenode in connectors_pre:       
+                for connector in connectors_pre[target_treenode]:                          
+                    if self.color_by_input is True or self.color_by_strength is True:
+                        #source_neuron = presynaptic_to[neuron][target_treenode][0]
+                        source_neuron = connectors_pre[target_treenode][connector]['presynaptic_to']
+                        inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, \
+                                                                                                    input_weight_map,neuron)
+                        source_neurons_list[source_neuron] = input_color_map[source_neuron]
+                        
+                    elif self.color_by_density is True:
+                        inputs_color = density_color_map[connector]
+                        
+                    if "Perspective-Dorsal" in self.views_to_export:
+                        persp_scale_factor = round((y_center-connectors_pre[target_treenode][connector]['coords'][1]) *10,1)  
+                        #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos  
+                        
+                        connector_x = round(connectors_pre[target_treenode][connector]['coords'][0]*-10,1) + x_persp_offset * persp_scale_factor
+                        connector_y = round(connectors_pre[target_treenode][connector]['coords'][2]*-10,1) + y_persp_offset * persp_scale_factor
+                                                                                                                   
+                    else:                                                
+                        persp_scale_factor = round(connectors_pre[target_treenode][connector]['coords'][1] *10,1)
+                        connector_x = round(connectors_pre[target_treenode][connector]['coords'][0]*10,1) + x_persp_offset * persp_scale_factor
+                        connector_y = round(connectors_pre[target_treenode][connector]['coords'][2]*-10,1) + y_persp_offset * persp_scale_factor 
+                    
+                    #If color by input is true, also use different shapes
+                    if self.color_by_input is True:                                 
+                        if input_shape_map[source_neuron] != 'circle':          
+                            shape_temp = ''
+                            for node in input_shape_map[source_neuron]:
+                                shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
+                            line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(shape_temp),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))                                                        
+                        else:
+                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))
+                        
+                    else:                 
+                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                  % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                  str(inputs_color_stroke),str(inputs_width_stroke))
+                    f.write(line_to_write + '\n')
 
-            ### Add Connectors from top view
+            line_to_write = '</g>' 
+            f.write(line_to_write + '\n')   
+            ### Export Outputs from perspective view
+            line_to_write = '<g id="Outputs">' 
+            f.write(line_to_write + '\n')                         
+            
+            for connector in connectors_post:
+                
+                if self.color_by_density is True:
+                    outputs_color = density_color_map[connector]
+                #connector_x = round(connectors_post[connector]['coords'][1] * 10,1)
+                #connector_y = round(connectors_post[connector]['coords'][2] * - 10,1)
+                if self.scale_outputs is True:
+                    radius = basic_radius * (0.8 + connectors_weight[connector]/5) #connectors with 5 targets will be double the size
+                else:
+                    radius = basic_radius
+                
+                if "Perspective-Dorsal" in self.views_to_export:
+                    persp_scale_factor = round((y_center-connectors_post[connector]['coords'][1]) *10,1)  
+                    #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos
+                    connector_x = str(round(connectors_post[connector]['coords'][0]*-10,1) + x_persp_offset * persp_scale_factor)
+                    connector_y = str(round(connectors_post[connector]['coords'][2]*-10,1) + y_persp_offset * persp_scale_factor)                                                                                             
+                else:                                                
+                    persp_scale_factor = round(connectors_post[connector]['coords'][1] *10,1)
+                    connector_x = str(round(connectors_post[connector]['coords'][0]*10,1) + x_persp_offset * persp_scale_factor)
+                    connector_y = str(round(connectors_post[connector]['coords'][2]*-10,1) + y_persp_offset * persp_scale_factor)  
+                
+                
+                line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
+                                % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(outputs_width_stroke))
+                f.write(line_to_write + '\n')
+
+            line_to_write = '</g>' 
+            f.write(line_to_write + '\n')    
+            
+            line_to_write = '</g>'
+            f.write(line_to_write + '\n \n \n')
+            
+            
+
+            ### Add Connectors from TOP view
             line_to_write = '<g id="%s top" transform="translate(%i,%i)">' % (neuron,offsetX_for_top,offsetY_for_top)
             f.write(line_to_write + '\n')            
 
@@ -1377,20 +1732,37 @@ class ConnectorsToSVG(Operator, ExportHelper):
             f.write(line_to_write + '\n')
             
             for target_treenode in connectors_pre:
-                
-                ### Use color map if color is by input - if not just stick with inputs_color as defined at function start
-                if self.color_by_input is True or self.color_by_strength is True:
-                    source_neuron = presynaptic_to[neuron][target_treenode][0]
-                    inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, input_weight_map,neuron)
-                    source_neurons_list[source_neuron] = input_color_map[source_neuron]
-                
-                connector_x = round(connectors_pre[target_treenode]['coords'][0] * 10,1)
-                connector_y = round(connectors_pre[target_treenode]['coords'][1] * - 10,1)
-                
-                line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
-                                % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color), \
-                                str(inputs_color_stroke),str(inputs_width_stroke))
-                f.write(line_to_write + '\n')
+                for connector in connectors_pre[target_treenode]: 
+                    if self.color_by_input is True or self.color_by_strength is True:
+                        #source_neuron = presynaptic_to[neuron][target_treenode][0]
+                        source_neuron = connectors_pre[target_treenode][connector]['presynaptic_to']
+                        inputs_color_stroke, inputs_color, source_neuron = self.get_treenode_colors(source_neuron, input_color_map, input_weight_map,neuron)
+                        source_neurons_list[source_neuron] = input_color_map[source_neuron]
+
+                    elif self.color_by_density is True:
+                        inputs_color = density_color_map[connector]                              
+                                        
+                    connector_x = round(connectors_pre[target_treenode][connector]['coords'][0] * 10,1)
+                    connector_y = round(connectors_pre[target_treenode][connector]['coords'][1] * - 10,1)                                
+                    #If color by input is true, also use different shapes
+                    if self.color_by_input is True:                                 
+                        if input_shape_map[source_neuron] != 'circle':          
+                            shape_temp = ''
+                            for node in input_shape_map[source_neuron]:
+                                shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
+                            line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(shape_temp),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))                                                        
+                        else:
+                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                        % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                            str(inputs_color_stroke),str(inputs_width_stroke))
+                        
+                    else:                 
+                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                  % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
+                                  str(inputs_color_stroke),str(inputs_width_stroke))
+                    f.write(line_to_write + '\n')    
 
             line_to_write = '</g>' 
             f.write(line_to_write + '\n')   
@@ -1401,6 +1773,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
             for connector in connectors_post:
                 connector_x = round(connectors_post[connector]['coords'][0] * 10,1)
                 connector_y = round(connectors_post[connector]['coords'][1] * - 10,1)
+                
+                if self.color_by_density is True:
+                    outputs_color = density_color_map[connector]
+                
                 if self.scale_outputs is True:
                     radius = basic_radius * (0.8 + connectors_weight[connector]/5) #connectors with 5 targets will be double the size
                 else:
@@ -1424,7 +1800,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             ### Create legend for neurons if merged
             if self.merge is True and self.color_by_input is False and self.color_by_strength is False:
                 line_to_write ='\n <g> \n <text x="150" y = "%s" font-size="8"> \n %s \n </text> \n' \
-                                % (str(offsetY_forMergeLegend+5), str(self.neuron_names[int(neuron)]))                
+                                % (str(offsetY_forMergeLegend+5), str(self.neuron_names[int(neuron)]) + ' #' + neuron)                
                 f.write(line_to_write + '\n')
                   
                 if self.export_outputs is True:                
@@ -1441,7 +1817,11 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 offsetY_forMergeLegend += 10      
                 
             elif self.merge is False:
-                f.write('\n <g> \n <text x="10" y = "140" font-size="8">\n' + str(self.neuron_names[neuron]) + '\n</text> \n </g> \n')
+                f.write('\n <g> \n <text x="10" y = "140" font-size="8">\n' + str(self.neuron_names[int(neuron)]) + ' #' + neuron + '\n</text> \n </g> \n')
+                
+            ### Add density info
+            if self.color_by_density is True:
+               f.write('\n <g id="density info"> \n <text x="15" y = "150" font-size="6">\n Density data - total nodes: ' + str(len(density_data)) + ' max density: ' + str(max_density) + '/' + str(round(self.proximity_radius_for_density,2)) + ' radius \n </text> \n </g> \n')
 
             ### Close remaining groups (3x)
             line_to_write = '</g> \n </g> \n \n </g> \n \n \n' 
@@ -1450,9 +1830,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
             ### Set first_neuron to false after first run (to prevent creation of a second brain's outline)
             first_neuron = False  
 
-        if self.merge is True: 
-            if self.color_by_input is True or self.color_by_strength is True:
-                self.create_legends(f, input_weight_map, 150 , source_neurons_list, connector_data, max_values)
+        #if self.merge is True or self.all_neurons is False: 
+        if self.color_by_input is True or self.color_by_strength is True:
+            self.create_legends(f, input_weight_map, input_shape_map , offsetX , source_neurons_list, connector_data, max_values,neuron_for_legend= neuron)
 
         ### Finish svg file with footer        
         f.write(svg_end)
@@ -1462,14 +1842,20 @@ class ConnectorsToSVG(Operator, ExportHelper):
         return {'FINISHED'}
     
     
-    def create_legends (self, f, input_weight_map, x_pos = 0,  source_neurons_list = [], connector_data = [], max_values = [], neuron_for_legend = 'none' ):        
+    def create_legends (self, f, input_weight_map, input_shape_map ,x_pos = 0,  source_neurons_list = [], connector_data = [], max_values = [], neuron_for_legend = 'none' ):        
         offsetX = 0
         line_offsetY = 0
+        print('Creating legend')    
         
         if self.color_by_input is True or self.color_by_strength is True:
             #print('%s different inputs for neuron %s found!' % (str(len(source_neurons_list)), str(self.neuron_names[neuron])))
             line_to_write ='<g id="Legend" transform="translate(%i,-150)">' % x_pos 
             f.write(line_to_write + '\n')
+            
+        if self.filter_upstream:
+            line_to_write ='\n <text x="40" y = "%i" font-size="2"> \n Upstream filtered by: %s \n </text> \n' \
+                                % ((line_offsetY-5),self.filter_upstream)                
+            f.write(line_to_write + '\n')    
             
         if self.color_by_input is True:
             line_to_write ='<g id="Upstream Neurons">' 
@@ -1477,8 +1863,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
             
             for source in source_neurons_list:
                 source_color = source_neurons_list[source]
+                source_shape = input_shape_map[source]
                 
-                if self.merge is True:
+                if self.merge is True or self.all_neurons is True:
                     ### Retrieve # of Synapses of Source Neuron Onto every Target Neuron
                     weights_string = '  '
                     for neuron in connector_data:
@@ -1487,21 +1874,32 @@ class ConnectorsToSVG(Operator, ExportHelper):
                             weights_string += str(input_weight_map[neuron][source]['connections']) + '/'
                         else:
                             weights_string += '0' + '/'
-                else:
+                else:                    
                     weights_string = ' ('+ str(input_weight_map[neuron_for_legend][source]['connections']) + ')'
                 
                 if source is not None:                    
                     source_tag = str(self.neuron_names[source]) + weights_string
                 else:
                     source_tag = 'No Presynaptic Skeleton Found' + weights_string
+                    
+                #print(source, source_tag)
                 
-                line_to_write ='\n <text x="152" y = "%i" font-size="8"> \n %s \n </text> \n' \
-                                % ((line_offsetY+3),source_tag)                
+                line_to_write ='\n <text x="48" y = "%i" font-size="1"> \n %s - #%s \n </text> \n' \
+                                % ((line_offsetY+1),source_tag, str(source))          
                 f.write(line_to_write + '\n')
-                line_to_write ='<circle cx="145" cy="%i" r="2" fill="rgb%s" stroke="black" stroke-width="0.1"  />' \
-                                % (line_offsetY,str(source_color))
+                
+                if source_shape != 'circle':          
+                    shape_temp = ''
+                    for node in source_shape:
+                        shape_temp += str(node[0]+45) + ',' + str(node[1]+line_offsetY) + ' '
+                    line_to_write='<polygon points="%s" fill="rgb%s" stroke="black" stroke-width="0.1"  />' \
+                                % (str(shape_temp),str(source_color))                                                        
+                else:
+                    line_to_write ='<circle cx="45" cy="%i" r="%s" fill="rgb%s" stroke="black" stroke-width="0.1"  />' \
+                                % (line_offsetY,str(self.basic_radius),str(source_color))
+                
                 f.write(line_to_write + '\n')
-                line_offsetY += 10
+                line_offsetY += 2
                 
             line_to_write ='\n </g>'          
             f.write(line_to_write + '\n')
@@ -1569,11 +1967,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
         count = 1
         skids_to_check = []
         
-        for neuron in neurons_to_check:
-            
+        for neuron in neurons_to_check:            
             if neuron not in self.neuron_names and neuron != None:
                 skids_to_check.append(neuron)
-            else:
+            elif neuron not in self.neuron_names:
                 print('Invalid Neuron Name found: %s' % neuron )
         
         print('Checking Skeleton IDs:')
@@ -1590,6 +1987,16 @@ class ConnectorsToSVG(Operator, ExportHelper):
         neurons_svg_string = {}
         basic_radius = 1.5
         line_width = 0.35
+                
+        if "Perspective-Dorsal" in self.views_to_export:
+            #For dorsal perspective change offsets:
+            y_persp_offset = -1 * self.x_persp_offset
+            x_persp_offset = 0            
+            #y_center sets the pivot along y axis (0-25) -> all this does is move the object along y axis, does NOT change perspective
+            y_center = 5  
+        else:
+            x_persp_offset = self.x_persp_offset
+            y_persp_offset = self.y_persp_offset
     
         for neuron in neurons_to_export:
             skid = re.search('#(.*?) -',neuron.name).group(1)
@@ -1597,11 +2004,13 @@ class ConnectorsToSVG(Operator, ExportHelper):
             neurons_svg_string[skid]['front'] = ''
             neurons_svg_string[skid]['top'] = ''
             neurons_svg_string[skid]['lateral'] = ''
+            neurons_svg_string[skid]['perspective'] = ''
             
             ### Create List of Lines
             polyline_front = []
             polyline_top = []
             polyline_lateral = []
+            polyline_perspective = []
             soma_found = False
             
             ## ONLY curves starting with a # will be exported
@@ -1615,6 +2024,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     polyline_front_temp = ''
                     polyline_top_temp = ''
                     polyline_lateral_temp = ''
+                    polyline_persp_temp = ''
     
                     ### Go from first point to the second last
                     for source in range((len(spline.points))): 
@@ -1623,10 +2033,24 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         polyline_front_temp += str(round(spline.points[source].co[0] *10,1)) +','+ str(round(spline.points[source].co[2]*-10,1)) + ' '
                         polyline_top_temp += str(round(spline.points[source].co[0] *10,1)) +','+ str(round(spline.points[source].co[1]*-10,1)) + ' '
                         polyline_lateral_temp += str(round(spline.points[source].co[1] *10,1)) +','+ str(round(spline.points[source].co[2]*-10,1)) + ' '
-    
+                        
+                        if "Perspective-Dorsal" in self.views_to_export:
+                            persp_scale_factor = round((y_center-spline.points[source].co[1]) *10,1)  
+                            #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos
+                            polyline_persp_temp += str(round(spline.points[source].co[0] * -10,1) + x_persp_offset * persp_scale_factor) 
+                            polyline_persp_temp += ','+ str(round(spline.points[source].co[2]*-10,1)+ y_persp_offset * persp_scale_factor) + ' '
+                            
+                        else:                                                
+                            persp_scale_factor = round(spline.points[source].co[1] *10,1)
+                            polyline_persp_temp += str(round(spline.points[source].co[0] *10,1) + x_persp_offset * persp_scale_factor) 
+                            polyline_persp_temp += ','+ str(round(spline.points[source].co[2]*-10,1)+ y_persp_offset * persp_scale_factor) + ' '
+                            
+
+            
                     polyline_front.append(polyline_front_temp) 
                     polyline_top.append(polyline_top_temp)  
                     polyline_lateral.append(polyline_lateral_temp) 
+                    polyline_perspective.append(polyline_persp_temp) 
                     
                 ### Find soma            
                 search_string = 'Soma of ' + neuron.name[1:7] + '.*'
@@ -1679,6 +2103,30 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                           str(color), str(color))
     
                 neurons_svg_string[skid]['lateral'] = svg_neuron_lateral        
+                
+                ### Create perspective svg string  
+                svg_neuron_perspective = ''                          
+                for i in range(len(polyline_perspective)):    
+                    svg_neuron_perspective += '<polyline points="' + polyline_perspective[i] + '"\n' \
+                                          'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/> \n' \
+                                           % (str(color),str(line_width))
+    
+                if soma_found is True:
+                    if "Perspective-Dorsal" in self.views_to_export:
+                        persp_scale_factor = round((y_center-soma_pos[1]) *10,1)  
+                        #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos
+                        x_persp = str(round(soma_pos[0]*-10,1) + x_persp_offset * persp_scale_factor)
+                        y_persp = str(round(soma_pos[2]*-10,1) + y_persp_offset * persp_scale_factor)                                                                                             
+                    else:                                                
+                        persp_scale_factor = round(soma_pos[1] *10,1)
+                        x_persp = str(round(soma_pos[0]* 10,1) + x_persp_offset * persp_scale_factor)
+                        y_persp = str(round(soma_pos[2]*-10,1) + y_persp_offset * persp_scale_factor)
+                    
+                    svg_neuron_perspective += '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  /> \n' \
+                                          % (str(x_persp),str(y_persp), str(basic_radius), \
+                                          str(color), str(color))
+    
+                neurons_svg_string[skid]['perspective'] = svg_neuron_perspective  
         
         return(neurons_svg_string)
 
@@ -1804,18 +2252,50 @@ class ColorCreator():
         for i in range(runs):
             ### High saturation
             h = interval * i
-            s = 1
-            v =  0.5
+            s = 0.5
+            v =  0.7
             hsv = colorsys.hsv_to_rgb(h,s,v)
             colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))             
             ### Low saturation
-            s = 0.5
+            s = 1
             v =  1
             hsv = colorsys.hsv_to_rgb(h,s,v)
             colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))         
 
+        print(len(colormap),' colors created')
+
         return(colormap)
     
+
+class ShapeCreator:
+    """
+    Class used to create distinctive shapes:
+    Starts with a triangle -> pentagon -> etc.       
+    """  
+
+    def create_shapes (shape_count, size):                     
+        shapemap = []   
+        
+        #Start of with triangle    
+        nodes = 3
+     
+        for i in range(shape_count):
+            shape_temp = []
+            for k in range(nodes):
+                shape_temp.append(ShapeCreator.get_coords_on_circle( size ,  2*math.pi/nodes * k) )
+            shapemap.append(shape_temp)
+            nodes += 2
+
+        print(len(shapemap),' shapes created')
+
+        return(shapemap)  
+    
+    def get_coords_on_circle(r,angle):    
+        x = round(r * math.cos(angle),3)
+        y = round(r * math.sin(angle),3)
+        coords=(x,y)
+        return coords  
+      
     
 class CATMAIDtoBlender:
     """Extracts Blender relevant data from data retrieved from CATMAID"""
@@ -2021,8 +2501,8 @@ class ConnectToCATMAID(Operator):
         self.local_catmaid_user = catmaid_user
         self.local_http_pw = http_pw
         self.local_catmaid_pw = catmaid_pw
-        return context.window_manager.invoke_props_dialog(self)     
-        
+        return context.window_manager.invoke_props_dialog(self)      
+      
     
 class ExportAllToSVG(Operator, ExportHelper):
     """Exports all neurons (only curves) to SVG File"""
@@ -2031,14 +2511,47 @@ class ExportAllToSVG(Operator, ExportHelper):
     bl_options = {'PRESET'}
     
     all_neurons = BoolProperty(name="Process All Neurons", default = False)
-    random_colors = BoolProperty(name="Use Random Colors", default = False)
-    colors_from_mesh = BoolProperty(name="Use Mesh Colors", default = False)
+    random_colors = BoolProperty(name="Use Random Colors", 
+                                 default = False,
+                                 description = "Give Exported Neurons a random color (default = black)")
+    colors_from_mesh = BoolProperty(name="Use Mesh Colors", 
+                                    default = False,
+                                    description = "Color Exported Neurons by the Color they have in Blender")
+    color_by_inputs_outputs = BoolProperty(name="Color by Input/Outputs ratio", 
+                                    default = False,
+                                    description = "Color Arbors of Exported Neurons by the ratio of input to outputs")
+    color_by_density = BoolProperty(name = "Color by Density", 
+                                    default = False, 
+                                    description = "Colors Edges between Nodes by # of Nodes of given Object (choose below)")
+    object_for_density = EnumProperty(name = "Object for Density", 
+                                      items = availableObjects,
+                                      description = "Choose Object for Coloring Edges by Density")
+    proximity_radius_for_density = FloatProperty(name="Proximity Threshold", 
+                                                 default = 0.15,
+                                                 description = "Maximum allowed distance between Edge and a Node")
     merge = BoolProperty(name="Merge into One", default = False)
     basic_radius = FloatProperty(name="Base Soma Size", default = 1.5) 
-    line_width = FloatProperty(name="Base Line Width", default = 0.35)       
-    export_ring_gland = BoolProperty(name="Export Ring Gland", default = True) 
+    line_width = FloatProperty(name="Base Line Width", default = 0.7)       
+    export_as_points = BoolProperty(name="Export as Pointcloud", 
+                                    default = False,
+                                    description ="Exports neurons as point cloud rather than edges (e.g. DCVs)")
+    export_ring_gland = BoolProperty(name="Export Ring Gland", 
+                                     default = True,
+                                     description = "Adds Outlines of Ring Gland to SVG") 
     x_persp_offset = FloatProperty(name="Horizontal Perspective", default = 0.5, max = 2, min = -2)  
     y_persp_offset = FloatProperty(name="Vertical Perspective", default = -0.01, max = 2, min = -2)
+    views_to_export = EnumProperty(name="Views to export",
+                                   items = (("Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal"),
+                                            ("Front/Top/Lateral","Front/Top/Lateral","Front/Top/Lateral"),
+                                            ("Front","Front","Front"),
+                                            ("Top","Top","Top"),
+                                            ("Lateral","Lateral","Lateral"),
+                                            ("Perspective-Front","Perspective-Front","Perspective-Front"),
+                                            ("Perspective-Dorsal","Perspective-Dorsal","Perspective-Dorsal")
+                                            ),
+                                    default =  "Front/Top/Lateral/Perspective-Dorsal",
+                                    description = "Choose which views should be included in final SVG")
+
     
     # ExportHelper mixin class uses this
     filename_ext = ".svg"
@@ -2060,13 +2573,45 @@ class ExportAllToSVG(Operator, ExportHelper):
         offsetX_for_persp = 0       
         first_neuron = True
         
-        x_persp_offset = self.x_persp_offset
-        y_persp_offset = self.y_persp_offset
-                
+        if "Perspective-Dorsal" in self.views_to_export:
+            #For dorsal perspective change offsets:
+            y_persp_offset = -1 * self.x_persp_offset
+            x_persp_offset = 0            
+            #y_center sets the pivot along y axis (0-25) -> all this does is move the object along y axis, does NOT change perspective
+            y_center = 5  
+        else:
+            x_persp_offset = self.x_persp_offset
+            y_persp_offset = self.y_persp_offset
+                    
         if self.merge is False: 
             offsetIncrease = 260
         else:
             offsetIncrease = 0
+            
+        density_gradient = {'start_rgb': (0,255,0),
+                            'end_rgb':(255,0,0)}
+        ratio_gradient = {'start_rgb': (0,0,255),
+                            'end_rgb':(255,0,0)}
+        density_data = []       
+        
+        #Check Connection to CATMAID server as requirement for this option to work
+        if self.color_by_inputs_outputs is True and connected is False:
+            print('You need to connect to CATMAID server first to use this Option!')                
+            self.color_by_inputs_outputs == False
+
+                
+                            
+        #Create list of nodes for given density object
+        if self.color_by_density is True:     
+            try:
+                for spline in bpy.data.objects[self.object_for_density].data.splines:
+                    for node in spline.points:
+                        #node.co = vector(x,y,z,?)
+                        if node.co not in density_data:
+                            density_data.append(node.co)
+                #print(density_data)
+            except:
+                print('Unable to create density data for object!')   
 
         brain_shape_top_string = '<g id="brain shape top">\n <polyline points="28.3,-5.8 34.0,-7.1 38.0,-9.4 45.1,-15.5 50.8,-20.6 57.7,-25.4 59.6,-25.6 63.2,-22.8 67.7,-18.7 70.7,-17.2 74.6,-14.3 78.1,-12.8 84.3,-12.6 87.7,-15.5 91.8,-20.9 98.1,-32.4 99.9,-38.3 105.2,-48.9 106.1,-56.4 105.6,-70.1 103.2,-75.8 97.7,-82.0 92.5,-87.2 88.8,-89.1 82.6,-90.0 75.0,-89.9 67.4,-89.6 60.8,-85.6 55.3,-77.2 52.4,-70.2 51.9,-56.7 55.0,-47.0 55.9,-36.4 56.0,-32.1 54.3,-31.1 51.0,-33.4 50.7,-42.5 52.7,-48.6 49.9,-58.4 44.3,-70.8 37.4,-80.9 33.1,-84.0 24.7,-86.0 14.2,-83.9 8.3,-79.1 2.9,-68.3 1.3,-53.5 2.5,-46.9 3.0,-38.3 6.3,-28.2 10.9,-18.7 16.3,-9.7 22.2,-6.4 28.3,-5.8" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="88.8,-89.1 90.9,-97.7 92.9,-111.3 95.6,-125.6 96.7,-139.4 95.9,-152.0 92.8,-170.2 89.4,-191.0 87.2,-203.7 80.6,-216.6 73.4,-228.3 64.5,-239.9 56.4,-247.3 48.8,-246.9 39.0,-238.3 29.6,-226.9 24.7,-212.0 22.9,-201.2 23.1,-186.9 18.7,-168.3 14.1,-150.4 12.6,-138.0 13.7,-121.5 16.3,-105.1 18.3,-84.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         brain_shape_front_string = '<g id="brain shape front"> \n <polyline points="51.5,24.0 52.0,21.3 52.0,17.6 50.2,11.2 46.8,6.5 40.5,2.5 33.8,1.1 25.4,3.4 18.8,8.0 13.2,12.5 8.3,17.9 4.3,23.8 1.8,29.3 1.4,35.6 1.6,42.1 4.7,48.3 7.9,52.5 10.8,56.9 13.1,64.3 14.3,73.2 12.8,81.0 16.2,93.6 20.9,101.5 28.2,107.5 35.3,112.7 42.2,117.0 50.8,119.3 57.9,119.3 67.1,118.0 73.9,114.1 79.0,110.4 91.1,102.7 96.3,94.2 96.3,85.3 94.0,81.4 95.4,74.8 96.6,68.3 97.5,64.7 100.9,59.7 103.8,52.5 105.4,46.7 106.1,38.8 105.4,32.4 103.1,26.4 98.9,21.0 94.1,16.3 88.3,11.1 82.0,6.5 74.8,3.3 67.8,3.1 61.7,5.1 56.8,9.6 53.4,15.2 52.2,19.7 52.3,25.3 51.4,24.1 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="46.6,34.0 45.5,36.1 43.2,38.6 41.1,43.3 39.7,48.7 39.7,51.0 42.6,55.2 51.4,59.5 54.9,60.9 60.8,60.8 62.9,58.2 62.9,52.6 60.3,47.6 57.7,43.9 56.1,40.2 55.1,35.9 55.1,34.4 51.8,33.6 49.1,33.5 46.6,34.0 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'
@@ -2116,17 +2661,24 @@ class ExportAllToSVG(Operator, ExportHelper):
         colormap = ColorCreator.random_colors(neuron_count)
         print(str(neuron_count) + ' colors created')
 
-        for neuron in to_process_sorted:
+        for neuron in to_process_sorted:            
             ### Create List of Lines
             polyline_front = []
             polyline_top = []
             polyline_lateral = []
             polyline_persp = []
+            
+            polyline_ratios = []
+            
+            lines_front_by_density = []
+            lines_top_by_density = []
+            lines_lateral_by_density = []
+            lines_persp_by_density = []
+            
             soma_found = False
             
             ### ONLY curves starting with a # will be exported
-            if re.search('#.*',neuron.name) and neuron.type == 'CURVE':
-            
+            if re.search('#.*',neuron.name) and neuron.type == 'CURVE':            
                 if self.random_colors is True:
                     #color = 'rgb' + str((random.randrange(0,255),random.randrange(0,255),random.randrange(0,255)))
                     color = 'rgb' + str(colormap[0])
@@ -2147,28 +2699,202 @@ class ExportAllToSVG(Operator, ExportHelper):
                 else:
                     ### Standard color
                     color = 'rgb' + str((0, 0, 0)) 
+                    
+                if self.color_by_inputs_outputs is True:
+                    #Retrieve list of connectors for this neuron           
+                    skid = re.search('#(.*?) ',neuron.name).group(1)
+                    print('Retrieving connector data for skid %s...' % skid)
+                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skid, 1, 0 )
+                    node_data = remote_instance.get_page( remote_compact_skeleton_url )
+                    
+                    list_of_synapses = {} 
+
+                    
+                    for connection in node_data[1]:
+                        treenode_id = connection[0]
+                        if treenode_id not in list_of_synapses:
+                            list_of_synapses[treenode_id] = {}
+                            list_of_synapses[treenode_id]['inputs'] = 0
+                            list_of_synapses[treenode_id]['outputs'] = 0
+                            
+                        if connection[2] == 0:
+                            list_of_synapses[treenode_id]['outputs'] += 1
+                        else:
+                            list_of_synapses[treenode_id]['inputs'] += 1
+                            
+                    for node in node_data[0]:
+                        treenode_id = node[0]
+                        if treenode_id in list_of_synapses:
+                            list_of_synapses[treenode_id]['coords'] = (
+                                                                       round(node[3]/10000,2),
+                                                                       round(node[5]/10000,2),
+                                                                       round(node[4]/-10000,2)
+                                                                       )
+                                                                       
+                    print('Treenodes with synapses found: ', len(list_of_synapses))
+                    
+                    #Find closest treenode in neuron to treenode from list_of_synapses 
+                    #Keep in mind that resampling might have removed treenodes, so you might not get 100% match                      
+                    
+                    #Fill polyline_ratios first
+                    for i in range(len(neuron.data.splines)):
+                        polyline_ratios.append([0,0])                   
+                    
+                    #print(rounded_co)
+                    for treenode in list_of_synapses:
+                        closest_dist = 999999
+                        treenode_co = list_of_synapses[treenode]['coords']
+                        for i in range(len(neuron.data.splines)):
+                            for k in range(len(neuron.data.splines[i].points)):
+                                node_co = neuron.data.splines[i].points[k].co
+                                dist = math.sqrt(
+                                                  (treenode_co[0]-node_co[0])**2 +
+                                                  (treenode_co[1]-node_co[1])**2 +
+                                                  (treenode_co[2]-node_co[2])**2
+                                                 )
+                                if dist < closest_dist:                                    
+                                    closest_dist = dist
+                                    closest_spline = i
+                                    
+                        polyline_ratios[closest_spline][0] += list_of_synapses[treenode]['inputs']
+                        polyline_ratios[closest_spline][1] += list_of_synapses[treenode]['outputs']
+                    
+                    max_inputs_per_spline = 0 
+                    max_outputs_per_spline = 0    
+                    for i in range(len(polyline_ratios)):
+                        if polyline_ratios[i][0] > max_inputs_per_spline:
+                            max_inputs_per_spline = polyline_ratios[i][0]
+                        if polyline_ratios[i][1] > max_outputs_per_spline:
+                            max_outputs_per_spline = polyline_ratios[i][1]
+                            
+                    #Create colors:
+                    polyline_ratio_colors = []
+                    for i in range(len(polyline_ratios)):
+                        if polyline_ratios[i][0] != 0 or polyline_ratios[i][1] != 0:
+                            #Ratio = # of outputs - # of inputs / (total # of synapses)
+                            ratio = (polyline_ratios[i][1]-polyline_ratios[i][0])/ (polyline_ratios[i][1]+polyline_ratios[i][0])
+                            """
+                            ratio = (polyline_ratios[i][1]-polyline_ratios[i][0])
+                            if ratio < 0:
+                                ratio = ratio/max_inputs_per_spline
+                            if ratio > 0:
+                                ratio = ratio/max_outputs_per_spline
+                                
+                            """    
+                            #ratio ranges normally from -1 to 1 but for the color we increase it to 0-2
+                                    #therefore ratio of -1 = start_rgb = only inputs; +1 = end_rgb = only outputs 
+                            polyline_ratio_colors.append('rgb' + str((
+                                            int(ratio_gradient['start_rgb'][0] + (ratio_gradient['end_rgb'][0] - ratio_gradient['start_rgb'][0])/2 * (ratio+1)),  
+                                            int(ratio_gradient['start_rgb'][1] + (ratio_gradient['end_rgb'][1] - ratio_gradient['start_rgb'][1])/2 * (ratio+1)),                         
+                                            int(ratio_gradient['start_rgb'][2] + (ratio_gradient['end_rgb'][2] - ratio_gradient['start_rgb'][2])/2 * (ratio+1))                             
+                                                        )))
+                        else:
+                            polyline_ratio_colors.append('rgb(0,0,0)')     
 
                 ### File Lists of Lines
-                for spline in neuron.data.splines:
+                max_density = 0
+                for spline in neuron.data.splines:                                        
                     polyline_front_temp = ''
                     polyline_top_temp = ''
                     polyline_lateral_temp = ''
-                    polyline_persp_temp = ''
+                    polyline_persp_temp = ''                    
 
+                    
                     for source in range((len(spline.points))): #go from first point to the second last
-                        target = source + 1;
-                                                
-                        z_scale_factor = round(spline.points[source].co[1] *10,1)                                              
-                        x_persp = str(round(spline.points[source].co[0] * 10,1) + (x_persp_offset * z_scale_factor))
-                        y_persp = str(round(spline.points[source].co[2] * -10,1) + (y_persp_offset * z_scale_factor))
+                        target = source + 1                        
+                        if "Perspective-Dorsal" in self.views_to_export:
+                            persp_scale_factor = round((y_center-spline.points[source].co[1]) *10,2)                                                                                                
+                            
+                            #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos
+                            x_persp = str(round(spline.points[source].co[0] * -10,2) + (x_persp_offset * persp_scale_factor))
+                            y_persp = str(round(spline.points[source].co[2] * -10,2) + (y_persp_offset * persp_scale_factor))
+                            
+                            try:
+                                #Try creating coordinates of end point of this edge for color_by_density (will fail if target > length of spline)
+                                x_persp_targ = str(round(spline.points[target].co[0] * -10,2) + (x_persp_offset * persp_scale_factor))
+                                y_persp_targ = str(round(spline.points[target].co[2] * -10,2) + (y_persp_offset * persp_scale_factor))
+                            except:
+                                pass
+                        else:                                                
+                            persp_scale_factor = round(spline.points[source].co[1] *10,1)                                              
+                            
+                            x_persp = str(round(spline.points[source].co[0] * 10,2) + (x_persp_offset * persp_scale_factor))
+                            y_persp = str(round(spline.points[source].co[2] * -10,2) + (y_persp_offset * persp_scale_factor))
+                            
+                            try:
+                                #Try creating coordinates of end point of this edge for color_by_density (will fail if target > length of spline)                                
+                                x_persp_targ = str(round(spline.points[target].co[0] * 10,2) + (x_persp_offset * persp_scale_factor))
+                                y_persp_targ = str(round(spline.points[target].co[2] * -10,2) + (y_persp_offset * persp_scale_factor))
+                            except:
+                                pass
+                            
+                        polyline_front_temp += str(round(spline.points[source].co[0] *10,2)) \
+                                              +','+ str(round(spline.points[source].co[2]*-10,2)) + ' '
+                        polyline_top_temp += str(round(spline.points[source].co[0] *10,2)) \
+                                            +','+ str(round(spline.points[source].co[1]*-10,2)) + ' '
+                        polyline_lateral_temp += str(round(spline.points[source].co[1] *10,2)) \
+                                                +','+ str(round(spline.points[source].co[2]*-10,2)) + ' '
+                        polyline_persp_temp += x_persp +','+ y_persp + ' '
                         
-                        polyline_front_temp = polyline_front_temp + str(round(spline.points[source].co[0] *10,1)) \
-                                              +','+ str(round(spline.points[source].co[2]*-10,1)) + ' '
-                        polyline_top_temp = polyline_top_temp + str(round(spline.points[source].co[0] *10,1)) \
-                                            +','+ str(round(spline.points[source].co[1]*-10,1)) + ' '
-                        polyline_lateral_temp = polyline_lateral_temp + str(round(spline.points[source].co[1] *10,1)) \
-                                                +','+ str(round(spline.points[source].co[2]*-10,1)) + ' '
-                        polyline_persp_temp = polyline_persp_temp + x_persp +','+ y_persp + ' '                                                
+                        #Skip at last index
+                        if target >= len(spline.points):
+                            continue
+                                                
+                        if self.color_by_density is True:
+                            #Get # of nodes around this edge
+                            start_co = spline.points[target].co
+                            end_co = spline.points[source].co
+                            density_count = 0
+                            #print(start_co[0:2],end_co[0:2],'\n')
+                            for node in density_data:                                
+                                dist1 = math.sqrt(
+                                                  (start_co[0]-node[0])**2 +
+                                                  (start_co[1]-node[1])**2 +
+                                                  (start_co[2]-node[2])**2
+                                                 )
+                                dist2 = math.sqrt(
+                                                  (end_co[0]-node[0])**2 +
+                                                  (end_co[1]-node[1])**2 +
+                                                  (end_co[2]-node[2])**2
+                                                 )
+                                if dist1 < self.proximity_radius_for_density or dist2 < self.proximity_radius_for_density:
+                                    density_count += 1   
+                                    
+                            if density_count > max_density:
+                                max_density = density_count
+                                    
+                            lines_front_by_density.append((
+                                                               str(round(spline.points[source].co[0] *10,2)) \
+                                                               +','+ str(round(spline.points[source].co[2]*-10,2)) + ' ' \
+                                                               + str(round(spline.points[target].co[0] *10,2)) \
+                                                               +','+ str(round(spline.points[target].co[2]*-10,2)) + ' ' \
+                                                               , density_count
+                                                               )
+                                                              )
+                            lines_top_by_density.append((
+                                                               str(round(spline.points[source].co[0] *10,2)) \
+                                                               +','+ str(round(spline.points[source].co[1]*-10,2)) + ' ' \
+                                                               + str(round(spline.points[target].co[0] *10,2)) \
+                                                               +','+ str(round(spline.points[target].co[1]*-10,2)) + ' ' \
+                                                               , density_count
+                                                               )
+                                                              )
+                            lines_lateral_by_density.append((
+                                                               str(round(spline.points[source].co[1] *10,2)) \
+                                                               +','+ str(round(spline.points[source].co[2]*-10,2)) + ' ' \
+                                                               + str(round(spline.points[target].co[1] *10,2)) \
+                                                               +','+ str(round(spline.points[target].co[2]*-10,2)) + ' ' \
+                                                               , density_count
+                                                               )
+                                                              )
+                            lines_persp_by_density.append((
+                                                               x_persp +','+ y_persp + ' ' \
+                                                               + x_persp_targ +','+ y_persp_targ + ' '
+                                                               , density_count
+                                                               )
+                                                              )  
+                            
+                                                            
     
                     polyline_front.append(polyline_front_temp) 
                     polyline_top.append(polyline_top_temp)  
@@ -2186,126 +2912,333 @@ class ExportAllToSVG(Operator, ExportHelper):
                         break
                         
                 ### Start creating svg file here (header before for loop)
-                line_to_write = '<g id="%s front" transform="translate(%i,%i)">' % (neuron.name, offsetX+offsetX_for_front, offsetY+offsetY_for_front)
-                f.write(line_to_write + '\n')
-        
-                ### Add neuron from front view        
-                for i in range(len(polyline_front)):
-                    line_to_write = '<polyline points="' + polyline_front[i] + '"\n' \
-                                    'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
-                                    % (str(color), str(self.line_width))
+                
+                if "Front" in self.views_to_export:
+                    line_to_write = '<g id="%s front" transform="translate(%i,%i)">' % (neuron.name, offsetX+offsetX_for_front, offsetY+offsetY_for_front)
                     f.write(line_to_write + '\n')
+            
+                    ### Add neuron from front view  
+                    if self.color_by_density is False:      
+                        for i in range(len(polyline_front)):                            
+                            if self.color_by_inputs_outputs is True:
+                                color = polyline_ratio_colors[i]                           
+                            
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + polyline_front[i] + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(color), str(self.line_width))
+                                f.write(line_to_write + '\n')   
+                            else:                                
+                                point_coords = re.findall('(.*?,.*?) ',polyline_front[i])                                
+                                for point in point_coords:                                    
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]                                    
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(self.line_width/5), str(color), str(color))
+                                    f.write(line_to_write + '\n')                    
+                    else:
+                        for i in range(len(lines_front_by_density)):                           
+                            density_count = lines_front_by_density[i][1]
+                            coordinates = lines_front_by_density[i][0]
+                            if max_density > 0 and density_count > 0:
+                                density_line_width = 1/2 * self.line_width + self.line_width/max_density * density_count
+                                density_color = 'rgb' + str((
+                                                int(density_gradient['start_rgb'][0] + (density_gradient['end_rgb'][0] - density_gradient['start_rgb'][0])/max_density * density_count),                    
+                                                int(density_gradient['start_rgb'][1] + (density_gradient['end_rgb'][1] - density_gradient['start_rgb'][1])/max_density * density_count),                         
+                                                int(density_gradient['start_rgb'][2] + (density_gradient['end_rgb'][2] - density_gradient['start_rgb'][2])/max_density * density_count)                             
+                                                            ))
+                            else:
+                                #print('No density data within given radius found!')
+                                density_color = 'rgb(0,0,0)'
+                                density_line_width = 1/2 * self.line_width                           
+                            
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + coordinates + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(density_color), str(density_line_width))
+                                f.write(line_to_write + '\n')
+                                
+                                """
+                                x_coord = coordinates[0:coordinates.find(',')]
+                                y_coord = coordinates[coordinates.find(',')+1:coordinates.find(' ')] 
+                                line_to_write = '<text x="%s" y = "%s" font-size="1">\n %i \n </text>' % (x_coord,y_coord,density_count)
+                                f.write(line_to_write + '\n')
+                                """
+                            else:
+                                point_coords = re.findall('(.*?,.*?) ',coordinates)  
+                                #nodes are represented twice in point_coords, b/c they are derived from start+end points from edges
+                                #therefore skip every second point -> will result in last node missing if odd length                                                              
+                                for point in point_coords[0:-1:2]:
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]  
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(density_line_width/5), str(density_color), str(density_color))                                            
+                                    f.write(line_to_write + '\n')
+                                
+                                    """
+                                    line_to_write = '<text x="%s" y = "%s" font-size="1">\n %i \n </text>' % (x_coord,y_coord,density_count)
+                                    f.write(line_to_write + '\n')
+                                    """
+                        
 
-                ### Add soma to front view if previously found
-                if soma_found is True:
-                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
-                                    % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius), str(color), str(color))
-                    f.write(line_to_write + '\n')
+                    ### Add soma to front view if previously found
+                    if soma_found is True:
+                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
+                                        % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius), str(color), str(color))
+                        f.write(line_to_write + '\n')
 
-                ### Add front brain shape
-                if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_front_string + '\n') 
+                    ### Add front brain shape
+                    if self.merge is False or first_neuron is True:
+                        f.write('\n' + brain_shape_front_string + '\n') 
 
-                    if self.export_ring_gland is True:
-                        f.write('\n' + ring_gland_front + '\n') 
+                        if self.export_ring_gland is True:
+                            f.write('\n' + ring_gland_front + '\n') 
 
-                line_to_write = '</g>'
-                f.write(line_to_write + '\n \n \n')                 
+                    line_to_write = '</g>'
+                    f.write(line_to_write + '\n \n \n')                 
                 
                 ### Add neuron from top view
-                line_to_write = '<g id="%s top" transform="translate(%i,%i)">' \
-                                 % (neuron.name, offsetX+offsetX_for_top, offsetY+offsetY_for_top)
-                f.write(line_to_write + '\n')
-                
-                for i in range(len(polyline_top)):
-                    line_to_write = '<polyline points="' + polyline_top[i] + '"\n' \
-                                    'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
-                                    % (str(color),str(self.line_width))
+                if "Top" in self.views_to_export:
+                    line_to_write = '<g id="%s top" transform="translate(%i,%i)">' \
+                                     % (neuron.name, offsetX+offsetX_for_top, offsetY+offsetY_for_top)
                     f.write(line_to_write + '\n')
+                    
+                    if self.color_by_density is False:  
+                        for i in range(len(polyline_top)):
+                            if self.color_by_inputs_outputs is True:
+                                color = polyline_ratio_colors[i]
+                            
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + polyline_top[i] + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(color),str(self.line_width))
+                                f.write(line_to_write + '\n')
+                            else:                                
+                                point_coords = re.findall('(.*?,.*?) ',polyline_top[i])                                
+                                for point in point_coords:                                    
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]                                    
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(self.line_width/5), str(color), str(color))
+                                    f.write(line_to_write + '\n')  
+                    else:
+                        for i in range(len(lines_top_by_density)):                           
+                            density_count = lines_top_by_density[i][1]
+                            coordinates = lines_top_by_density[i][0]
+                            if max_density > 0 and density_count > 0:
+                                density_line_width = 1/2 * self.line_width + self.line_width/max_density * density_count
+                                density_color = 'rgb' + str((
+                                                int(density_gradient['start_rgb'][0] + (density_gradient['end_rgb'][0] - density_gradient['start_rgb'][0])/max_density * density_count),                    
+                                                int(density_gradient['start_rgb'][1] + (density_gradient['end_rgb'][1] - density_gradient['start_rgb'][1])/max_density * density_count),                         
+                                                int(density_gradient['start_rgb'][2] + (density_gradient['end_rgb'][2] - density_gradient['start_rgb'][2])/max_density * density_count)                             
+                                                            ))
+                            else:
+                                #print('No density data within given radius found!')
+                                density_color = 'rgb(0,0,0)'
+                                density_line_width = 1/2 * self.line_width
+                                
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + coordinates + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(density_color), str(density_line_width))
+                                f.write(line_to_write + '\n')
+                            else:
+                                point_coords = re.findall('(.*?,.*?) ',coordinates)      
+                                #nodes are represented twice in point_coords, b/c they are derived from start+end points from edges
+                                #therefore skip every second point -> will result in last node missing if odd length                                                          
+                                for point in point_coords[0:-1:2]:
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]  
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(density_line_width/5), str(density_color), str(density_color))                                            
+                                    f.write(line_to_write + '\n')                                
 
-                ### Add soma to top view if previously found
-                if soma_found is True:
-                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
-                                    % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[1]*-10,1)), str(self.basic_radius), str(color), str(color))
-                    f.write(line_to_write + '\n')
-            
-                ### Add top brain shape
-                if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_top_string + '\n') 
+                    ### Add soma to top view if previously found
+                    if soma_found is True:
+                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
+                                        % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[1]*-10,1)), str(self.basic_radius), str(color), str(color))
+                        f.write(line_to_write + '\n')
                 
-                    if self.export_ring_gland is True:
-                        f.write('\n' + ring_gland_top + '\n')                
-                
-                line_to_write = '</g>'
-                f.write(line_to_write + '\n \n \n')
+                    ### Add top brain shape
+                    if self.merge is False or first_neuron is True:
+                        f.write('\n' + brain_shape_top_string + '\n') 
+                    
+                        if self.export_ring_gland is True:
+                            f.write('\n' + ring_gland_top + '\n')                
+                    
+                    line_to_write = '</g>'
+                    f.write(line_to_write + '\n \n \n')
                 
                 ### Add neuron from perspective view
-                line_to_write = '<g id="%s perspective" transform="translate(%i,%i)">' \
-                                 % (neuron.name, offsetX+offsetX_for_persp, offsetY+offsetY_for_persp)
-                f.write(line_to_write + '\n')
-                
-                for i in range(len(polyline_persp)):
-                    line_to_write = '<polyline points="' + polyline_persp[i] + '"\n' \
-                                    'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
-                                    % (str(color),str(self.line_width))
+                if "Perspective" in self.views_to_export:
+                    line_to_write = '<g id="%s perspective" transform="translate(%i,%i)">' \
+                                     % (neuron.name, offsetX+offsetX_for_persp, offsetY+offsetY_for_persp)
                     f.write(line_to_write + '\n')
-
-                ### Add soma to perspective view if previously found
-                if soma_found is True:                    
-                    z_scale_factor = round(soma_pos[1] *10,1)                                              
-                    x_persp = str(round(soma_pos[0] *10,1) + x_persp_offset * z_scale_factor)
-                    y_persp = str(round(soma_pos[2]*-10,1) + y_persp_offset * z_scale_factor)
                     
-                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
-                                    % (x_persp,y_persp, str(self.basic_radius), str(color), str(color))
-                    f.write(line_to_write + '\n')
-            
-                ### Add perspective brain shape
-                ### TO DO!
+                    if self.color_by_density is False:  
+                        for i in range(len(polyline_persp)):
+                            if self.color_by_inputs_outputs is True:
+                                color = polyline_ratio_colors[i] 
+                            
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + polyline_persp[i] + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(color),str(self.line_width))
+                                f.write(line_to_write + '\n')
+                            else:                                
+                                point_coords = re.findall('(.*?,.*?) ',polyline_persp[i])                                
+                                for point in point_coords:                                    
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]                                    
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(self.line_width/5), str(color), str(color))
+                                    f.write(line_to_write + '\n')                              
+                    else:
+                        for i in range(len(lines_persp_by_density)):                           
+                            density_count = lines_persp_by_density[i][1]
+                            coordinates = lines_persp_by_density[i][0]
+                            if max_density > 0 and density_count > 0:
+                                density_line_width = 1/2 * self.line_width + self.line_width/max_density * density_count
+                                density_color = 'rgb' + str((
+                                                int(density_gradient['start_rgb'][0] + (density_gradient['end_rgb'][0] - density_gradient['start_rgb'][0])/max_density * density_count),                    
+                                                int(density_gradient['start_rgb'][1] + (density_gradient['end_rgb'][1] - density_gradient['start_rgb'][1])/max_density * density_count),                         
+                                                int(density_gradient['start_rgb'][2] + (density_gradient['end_rgb'][2] - density_gradient['start_rgb'][2])/max_density * density_count)                             
+                                                            ))
+                            else:
+                                #print('No density data within given radius found!')
+                                density_color = 'rgb(0,0,0)'
+                                density_line_width = 1/2 * self.line_width
+                                
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + coordinates + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(density_color), str(density_line_width))
+                                f.write(line_to_write + '\n')
+                            else:
+                                point_coords = re.findall('(.*?,.*?) ',coordinates)        
+                                #nodes are represented twice in point_coords, b/c they are derived from start+end points from edges
+                                #therefore skip every second point -> will result in last node missing if odd length                        
+                                for point in point_coords[0:-1:2]:
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]  
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(density_line_width/5), str(density_color), str(density_color))                                            
+                                    f.write(line_to_write + '\n')                                
+
+                    ### Add soma to perspective view if previously found
+                    if soma_found is True:
+                        if "Perspective-Dorsal" in self.views_to_export:
+                            persp_scale_factor = round((y_center-soma_pos[1]) *10,1)  
+                            #Attention!: for dorsal view we want to look at it from behind at an angle -> invert X pos
+                            x_persp = str(round(soma_pos[0]*-10,1) + x_persp_offset * persp_scale_factor)
+                            y_persp = str(round(soma_pos[2]*-10,1) + y_persp_offset * persp_scale_factor)                                                                                             
+                        else:                                                
+                            persp_scale_factor = round(soma_pos[1] *10,1)
+                            x_persp = str(round(soma_pos[0]* 10,1) + x_persp_offset * persp_scale_factor)
+                            y_persp = str(round(soma_pos[2]*-10,1) + y_persp_offset * persp_scale_factor)
+                        
+                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
+                                        % (x_persp,y_persp, str(self.basic_radius), str(color), str(color))
+                        f.write(line_to_write + '\n')
                 
-                line_to_write = '</g>'
-                f.write(line_to_write + '\n \n \n')
+                    ### Add perspective brain shape
+                    ### TO DO!
+                    
+                    line_to_write = '</g>'
+                    f.write(line_to_write + '\n \n \n')
                 
                 
                 ### Add neuron from lateral view
-                line_to_write = '<g id="%s lateral" transform="translate(%i,%i)">' \
-                                % (neuron.name, offsetX+offsetX_for_lateral, offsetY+offsetY_for_lateral)
-                f.write(line_to_write + '\n')  
-                
-                for i in range(len(polyline_lateral)):
-                    line_to_write = '<polyline points="' + polyline_lateral[i] + '"\n' \
-                                    'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
-                                     % (str(color),str(self.line_width))
-                    f.write(line_to_write + '\n')
+                if "Lateral" in self.views_to_export:
+                    line_to_write = '<g id="%s lateral" transform="translate(%i,%i)">' \
+                                    % (neuron.name, offsetX+offsetX_for_lateral, offsetY+offsetY_for_lateral)
+                    f.write(line_to_write + '\n')  
+                    
+                    if self.color_by_density is False:  
+                        for i in range(len(polyline_lateral)):
+                            if self.color_by_inputs_outputs is True:
+                                color = polyline_ratio_colors[i]
+                            
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + polyline_lateral[i] + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                 % (str(color),str(self.line_width))
+                                f.write(line_to_write + '\n')
+                            else:                                
+                                point_coords = re.findall('(.*?,.*?) ',polyline_lateral[i])                                
+                                for point in point_coords:                                    
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]                                    
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(self.line_width/5), str(color), str(color))
+                                    f.write(line_to_write + '\n')                                  
+                    else:
+                        for i in range(len(lines_lateral_by_density)):                           
+                            density_count = lines_lateral_by_density[i][1]
+                            coordinates = lines_lateral_by_density[i][0]
+                            if max_density > 0 and density_count > 0:
+                                density_line_width = 1/2 * self.line_width + self.line_width/max_density * density_count
+                                density_color = 'rgb' + str((
+                                                int(density_gradient['start_rgb'][0] + (density_gradient['end_rgb'][0] - density_gradient['start_rgb'][0])/max_density * density_count),                    
+                                                int(density_gradient['start_rgb'][1] + (density_gradient['end_rgb'][1] - density_gradient['start_rgb'][1])/max_density * density_count),                         
+                                                int(density_gradient['start_rgb'][2] + (density_gradient['end_rgb'][2] - density_gradient['start_rgb'][2])/max_density * density_count)                             
+                                                            ))
+                            else:
+                                #print('No density data within given radius found!')
+                                density_color = 'rgb(0,0,0)'
+                                density_line_width = 1/2 * self.line_width
+                                
+                            if self.export_as_points is False:
+                                line_to_write = '<polyline points="' + coordinates + '"\n' \
+                                                'style="fill:none;stroke:%s;stroke-width:%s;stroke-linecap:round;stroke-linejoin:round"/>' \
+                                                % (str(density_color), str(density_line_width))
+                                f.write(line_to_write + '\n')
+                            else:
+                                point_coords = re.findall('(.*?,.*?) ',coordinates)                                
+                                #nodes are represented twice in point_coords, b/c they are derived from start+end points from edges
+                                #therefore skip every second point -> will result in last node missing if odd length
+                                for point in point_coords[0:-1:2]:
+                                    x_coord = point[0:point.find(',')]
+                                    y_coord = point[point.find(',')+1:]  
+                                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0"  />' \
+                                            % (x_coord,y_coord, str(density_line_width/5), str(density_color), str(density_color))                                            
+                                    f.write(line_to_write + '\n')                                
 
-                ### Add soma to top view if previously found
-                if soma_found is True:
-                    line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
-                                    % (str(round(soma_pos[1]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius), \
-                                    str(color), str(color))
-                    f.write(line_to_write + '\n')
-            
-                ### Add lateral brain shape
-                if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_lateral_string + '\n')
-                    first_neuron = False   
+                    ### Add soma to top view if previously found
+                    if soma_found is True:
+                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
+                                        % (str(round(soma_pos[1]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius), \
+                                        str(color), str(color))
+                        f.write(line_to_write + '\n')
                 
-                    if self.export_ring_gland is True:                    
-                        f.write('\n' + ring_gland_lateral + '\n')                                                   
-                
+                    ### Add lateral brain shape
+                    if self.merge is False or first_neuron is True:
+                        f.write('\n' + brain_shape_lateral_string + '\n')
+                        first_neuron = False   
+                    
+                        if self.export_ring_gland is True:                    
+                            f.write('\n' + ring_gland_lateral + '\n')                  
+                        
+                    line_to_write = '</g>'
+                    f.write(line_to_write + '\n \n \n') 
+        
                 ### Add neuron name to svg/ create legend if merge is True
                 if self.merge is False:
-                    f.write('\n <g> \n <text x="10" y = "140" font-size="8">\n' + str(neuron.name) + '\n</text> \n </g> \n')
+                    f.write('\n <g id="name"> \n <text x="10" y = "140" font-size="8">\n' + str(neuron.name) + '\n</text> \n </g> \n')
                 else:
-                    line_to_write = '\n <g> \n <text x="260" y = "%s" fill="%s" font-size="8"> \n %s \n </text> \n' \
+                    line_to_write = '\n <g id="name"> \n <text x="260" y = "%s" fill="%s" font-size="8"> \n %s \n </text> \n' \
                                     % (str(offsetY_forText+5), str(color), str(neuron.name))                
                     f.write(line_to_write + '\n')
                     f.write('</g> \n \n')
                 
-                    offsetY_forText += 10                
+                    offsetY_forText += 10 
                     
-                line_to_write = '</g>'
-                f.write(line_to_write + '\n \n \n') 
+                ### Add density info
+                if self.color_by_density is True:
+                   f.write('\n <g id="density info"> \n <text x="15" y = "150" font-size="6">\n Density data - total nodes: ' + str(len(density_data)) + ' max density: ' + str(max_density) + '/' + str(round(self.proximity_radius_for_density,2)) + ' radius \n </text> \n </g> \n')
+                   f.write('<circle cx="50" cy="150" r="%s" fill="None" stroke="rgb(0,0,0)" stroke-width="0.1"  />' \
+                                        % str(self.proximity_radius_for_density * 10))
+
         
                 offsetX += offsetIncrease
 
@@ -2757,6 +3690,18 @@ class ColorBySynapseCount(Operator):
     filter_exclude = StringProperty(name="Exclude Filter (comma separated)", default = "")
     use_upstream = BoolProperty(name="Consider Upstream", default = True)
     use_downstream = BoolProperty(name="Consider Downstream", default = True)
+    only_if_connected = BoolProperty( name="Only if Synapses", 
+                                        description="Change Color only if neuron is synaptically connected. Otherwise preserve current color",
+                                        default = False)
+    start_hue =         IntProperty(name="LUT - start hue", 
+                                    description="Start Hue for Look up Table (standard = teal)",
+                                    default = 110, min = 0, max = 360)                                     
+    end_hue =           IntProperty(name="LUT - end Hue", 
+                                    description="End Hue for Look up Table (standard = red)",
+                                    default = 0, min = 0, max = 360)
+    emit_max =          IntProperty(name="Emit", 
+                                    description="Max Emit Value - set to 0 for no emit",
+                                    default = 1, min = 0, max = 5)
     
     def execute (self, context):
         synapse_count = {}    
@@ -2795,7 +3740,7 @@ class ColorBySynapseCount(Operator):
         connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
 
         if connectivity_data:
-            print("Connectivity successfully retrieved")            
+            print("Connectivity successfully retrieved: ", list(connectivity_data))            
         else:
             print('No data retrieved')  
         
@@ -2845,14 +3790,15 @@ class ColorBySynapseCount(Operator):
                     skid = re.search('#(.*?) -',object.name).group(1)
                     mat = object.active_material
                     if synapse_count[skid] != 0:
-                        hue = calc_hue(synapse_count[skid],max_count,(110,0))
+                        hue = calc_hue(synapse_count[skid],max_count,(self.start_hue,self.end_hue))
                         s = 1
                         v = 1
                         hsv = colorsys.hsv_to_rgb(hue,s,v)
                         mat.diffuse_color[0] = hsv[0]
                         mat.diffuse_color[1] = hsv[1]
-                        mat.diffuse_color[2] = hsv[2]      
-                    else:
+                        mat.diffuse_color[2] = hsv[2]  
+                        mat.emit = synapse_count[skid]/max_count * self.emit_max   
+                    elif self.only_if_connected is False:
                         mat.diffuse_color = (0.5,0.5,0.5)              
                 except:
                     print('Unable to process object: ', object.name)
@@ -3053,25 +3999,34 @@ def calc_hue (value, max_value, lut):
     if interval != 0:
         min_hue = lut[interval-1]
         max_hue = lut[interval]
-        this_interval_max_value = interval/n_intervals * max_value
     #Make sure that if value == 0 the first interval is choosen
     else:
         interval = 1
         min_hue = lut[0]
         max_hue = lut[1]
-        this_interval_max_value = interval/n_intervals * max_value
 
-    if max_hue > min_hue:
+    this_interval_max_value = interval/n_intervals * max_value    
+    
+    #Hue range is always calculated as the shortest distance between the values    
+    hue_range_cw = math.fabs(max_hue - min_hue)
+    hue_range_cww = 360 - hue_range_cw
+    
+    if hue_range_cw < hue_range_cww:
         hue_range = max_hue - min_hue
-    else:
-        hue_range = (360-min_hue) + max_hue
-
-    hue_test = min_hue + (hue_range/this_interval_max_value * value)
-    hue = min_hue/360 + (hue_range/360/this_interval_max_value * value)
+    elif max_hue > min_hue:
+        hue_range = 360 - max_hue + min_hue
+    elif max_hue < min_hue:
+        hue_range = -1 * (360 - max_hue + min_hue)
+    
+    hue = min_hue + (hue_range/this_interval_max_value * value)
+    if hue < 0:
+        hue = 360 - hue
+    if hue > 360:
+        hue = hue - 360
 
     #print('N_Intervals: %i; Interval: %i; Min/Max Hue: %i/%i; Value: %f;max_value: %f; Hue: %f/%f' % (n_intervals,interval,min_hue,max_hue,value,this_interval_max_value,hue_test,hue))
 
-    return hue          
+    return hue/360
         
 def register():
  bpy.utils.register_module(__name__)
