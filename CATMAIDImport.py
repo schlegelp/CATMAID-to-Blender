@@ -19,6 +19,17 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V3.92 15/10/2015
+    - fixed get_annotations_from_list -> CATMAID returns now a list of dictionaries for each neuron:
+      {'skeletons' : { 'skeleton ID' : [{'id': annotation id, 'uid' : dont know what this is}] , [....]}
+       'annotations': {'annotation_id':'annotation_name', ... }
+      }
+    - added option to apply threshold when importing synaptic partners to single connections instead of the
+      sum of all connections
+
+### V3.91 28/08/2015
+    - added option to color by annotation
+
 ### V3.9 04/08/2015
     - had to compensate for new format of connectivity data: now contains list of synapses with confidences 0-5
         old: {'incoming': { 'neuronXY': {'skids': { 'upstream_neuronZ' : 5 } } }
@@ -213,7 +224,7 @@ server_url = 'https://neurocean.janelia.org/catmaidL1'
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 9, 0),
+ "version": (3, 9, 2),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -270,6 +281,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
         row.operator("color.by_spatial", text = "By Spatial Distr.", icon ='COLOR')
+        
+        row = layout.row(align=False)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_annotation", text = "By Annotation", icon ='COLOR')
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
@@ -498,12 +513,15 @@ def get_annotations_from_list (skid_list, remote_instance):
 
     annotation_list_temp = remote_instance.get_page( remote_get_annotations_url , get_annotations_postdata )
     
+    print(annotation_list_temp)
+    
     annotation_list = {}    
 
     for skid in annotation_list_temp['skeletons']:
-        annotation_list[skid] = []        
-        for annotation_id in annotation_list_temp['skeletons'][skid]:
-            annotation_list[skid].append(annotation_list_temp['annotations'][str(annotation_id)])
+        annotation_list[skid] = [] 
+        for entry in annotation_list_temp['skeletons'][skid]:
+            annotation_id = entry['id']
+            annotation_list[skid].append(annotation_list_temp['annotations'][str(annotation_id)])              
 
     print('%i retrieved' % len(annotation_list))
     
@@ -2804,6 +2822,8 @@ class RetrievePartners(Operator):
     inputs = BoolProperty(name="Retrieve Upstream Partners?", default = True)          
     outputs = BoolProperty(name="Retrieve Downstream Partners?", default = True)
     minimum_synapses = IntProperty(name="Synapse Threshold", default = 5)
+    over_all_synapses = BoolProperty(name="Apply to total #", default = True,
+                                  description = "If checked, synapse threshold applies to sum of synapses over all processed neurons (Incoming/Outgoing always separate!)")
     import_connectors = BoolProperty(name="Import Connectors", default = True)   
     resampling = IntProperty(name="Resampling Factor", default = 2, min = 1, max = 20) 
     filter_by_annotation = StringProperty(name="Filter by Annotation", 
@@ -2878,7 +2898,10 @@ class RetrievePartners(Operator):
                 total_synapses = 0
                 for connection in connectivity_data['incoming'][entry]['skids']:
                     total_synapses += sum(connectivity_data['incoming'][entry]['skids'][connection])
-                if total_synapses >= self.minimum_synapses:
+                    if self.over_all_synapses is False:
+                        if sum(connectivity_data['incoming'][entry]['skids'][connection]) >= self.minimum_synapses:
+                            partners.append(entry)
+                if total_synapses >= self.minimum_synapses and self.over_all_synapses is True:
                     partners.append(entry)                    
                 
         if get_outputs is True:            
@@ -2886,20 +2909,23 @@ class RetrievePartners(Operator):
                 total_synapses = 0
                 for connection in connectivity_data['outgoing'][entry]['skids']:
                     total_synapses += sum(connectivity_data['outgoing'][entry]['skids'][connection])
-                if total_synapses >= self.minimum_synapses:
+                    if self.over_all_synapses is False:
+                        if sum(connectivity_data['outgoing'][entry]['skids'][connection]) >= self.minimum_synapses:
+                            partners.append(entry)
+                if total_synapses >= self.minimum_synapses and self.over_all_synapses is True:
                     partners.append(entry)                     
                     
         neuron_names = get_neuronnames(list(set(partners)))
                 
         ### Cycle over partner's skeleton ids and load neurons
-        total_number = len(partners)
+        total_number = len(list(set(partners)))
         i = 0
         
         if self.filter_by_annotation:
             annotations = get_annotations_from_list(partners,remote_instance)          
             tags = self.filter_by_annotation.split(',')
                             
-        for skid in partners:            
+        for skid in list(set(partners)):            
             if self.filter_by_annotation:
                 tag_found = False
                 try:
@@ -4980,6 +5006,76 @@ class ColorBySynapseCount(Operator):
     
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)  
+    
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
+        
+class ColorByAnnotation(Operator):
+    """Color neurons by Annotation"""  
+    bl_idname = "color.by_annotation"  
+    bl_label = "Color Neurons based on whether they have given annotation" 
+    bl_options = {'UNDO'}      
+    
+    annotation = StringProperty(name="Annotation",description="Seperate multiple annotations by comma without space. Must be exact! Case-sensitive!")
+    exclude_annotation = StringProperty(name="Exclude",description="Seperate multiple annotations by comma without space. Must be exact! Case-sensitive!")
+    color = FloatVectorProperty(name="Color", 
+                                description="Color value", 
+                                default = (1, 0.0, 0.0), 
+                                min=0.0,
+                                max=1.0,
+                                subtype='COLOR'
+                                )
+    make_non_matched_grey = BoolProperty(name="Color others grey",
+                                         description="If unchecked, color of neurons without given annotation(s) will not be changed",
+                                         default=True)
+    
+    
+    def execute (self, context):        
+        skids_to_retrieve = []
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)                    
+                    skids_to_retrieve.append(skid)
+                except:
+                    pass
+                                
+        annotations = get_annotations_from_list(skids_to_retrieve, remote_instance)
+        
+        include_annotations = self.annotation.split(',')
+        exclude_annotations = self.exclude_annotation.split(',')
+        
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):                
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)        
+                    
+                    include = False
+                    exclude = False
+                    
+                    for tag in annotations[skid]:
+                        if tag in include_annotations:
+                            include = True
+                        if tag in exclude_annotations:
+                            exclude = True
+                            
+                    if include is True and exclude is False:
+                        object.active_material.diffuse_color = self.color
+                    elif self.make_non_matched_grey is True:
+                        object.active_material.diffuse_color = (0.4,0.4,0.4)
+                except:
+                    pass
+        
+        
+        
+        return{'FINISHED'}
+    
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)      
     
     @classmethod        
     def poll(cls, context):

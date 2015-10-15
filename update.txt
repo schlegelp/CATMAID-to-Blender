@@ -1,7 +1,7 @@
 #Provides current version, last stable version, 
 #recently added features and a message if need be
 
-current_version = {3.9}
-last_stable = {3.9}
-new_features = {Import/Color by pairs, critical fixes due to changes in CATMAID}
+current_version = {3.92}
+last_stable = {3.92}
+new_features = {Import/Color by pairs, critical fixes due to changes in CATMAID, more options for thresholds}
 message = {}
