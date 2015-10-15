@@ -26,6 +26,7 @@
       }
     - added option to apply threshold when importing synaptic partners to single connections instead of the
       sum of all connections
+    - added option to change project ID when logging into CATMAID (default = 1)
 
 ### V3.91 28/08/2015
     - added option to color by annotation
@@ -220,6 +221,7 @@ except:
 remote_instance = None
 connected = False
 server_url = 'https://neurocean.janelia.org/catmaidL1'
+project_id = 1
 
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
@@ -501,7 +503,7 @@ def get_annotations_from_list (skid_list, remote_instance):
     #Takes list of skids and retrieves annotations
     #Attention! It seems like this URL does not process more than 250 skids at a time!
 
-    remote_get_annotations_url = remote_instance.get_annotations_for_skid_list( 1 )
+    remote_get_annotations_url = remote_instance.get_annotations_for_skid_list( project_id )
 
     get_annotations_postdata = {}               
 
@@ -509,7 +511,7 @@ def get_annotations_from_list (skid_list, remote_instance):
         key = 'skids[%i]' % i
         get_annotations_postdata[key] = str(skid_list[i])
 
-    print('Asking for %i skeletons annotations...' % len(get_annotations_postdata), end = ' ')   
+    print('Asking for %i skeletons annotations (Project ID: %i)' % (len(get_annotations_postdata),project_id), end = ' ')   
 
     annotation_list_temp = remote_instance.get_page( remote_get_annotations_url , get_annotations_postdata )
     
@@ -541,7 +543,7 @@ def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=Tru
     partners['outgoing'] = []    
     skids_already_seen = {}
 
-    remote_connectivity_url = remote_instance.get_connectivity_url( 1 )        
+    remote_connectivity_url = remote_instance.get_connectivity_url( project_id )        
     for hop in range(hops):  
         upstream_partners_temp = {}
         connectivity_post = {}
@@ -628,7 +630,7 @@ class TestHttpRequest(Operator):
     def execute(self,context):
         skids = [10418394,4453485]
         
-        remote_get_names = remote_instance.get_neuronnames( 1 )
+        remote_get_names = remote_instance.get_neuronnames( project_id )
         
         get_names_postdata = {}
         get_names_postdata['pid'] = 1
@@ -650,7 +652,7 @@ def get_neuronnames(skids):
     """Retrieves and Returns a list of names for a list of neurons"""
     
     ### Get URL to neuronnames function
-    remote_get_names = remote_instance.get_neuronnames( 1 )
+    remote_get_names = remote_instance.get_neuronnames( project_id )
     
     ### Create postdata out of given skeleton IDs
     get_names_postdata = {}
@@ -841,9 +843,9 @@ class RetrieveNeuron(Operator):
             return error
         
         if import_connectors is True:
-            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id ,1,0)
+            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id ,1,0)
         else:
-            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id ,0,0)            
+            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id ,0,0)            
         node_data = []
         node_data = remote_instance.get_page( remote_get_compact_skeleton_url )
 
@@ -965,13 +967,7 @@ class RetrievePairs(Operator):
         if connected:
             return True
         else:
-            return False        
-        
-        
-        
-        
-        
-        
+            return False      
     
 
 class RetrieveByAnnotation(Operator):      
@@ -1001,7 +997,7 @@ class RetrieveByAnnotation(Operator):
     def retrieve_annotation_list(self):
         print('Retrieving list of Annotations...')
         
-        remote_annotation_list_url = remote_instance.get_annotation_list(1)
+        remote_annotation_list_url = remote_instance.get_annotation_list( project_id )
         list = remote_instance.get_page( remote_annotation_list_url )
         
         for dict in list['annotations']:
@@ -1019,7 +1015,7 @@ class RetrieveByAnnotation(Operator):
     def retrieve_annotated(self, annotation, annotation_id):
         print('Looking for Annotation | %s | (id: %s)' % (annotation,annotation_id))
         annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
-        remote_annotated_url = remote_instance.get_annotated_url( 1 )
+        remote_annotated_url = remote_instance.get_annotated_url( project_id )
         neuron_list = remote_instance.get_page( remote_annotated_url, annotation_post )
         count = 0        
         
@@ -1123,7 +1119,7 @@ class RetrieveConnectors(Operator):
                         
         ### Retrieve compact json data and filter connector ids
         print('Retrieving connector data for skid %s...' % active_skeleton)
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , active_skeleton, 1, 0 )
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
         node_data = remote_instance.get_page( remote_compact_skeleton_url )
 
         if node_data:
@@ -1165,7 +1161,7 @@ class RetrieveConnectors(Operator):
        
         print('%s Up- / %s Downstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
 
-        remote_connector_url = remote_instance.get_connectors_url( 1 )
+        remote_connector_url = remote_instance.get_connectors_url( project_id )
 
         if self.get_outputs is True:
             print( "Retrieving Postsynaptic Targets..." )
@@ -1400,7 +1396,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         
         ### Retrieve compact json data and filter connector ids
         print('Retrieving connector data for skid %s...' % active_skeleton)
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , active_skeleton, 1, 0 )
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
 
         node_data = remote_instance.get_page( remote_compact_skeleton_url )
 
@@ -1462,7 +1458,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             i += 1
         
         print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
-        remote_connector_url = remote_instance.get_connectors_url( 1 )
+        remote_connector_url = remote_instance.get_connectors_url( project_id )
     
         if self.export_outputs is True:        
             print( "Retrieving Target Connectors..." )        
@@ -2622,7 +2618,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         
         connection_count = {}        
         
-        remote_connectivity_url = remote_instance.get_connectivity_url( 1 )  
+        remote_connectivity_url = remote_instance.get_connectivity_url( project_id )  
         connectivity_post = {}
         connectivity_post['threshold'] = 1
         connectivity_post['boolean_op'] = 'logic_OR'                
@@ -2860,7 +2856,7 @@ class RetrievePartners(Operator):
     
     def get_partners(self, skid):
         connectivity_post = { 'source[0]': skid, 'threshold': 0 , 'boolean_op': 'logic_OR' }             
-        remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
+        remote_connectivity_url = remote_instance.get_connectivity_url( project_id )
         print( "Retrieving Partners..." )
         connectivity_data = []
         connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
@@ -3193,9 +3189,10 @@ class ConnectToCATMAID(Operator):
     #subtype = 'PASSWORD' seems to be buggy in Blender 2.71    
     #local_catmaid_pw = StringProperty(name="CATMAID Password", subtype = 'PASSWORD')
     local_catmaid_pw = StringProperty(name="CATMAID Password")
+    standard_pid = IntProperty(name='Project ID', default = project_id)
     
     def execute(self, context):               
-        global remote_instance, server_url, connected
+        global remote_instance, server_url, connected, project_id
         
         #Check for latest version of the Script
         get_version_info.check_version(context)
@@ -3215,6 +3212,9 @@ class ConnectToCATMAID(Operator):
         else:
             print ('Connection successful')
             connected = True
+            
+        #Set standard project ID
+        project_id = self.standard_pid
         
         return {'FINISHED'}
      
@@ -3471,7 +3471,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                 if self.color_by_density is True and self.object_for_density == 'Synapses':   
                     print('Retrieving Connectors for Color by Density..')
                     skid = re.search('#(.*?) ',neuron.name).group(1)
-                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skid, 1, 0 )
+                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
                     node_data = remote_instance.get_page( remote_compact_skeleton_url )
                     
                     #Reset density_data for every neuron!
@@ -3515,7 +3515,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                             connector_postdata[connector_tag] = connection[1]
                             index += 1
                            
-                        remote_connector_url = remote_instance.get_connectors_url( 1 )
+                        remote_connector_url = remote_instance.get_connectors_url( project_id )
                         print( "Retrieving Info on Connectors for Filtering..." )        
                         connector_data = remote_instance.get_page( remote_connector_url , connector_postdata )                    
                         print("Connectors retrieved: ", len(connector_data))
@@ -3585,7 +3585,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                     #Retrieve list of connectors for this neuron           
                     skid = re.search('#(.*?) ',neuron.name).group(1)
                     print('Retrieving connector data for skid %s...' % skid)
-                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skid, 1, 0 )
+                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
                     node_data = remote_instance.get_page( remote_compact_skeleton_url )
                     
                     list_of_synapses = {}
