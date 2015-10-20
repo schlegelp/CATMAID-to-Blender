@@ -19,7 +19,14 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V3.93 20/10/2015
+    - fixed some bugs due to changes in CATMAID API:
+        - changed annotations url to skeleton/annotationlist
+        - changed url to get list of all annotations to /annotations/
+
 ### V3.92 15/10/2015
+    - fixed color by synapses lut calculation: 
+        * values needed to be reduced by 1, such that range for calculation is 0 to (max_value-1)
     - fixed get_annotations_from_list -> CATMAID returns now a list of dictionaries for each neuron:
       {'skeletons' : { 'skeleton ID' : [{'id': annotation id, 'uid' : dont know what this is}] , [....]}
        'annotations': {'annotation_id':'annotation_name', ... }
@@ -226,7 +233,7 @@ project_id = 1
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 9, 2),
+ "version": (3, 9, 3),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -479,11 +486,11 @@ class CatmaidInstance:
     
     #Use to parse url for retrieving list of all annotations (and their IDs) (does NOT need post data)
     def get_annotation_list(self, pid):
-        return self.mkurl("/" + str(pid) + "/annotations/list" )
+        return self.mkurl("/" + str(pid) + "/annotations/" )
     
     #Use to get annotations for given neuron. DOES need skid as postdata
     def get_annotations_for_skid_list(self, pid):
-        return self.mkurl("/" + str(pid) + "/annotations/skeletons/list" )     
+        return self.mkurl("/" + str(pid) + "/skeleton/annotationlist" )     
     
     #Use to parse url for retrieving ancestry (e.g. name) of an id (does need post data: pid, skid)
     def get_ancestry(self, pid):
@@ -505,10 +512,10 @@ def get_annotations_from_list (skid_list, remote_instance):
 
     remote_get_annotations_url = remote_instance.get_annotations_for_skid_list( project_id )
 
-    get_annotations_postdata = {}               
+    get_annotations_postdata = {'metaannotations':0,'neuronnames':0}              
 
     for i in range(len(skid_list)):
-        key = 'skids[%i]' % i
+        key = 'skeleton_ids[%i]' % i
         get_annotations_postdata[key] = str(skid_list[i])
 
     print('Asking for %i skeletons annotations (Project ID: %i)' % (len(get_annotations_postdata),project_id), end = ' ')   
@@ -521,7 +528,7 @@ def get_annotations_from_list (skid_list, remote_instance):
 
     for skid in annotation_list_temp['skeletons']:
         annotation_list[skid] = [] 
-        for entry in annotation_list_temp['skeletons'][skid]:
+        for entry in annotation_list_temp['skeletons'][skid]['annotations']:
             annotation_id = entry['id']
             annotation_list[skid].append(annotation_list_temp['annotations'][str(annotation_id)])              
 
@@ -4764,17 +4771,28 @@ class ColorBySynapseCount(Operator):
     only_if_connected = BoolProperty( name="Only if Synapses", 
                                         description="Change Color only if neuron is synaptically connected. Otherwise preserve current color",
                                         default = False)
-    start_hue =         IntProperty(name="LUT - start hue", 
-                                    description="Start Hue for Look up Table (standard = teal)",
-                                    default = 110, min = 0, max = 360)                                     
-    end_hue =           IntProperty(name="LUT - end Hue", 
-                                    description="End Hue for Look up Table (standard = red)",
-                                    default = 0, min = 0, max = 360)
+    start_color = FloatVectorProperty(name="Start Color", 
+                                description="Low Value Color", 
+                                default = (0.0, 1 , 0.0), 
+                                min=0.0,
+                                max=1.0,
+                                subtype='COLOR'
+                                )  
+    end_color = FloatVectorProperty(name="End Color", 
+                                description="Hig Value Color", 
+                                default = (1, 0.0, 0.0), 
+                                min=0.0,
+                                max=1.0,
+                                subtype='COLOR'
+                                )   
+    take_longest_route = BoolProperty( name="LUT takes longest route", 
+                                        description="If checked, LUT will cover longest connection between start and end color",
+                                        default = True)                               
     emit_max =          IntProperty(name="Emit", 
                                     description="Max Emit Value - set to 0 for no emit",
                                     default = 1, min = 0, max = 5)
     
-    def execute (self, context):
+    def execute (self, context):       
         synapse_count = {}    
         connectivity_post = {} 
         connectivity_post['threshold'] = 0
@@ -4933,11 +4951,10 @@ class ColorBySynapseCount(Operator):
                     skid = re.search('#(.*?) -',object.name).group(1)
                     mat = object.active_material
                     print(object.name,synapse_count[skid])
-                    if synapse_count[skid] > 0:
-                        hue = calc_hue(synapse_count[skid],max_count,(self.start_hue,self.end_hue))
-                        s = 1
-                        v = 1
-                        hsv = colorsys.hsv_to_rgb(hue,s,v)
+                    if synapse_count[skid] > 0:                        
+                        #Reduce # of synapses by 1 such that the lowest value is actually 0 to (max_count-1)
+                        hsv = calc_color((synapse_count[skid]-1),(max_count-1),self.start_color,self.end_color,self.take_longest_route)
+                        
                         if self.shift_color is False:
                             mat.diffuse_color[0] = hsv[0]
                             mat.diffuse_color[1] = hsv[1]
@@ -5253,8 +5270,46 @@ class ColorBySpatialDistribution(Operator):
     
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)    
-
+        return context.window_manager.invoke_props_dialog(self)  
+    
+def calc_color (value, max_value, start_rgb, end_rgb,take_longest_route):
+    """
+    Calculates color 
+    """      
+    
+    #Make sure value is capped at max_value
+    if value > max_value:
+        value = max_value
+        print('Attention! Value > Max_Value!')
+        
+    #Convert RGBs to HSVs
+    start_hsv = colorsys.rgb_to_hsv(start_rgb[0],start_rgb[1],start_rgb[2])
+    end_hsv = colorsys.rgb_to_hsv(end_rgb[0],end_rgb[1],end_rgb[2])
+    
+    if end_hsv[0] == start_hsv[0]:
+        hue_range = 0
+    elif take_longest_route is False:
+        hue_range = end_hsv[0] - start_hsv[0]    
+    elif math.fabs(end_hsv[0] - start_hsv[0]) > (1 - math.fabs(end_hsv[0] - start_hsv[0])):
+        hue_range = end_hsv[0] - start_hsv[0]
+    else:
+        sign = -1 * (end_hsv[0] - start_hsv[0])/math.fabs(end_hsv[0] - start_hsv[0]) #sign makes sure we go the other way around the circle if this is the longer way
+        hue_range = (1 - math.fabs(end_hsv[0] - start_hsv[0])) * sign    
+        
+    h = start_hsv[0] + (hue_range/max_value * value)
+    
+    if h < 0:
+        h = 1 - h
+    if h > 1:
+        h = h - 1   
+        
+    s = start_hsv[1] + ((end_hsv[1]-start_hsv[1])/max_value * value)
+    v = start_hsv[2] + ((end_hsv[2]-start_hsv[2])/max_value * value)
+    
+    rgb = colorsys.hsv_to_rgb(h,s,v)
+    
+    return rgb
+        
 
 def calc_hue (value, max_value, lut):
     
