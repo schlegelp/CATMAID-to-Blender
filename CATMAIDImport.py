@@ -19,6 +19,15 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.0 10/11/2015:
+    - added import of neurons in given volume
+    - added clustering (coloring) of neurons based on morphological similarity (after Kohl et al., 2013)
+    - added option to import only longest neurite up to given length for all ways to import neurons
+    - added missing descriptions to import/export options -> just hover over checkbox/drop-down/textfield/etc.
+
+### V3.94 9/11/2015:
+    - had to change the way neurons with given annotation are retrieved: both url and postdata changed!
+
 ### V3.93 20/10/2015
     - fixed some bugs due to changes in CATMAID API:
         - changed annotations url to skeleton/annotationlist
@@ -199,6 +208,7 @@ import colorsys
 import copy
 import http.cookiejar as cj
 import mathutils
+import numpy as np
 
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
@@ -233,7 +243,7 @@ project_id = 1
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (3, 9, 3),
+ "version": (4, 0, 0),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -255,12 +265,13 @@ class CATMAIDimportPanel(bpy.types.Panel):
         layout = self.layout   
         
         #Version Check
-        config = bpy.data.scenes[0].CONFIG_VariableManager        
-        layout.label(text="Your Script Version: %s" % str(round(config.current_version,3)))
+        config = bpy.data.scenes[0].CONFIG_VariableManager               
+        layout.label(text="Script Versions")
+        layout.label(text="Your System: %s" % str(round(config.current_version,3)))
         if config.latest_version == 0:
-            layout.label(text="Latest Version on Github: Unable to Retrieve")
+            layout.label(text="On Github: Unable to Retrieve")
         else:
-            layout.label(text="Latest Version on Github: %s" % str(round(config.latest_version,3))) 
+            layout.label(text="On Github: %s" % str(round(config.latest_version,3))) 
             
         if config.last_stable_version > config.current_version:
             layout.label(text="Your are behind the last working", icon = 'ERROR')  
@@ -279,13 +290,15 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("check.version", text = "Check Version", icon ='VISIBLE_IPO_ON')
                
-        layout.label('Materials')
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND' 
+        layout.label('Materials')        
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
         row.operator("random.all_materials", text = "Randomize Color", icon ='COLOR')
+
+        row = layout.row(align=False)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_similarity", text = "By Similarity", icon ='COLOR')
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
@@ -301,38 +314,53 @@ class CATMAIDimportPanel(bpy.types.Panel):
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_pairs", text = "By Pairs", icon ='COLOR')        
+        row.operator("color.by_pairs", text = "By Pairs", icon ='COLOR')       
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
         row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='COLOR')
 
+
         layout.label('CATMAID Import')
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("connect.to_catmaid", text = "Connect 2 CATMAID", icon = 'EXTERNAL_DATA')#.number=1
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("retrieve.neuron", text = "Retrieve by SkeletonID", icon = 'LOAD_FACTORY')#.number=1
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'LOAD_FACTORY')#.number=1
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("retrieve.partners", text = "Retrieve Partners", icon = 'LOAD_FACTORY')#.number=1
+
         row.alignment = 'EXPAND'
         row.operator("retrieve.by_pairs", text = "Retrieve Paired", icon = 'LOAD_FACTORY')#.number=1
+
         row = layout.row(align=True)
-        row.alignment = 'EXPAND'
+        row.alignment = 'EXPAND'        
+        row.operator("retrieve.in_volume", text = "Retrieve in Volume", icon = 'LOAD_FACTORY')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'        
         row.operator("reload.neurons", text = "Reload Neurons", icon = 'FILE_REFRESH')#.number=1
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'LOAD_FACTORY')#.number=1
+
         
         layout.label(text="Export to SVG:")
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("exportall.to_svg", text = 'Export Morphology')
+
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("connectors.to_svg", text = 'Export Connectors')        
@@ -390,9 +418,9 @@ class get_version_info(Operator):
         config.message = message
         config.new_features = new_features
         
-    @classmethod
-    def poll(cls, context):                
-        return context.active_object is not None    
+    #@classmethod
+    #def poll(cls, context):                
+    #    return context.active_object is not None    
 
 class CatmaidInstance:
     """ A class giving access to a CATMAID instance.
@@ -482,7 +510,8 @@ class CatmaidInstance:
     
     #Use to parse url for retrieving annotated neurons (does need post data)
     def get_annotated_url(self, pid):
-        return self.mkurl("/" + str(pid) + "/neuron/query-by-annotations" )
+        #return self.mkurl("/" + str(pid) + "/neuron/query-by-annotations" )
+        return self.mkurl("/" + str(pid) + "/annotations/query-targets" )
     
     #Use to parse url for retrieving list of all annotations (and their IDs) (does NOT need post data)
     def get_annotation_list(self, pid):
@@ -499,6 +528,10 @@ class CatmaidInstance:
     #Use to parse url for names for a list of skeleton ids (does need post data: pid, skid)
     def get_neuronnames(self, pid):
         return self.mkurl("/" + str(pid) + "/skeleton/neuronnames" )   
+
+    #Use to parse url for retrieving list of nodes (needs post data)
+    def get_node_list(self, pid):
+        return self.mkurl("/" + str(pid) + "/node/list" )        
     
     #Use to parse url for retrieving all info the 3D viewer gets (does NOT need post data)
     #Returns, in JSON, [[nodes], [connectors], [tags]], with connectors and tags being empty when 0 == with_connectors and 0 == with_tags, respectively
@@ -625,36 +658,8 @@ def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=Tru
     
     
     return(partners)
-    
-    
-class TestHttpRequest(Operator):
-    """Test Class for Debugging only"""
 
-    bl_idname = "test.request" 
-    bl_label = "Test Http Requests" 
-    
-    
-    def execute(self,context):
-        skids = [10418394,4453485]
-        
-        remote_get_names = remote_instance.get_neuronnames( project_id )
-        
-        get_names_postdata = {}
-        get_names_postdata['pid'] = 1
-        
-        for i in range(len(skids)):
-            key = 'skids[%i]' % i
-            get_names_postdata[key] = skids[i]
-        
-        #get_names_postdata = {'pid' : 1 ,'skids[0]': '10418394', 'skids[1]': '4453485'}
 
-        names = remote_instance.get_page( remote_get_names , get_names_postdata )
-        
-        print(names)
-        
-        return{'FINISHED'}
-       
-    
 def get_neuronnames(skids):
     """Retrieves and Returns a list of names for a list of neurons"""
     
@@ -680,88 +685,247 @@ def get_neuronnames(skids):
     return(neuron_names)
 
 
+def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
+    ''' Retrieve an JSON array with four entries:
+    [0] an array of arrays, each array representing a treenode: [id, parent_id, x , y, z, confidence, radius, skeleton_id, user_id ]
+    [1] an array of arrays, each array representing a connector and containing
+    arrays inside that specify the relations between the connector and treenodes.
+    In this function tuples are used as much as possible for immutable list,
+    and uses directly the tuples returned by the database cursor.
+    [2] the labels, if requested.
+    [3] a boolean which is true when the node limit has been reached.
+    The returned JSON data is therefore sensitive to indices in the array,
+    so care must be taken never to alter the order of the variables in the SQL
+    statements without modifying the accesses to said data both in this function
+    and in the client that consumes it.
+
+
+    Coordinates need to be in nm! Meaning - for whatever reason - that x and y (not z) has to be multiplied by resolution of 3.8
+    '''    
+
+    def retrieve_nodes( left, right, top, bottom, z1, z2, remote_instance, incursion ):  
+
+        print(incursion,':',left, right, top, bottom, z1, z2)      
+
+        remote_nodes_list = remote_instance.get_node_list (1)
+
+        x_y_resolution = 3.8
+
+        #Atnid seems to be related to fetching the active node too (will be ignored if atnid = -1)
+        node_list_postdata = {      'left':left * x_y_resolution,
+                                    'right':right * x_y_resolution,
+                                    'top': top * x_y_resolution,
+                                    'bottom': bottom * x_y_resolution,
+                                    'z1': z1,
+                                    'z2': z2,
+                                    'atnid':-1,
+                                    'labels': False
+                                }
+
+        node_list = remote_instance.get_page( remote_nodes_list , node_list_postdata )
+
+        
+
+        if node_list[3] is True:
+            print('Incursing')   
+            incursion += 1         
+            node_list = list()
+            #Front left top
+            node_list += retrieve_nodes( left, 
+                                        left + (right-left)/2, 
+                                        top, 
+                                        top + (bottom-top)/2, 
+                                        z1, 
+                                        z1 + (z2-z1)/2, 
+                                        remote_instance, incursion )
+            #Front right top
+            node_list += retrieve_nodes( left  + (right-left)/2, 
+                                        right, 
+                                        top,
+                                        top + (bottom-top)/2, 
+                                        z1, 
+                                        z1 + (z2-z1)/2, 
+                                        remote_instance, incursion )
+            #Front left bottom            
+            node_list += retrieve_nodes( left, 
+                                        left + (right-left)/2, 
+                                        top + (bottom-top)/2, 
+                                        bottom, 
+                                        z1, 
+                                        z1 + (z2-z1)/2, 
+                                        remote_instance, incursion )
+            #Front right bottom
+            node_list += retrieve_nodes( left  + (right-left)/2, 
+                                        right, 
+                                        top + (bottom-top)/2, 
+                                        bottom, 
+                                        z1, 
+                                        z1 + (z2-z1)/2, 
+                                        remote_instance, incursion )
+            #Back left top
+            node_list += retrieve_nodes( left, 
+                                        left + (right-left)/2, 
+                                        top, 
+                                        top + (bottom-top)/2, 
+                                        z1 + (z2-z1)/2, 
+                                        z2, 
+                                        remote_instance, incursion )
+            #Back right top
+            node_list += retrieve_nodes( left  + (right-left)/2, 
+                                        right, 
+                                        top,
+                                        top + (bottom-top)/2, 
+                                        z1 + (z2-z1)/2, 
+                                        z2, 
+                                        remote_instance, incursion )
+            #Back left bottom            
+            node_list += retrieve_nodes( left, 
+                                        left + (right-left)/2, 
+                                        top + (bottom-top)/2, 
+                                        bottom, 
+                                        z1 + (z2-z1)/2, 
+                                        z2, 
+                                        remote_instance, incursion )
+            #Back right bottom
+            node_list += retrieve_nodes( left  + (right-left)/2, 
+                                        right, 
+                                        top + (bottom-top)/2, 
+                                        bottom, 
+                                        z1 + (z2-z1)/2, 
+                                        z2, 
+                                        remote_instance, incursion )
+        else:
+            #If limit not reached, node list is still an array of 4
+            print("Incursion finished.",len(node_list[0]))
+            return node_list[0]            
+        
+        print("Incursion finished.",len(node_list))
+
+        return node_list
+
+    print('Retrieving Nodes in Volume...')
+
+    node_list = retrieve_nodes( left, right, top, bottom, z1, z2, remote_instance, 1 )
+
+    skeletons = set()
+
+    for node in node_list:                       
+        skeletons.add(node[7]) 
+
+    print(len(skeletons),'found in volume')          
+
+    return list(skeletons)
+    
+    
+class TestHttpRequest(Operator):
+    """Operator Test Class for Debugging only"""
+
+    bl_idname = "test.request" 
+    bl_label = "Test Http Requests" 
+    
+    
+    def execute(self,context):
+        skids = [10418394,4453485]
+        
+        remote_get_names = remote_instance.get_neuronnames( project_id )
+        
+        get_names_postdata = {}
+        get_names_postdata['pid'] = 1
+        
+        for i in range(len(skids)):
+            key = 'skids[%i]' % i
+            get_names_postdata[key] = skids[i]
+        
+        #get_names_postdata = {'pid' : 1 ,'skids[0]': '10418394', 'skids[1]': '4453485'}
+
+        names = remote_instance.get_page( remote_get_names , get_names_postdata )
+        
+        print(names)
+        
+        return{'FINISHED'}
+
+
 class UpdateNeurons(Operator):      
     """Updates existing Neurons in Scene from CATMAID Server"""
 
     bl_idname = "reload.neurons"  
     bl_label = "Update Neurons from CATMAID Server"   
-    bl_options = {'UNDO'}
+    bl_options = {'UNDO'}    
     
-    all_neurons = BoolProperty(name="Update All", default = True)
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose which neurons to reload.")
     keep_resampling = BoolProperty(name="Keep Old Resampling?", default = True)
-    new_resampling = IntProperty(name="else: New Resampling Factor", default = 2, min = 1, max = 20)
-    import_connectors = BoolProperty(name="Import Connectors", default = True)
+    new_resampling = IntProperty(name="Else: New Resampling Factor", default = 2, min = 1, max = 20,
+                                 description = "Will reduce node count by given factor. Root, ends and forks are preserved!")
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    truncate_neuron = IntProperty(   name="Truncate Neuron", 
+                                        min=-1,
+                                        max=10,
+                                        default = -1,
+                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                    ) 
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
     
     
     def execute(self,context):
-        existing_neurons = {}
+        neurons_to_reload = {}
         resampling = 1
         
         ### Gather skeleton IDs
-        if self.all_neurons is True:
-            for neuron in bpy.data.objects:
-                if neuron.name.startswith('#'):
-                    try:
-                        skid = re.search('#(.*?) -',neuron.name).group(1)
-                        existing_neurons[neuron.name] = {}
-                        existing_neurons[neuron.name]['skid'] = skid
-                        if 'resampling' in neuron:
-                            existing_neurons[neuron.name]['resampling'] = neuron['resampling']
-                        else:
-                            existing_neurons[neuron.name]['resampling'] = 1
-                    except:
-                        print('Unable to process neuron ', neuron.name)
-    
-            ### Select all Neuron-related objects (Skeletons, Inputs/Outputs) and deselect everything else                          
-            for object in bpy.data.objects:
-                if object.name.startswith('#') or object.name.startswith('Outputs of') or object.name.startswith('Inputs of') or object.name.startswith('Soma of'):
-                    object.select = True
-                else:
-                    object.select = False
-                    
-            ### Delete selected objects
-            bpy.ops.object.delete(use_global=False)
-                    
-        else:
-            neuron = bpy.context.active_object
+        if self.which_neurons == 'All':
+            to_check = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_check = bpy.context.selected_objects            
+        elif self.which_neurons == 'Active':
+            to_check = [bpy.context.active_object]
+
+        for neuron in to_check:
             if neuron.name.startswith('#'):
-                skid = re.search('#(.*?) -',neuron.name).group(1)
-                existing_neurons[neuron.name] = {}
-                existing_neurons[neuron.name]['skid'] = skid
-                if 'resampling' in neuron:
-                    existing_neurons[neuron.name]['resampling'] = neuron['resampling']
-                else:
-                    existing_neurons[neuron.name]['resampling'] = 1  
-                    
-                for object in bpy.data.objects:
-                    if object.name.startswith('#'+skid) or object.name.startswith("Outputs of " + skid) or object.name.startswith("Inputs of " + skid):
-                        object.select = True
+                try:
+                    skid = re.search('#(.*?) -',neuron.name).group(1)
+                    neurons_to_reload[neuron.name] = {}
+                    neurons_to_reload[neuron.name]['skid'] = skid
+                    if 'resampling' in neuron:
+                        neurons_to_reload[neuron.name]['resampling'] = neuron['resampling']
                     else:
-                        object.select = False
-                        
-                ### Delete selected objects
-                bpy.ops.object.delete(use_global=False)
-                                      
-            else:
-                print('Active object not a neuron!')
-                return{'FINISHED'}
+                        neurons_to_reload[neuron.name]['resampling'] = 1
+                except:
+                    print('Unable to process neuron', neuron.name)
+    
+        print(len(neurons_to_reload),'neurons to reload:',neurons_to_reload)
+
+        ### Deselect all objects, then select objects to update (Skeletons, Inputs/Outputs)                         
+        for object in bpy.data.objects:
+            object.select = False
+            if object.name.startswith('#') or object.name.startswith('Outputs of') or object.name.startswith('Inputs of') or object.name.startswith('Soma of'):
+                for neuron in neurons_to_reload:
+                    if neurons_to_reload[neuron]['skid'] in object.name:
+                        object.select = True                    
+                
+        ### Delete selected objects        
+        bpy.ops.object.delete(use_global=False)        
         
         ### Get Neuron Names (in case they changed):
-        print('Retrieving newest neuron names...')
+        print('Retrieving most recent neuron names from server...')
         skids_to_retrieve = []
-        for neuron in existing_neurons:
-            skids_to_retrieve.append(existing_neurons[neuron]['skid'])
+        for neuron in neurons_to_reload:
+            skids_to_retrieve.append(neurons_to_reload[neuron]['skid'])
         neuron_names = get_neuronnames(skids_to_retrieve)
 
         ### Reload neurons
-        for neuron in existing_neurons:
-            skid = existing_neurons[neuron]['skid']            
+        for neuron in neurons_to_reload:
+            skid = neurons_to_reload[neuron]['skid']            
             print('Updating Neuron %s' % neuron)
             if self.keep_resampling is True:       
-                resampling = existing_neurons[neuron]['resampling']     
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], resampling, self.import_connectors) 
+                resampling = neurons_to_reload[neuron]['resampling']     
+                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual) 
             else:
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.new_resampling, self.import_connectors) 
+                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.new_resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual) 
         
         return{'FINISHED'} 
     
@@ -782,9 +946,27 @@ class RetrieveNeuron(Operator):
     bl_idname = "retrieve.neuron"  
     bl_label = "Enter skeleton ID(s)"
     
-    skeleton_id = StringProperty(name="Skeleton ID(s)")  
-    import_connectors = BoolProperty(name="Import Connectors", default = True)
-    resampling = IntProperty(name="Resampling Factor", default = 2, min = 1, max = 20)
+    skeleton_id = StringProperty(name="Skeleton ID(s)",
+                                 description = "Enter skeleton IDs. Separate multiple skids by comma without spaces!"
+                                ) 
+
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+    truncate_neuron = IntProperty(   name="Truncate Neuron", 
+                                        min=-1,
+                                        max=10,
+                                        default = -1,
+                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                    ) 
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
       
     
     def execute(self, context):  
@@ -811,7 +993,7 @@ class RetrieveNeuron(Operator):
         
             else:
                 print( "Retrieving Treenodes for %s [%i of %i]" % (skid,self.count,len(skeletons_to_retrieve)))
-                error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors)
+                error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
                 self.count += 1
                 
                 if error_temp != '':
@@ -826,21 +1008,21 @@ class RetrieveNeuron(Operator):
             for entry in errors:
                 print(entry)
                         
-        return {'FINISHED'}                  
+        return {'FINISHED'}
 
 
-    def add_skeleton(self, skeleton_id, neuron_name = '', resampling = 1, import_connectors = True):
+    def add_skeleton(self, skeleton_id, neuron_name = '', resampling = 1, import_connectors = True, truncate_neuron = -1, interpolate_virtual = False):
         
         if neuron_name == '':
             print('Retrieving name of skeleton %s' % str(skeleton_id))
             neuron_name = get_neuronnames([neuron_name])[0]
         
-        error = ''       
+        error = ''
         
         cellname = skeleton_id + ' - ' + neuron_name  
         #truncated neuron name down to 63 letters if necessary
         if len(cellname) >= 60:
-            cellname = cellname[0:56] +'...'
+            cellname = cellname[:56] +'...'
             print('Object name too long - truncated: ', cellname)
         
         object_name = '#' + cellname
@@ -860,7 +1042,7 @@ class RetrieveNeuron(Operator):
                 
         ### Continue only of data retrieved contains 5 entries (if less there was an error while importing)
         if len(node_data) == 3 or len(node_data) == 2:             
-            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors)
+            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, interpolate_virtual)
         else:
             print('No/bad data retrieved')
             print('Data:')
@@ -868,12 +1050,10 @@ class RetrieveNeuron(Operator):
             error = ('Error(s) retrieving data for neuron #%s' % skeleton_id)
             self.count += 1
             
-        return error
-    
+        return error    
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
-    
+        return context.window_manager.invoke_props_dialog(self)    
     
     @classmethod        
     def poll(cls, context):
@@ -891,8 +1071,23 @@ class RetrievePairs(Operator):
     bl_label = "Retrieve paired Neurons of existing Neurons"    
     
     selected_neurons = BoolProperty(name="Of Selected Neurons", default = True)
-    import_connectors = BoolProperty(name="Import Connectors", default = True)
-    resampling = IntProperty(name="Resampling Factor", default = 2, min = 1, max = 20)
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+    truncate_neuron = IntProperty(   name="Truncate Neuron", 
+                                        min=-1,
+                                        max=10,
+                                        default = -1,
+                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                    ) 
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
     
     
     def execute(self, context):  
@@ -960,7 +1155,7 @@ class RetrievePairs(Operator):
         for skid in paired:            
             print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(paired)))
             try:
-                RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors)            
+                RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)            
                 count += 1         
             except:
                 print('Error importing skid %s - wrong annotated skid?' %skid)
@@ -974,7 +1169,66 @@ class RetrievePairs(Operator):
         if connected:
             return True
         else:
-            return False      
+            return False    
+
+         
+
+class RetrieveInVolume(Operator):      
+    """Retrieve Neurons from CATMAID database based on given Volume"""
+    bl_idname = "retrieve.in_volume"  
+    bl_label = "Define Bounding Box (CATMAID Coordinates):"    
+    
+    top = IntProperty(name="Top", default = 21000, min = 1, max = 28128)
+    bot = IntProperty(name="Bottom", default = 26000, min = 1, max = 28128)
+    left = IntProperty(name="Left", default = 14000, min = 1, max = 28128)
+    right = IntProperty(name="Right", default = 18000, min = 1, max = 28128)
+    z1 = IntProperty(name="Z1", default = 39000, min = 6050, max = 248050,
+                        description = "Not Slices!")
+    z2 = IntProperty(name="Z2", default = 40000, min = 6050, max = 248050,
+                        description = "Not Slices!")
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = False,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    truncate_neuron = IntProperty(   name="Truncate Neuron", 
+                                        min=-1,
+                                        max=10,
+                                        default = -1,
+                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                    )
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")                                       
+
+    def execute(self, context):  
+        global remote_instance
+        
+        #Get Neurons in Volume:
+        skid_list = get_neurons_in_volume ( self.left, self.right, self.top, self.bot, self.z1, self.z2, remote_instance )
+
+        neuron_names = get_neuronnames(skid_list)        
+
+        for i,skid in enumerate(skid_list):            
+            print('Retrieving skeleton %s [%i of %i]' % (skid,i,len(skid_list)))
+            RetrieveNeuron.add_skeleton(self,str(skid),neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
+        
+        return{'FINISHED'}                                  
+
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+    
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False                             
     
 
 class RetrieveByAnnotation(Operator):      
@@ -982,9 +1236,26 @@ class RetrieveByAnnotation(Operator):
     bl_idname = "retrieve.by_annotation"  
     bl_label = "Enter Annotation:"    
     
-    annotation = StringProperty(name="Annotation")
-    import_connectors = BoolProperty(name="Import Connectors", default = True)
-    resampling = IntProperty(name="Resampling Factor", default = 2, min = 1, max = 20)
+    annotation = StringProperty(    name="Annotation",
+                                    description = "Enter single annotation. Case-SENSITIVE!"
+                                    )    
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    truncate_neuron = IntProperty(   name="Truncate Neuron", 
+                                        min=-1,
+                                        max=10,
+                                        default = -1,
+                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                    ) 
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
     
     
     def execute(self, context):  
@@ -1021,7 +1292,8 @@ class RetrieveByAnnotation(Operator):
     
     def retrieve_annotated(self, annotation, annotation_id):
         print('Looking for Annotation | %s | (id: %s)' % (annotation,annotation_id))
-        annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
+        #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
+        annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
         remote_annotated_url = remote_instance.get_annotated_url( project_id )
         neuron_list = remote_instance.get_page( remote_annotated_url, annotation_post )
         count = 0        
@@ -1039,7 +1311,7 @@ class RetrieveByAnnotation(Operator):
         for entry in neuron_list['entities']:
             skid = str(entry['skeleton_ids'][0])
             print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(neuron_list['entities'])))
-            RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors)
+            RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
             wm.progress_update(count)
             count += 1
             
@@ -1255,7 +1527,7 @@ def availableObjects(self, context):
         name = obj.name
         available_objects.append((name,name,name))
     available_objects.append(('Synapses','Synapses','Synapses'))
-    return available_objects    
+    return available_objects
 
 
 class ConnectorsToSVG(Operator, ExportHelper):      
@@ -1268,31 +1540,37 @@ class ConnectorsToSVG(Operator, ExportHelper):
      
     all_neurons = BoolProperty(name="Process All", default = True)
     random_colors = BoolProperty(name="Use Random Colors", default = False)
-    mesh_colors = BoolProperty(name="Use Mesh Colors", default = False)
+    mesh_colors = BoolProperty(name="Use Mesh Colors", default = False,
+                                description = "Neurons are exported with their Blender material diffuse color")
     #gray_colors = BoolProperty(name="Use Gray Colors", default = False)
-    merge = BoolProperty(name="Merge into One", default = True)
-    color_by_input = BoolProperty(name="Color by Input", default = True)
-    color_by_strength = BoolProperty(name="Color by Total # Connections", default = False)
-    color_by_connections = StringProperty(name="Color by Connections to:", default = '',
-                                     description="Count connections of neuron to this neuron and color connectors appropriately. Attention: whether up- and or downstream partners are counted is set by [export inputs] and [export outputs]")
+    merge = BoolProperty(name="Merge into One", default = True,
+                        description = "All neurons to process are rendered into the same brain.")
+    color_by_input = BoolProperty(name="Color by Input", default = True,
+                        description = "Postsynapses from the same presynaptic neuron are given the same color.")
+    color_by_strength = BoolProperty(name="Color Presynapses by # of Postsynapses", default = False)
+    color_by_connections = StringProperty(name="Color by Connections to Neuron (Skid)", default = '',
+                                     description="Count connections of neuron to process and given neuron -> colors connectors appropriately. Attention: whether up- and or downstream partners are counted is set by [export inputs] and [export outputs]")
     color_by_density = BoolProperty(name = "Color by Density", 
                                     default = False, 
-                                    description = "Colors Edges between Nodes by # of Nodes of given Object (choose below)")                                    
+                                    description = "Colors Connectors by # of Nodes of given [Object for Density] within [Proximity Threshold]")                                    
     object_for_density = EnumProperty(name = "Object for Density", 
                                       items = availableObjects,
-                                      description = "Choose Object for Coloring Edges by Density")
-    proximity_radius_for_density = FloatProperty(name="Proximity Threshold", 
+                                      description = "Choose Object for Coloring Connetors by Density")
+    proximity_radius_for_density = FloatProperty(name="Proximity Threshold (Blender Units!)", 
                                                  default = 0.25,
-                                                 description = "Maximum allowed distance between Edge and a Node")        
+                                                 description = "Maximum allowed distance between Connector and a Node")        
     export_inputs = BoolProperty(name="Export Inputs", default = True)
     export_outputs = BoolProperty(name="Export Outputs", default = False)
-    scale_outputs = BoolProperty(name="Scale Presynapses", default = False)    
-    basic_radius = FloatProperty(name="Base Node Radius", default = 0.5) 
+    scale_outputs = BoolProperty(name="Scale Presynapses", default = False,
+                                 description = "Size of Presynapses based on number of postsynaptically connected neurons")    
+    basic_radius = FloatProperty(name="Base Radius", default = 0.5) 
     use_arrows = BoolProperty(  name="Use Arrows", 
                                 default = False,
                                 description = "Use Arrows instead of Circles to indicate Incoming/Outgoing Synapses")
-    export_ring_gland = BoolProperty(name="Export Ring Gland", default = False)
-    export_neuron = BoolProperty(name="Include Neuron", default = True)
+    export_ring_gland = BoolProperty(name="Export Ring Gland", default = False,
+                                    description = "Export Outlines of the ring gland in addition to outlines of CNS")
+    export_neuron = BoolProperty(name="Include Neuron", default = True,
+                                    description = "Export neurons skeletons as well")
     filter_connectors = StringProperty(name="Filter Connector:", default = '',
                                      description="Filter Connectors by edges from/to neuron name(s)! (syntax: to exclude start with ! / to set synapse threshold start with > / applies to neuron names / case INsensitive / comma-separated -> ORDER MATTERS! ) ")
     #filter_downstream = StringProperty(name="Filter Outputs:", default = '')
@@ -2563,7 +2841,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             f.write(line_to_write + '\n')
             
         if self.color_by_strength is True and self.merge is True:
-            print('Cannot create Scale for Synaptic Strength if Merged: heterogenous data')
+            print('Cannot create Scale for Synaptic Strength if Merged: heterogenous data. Do not merge data.')
             
         return{'FINISHED'}    
     
@@ -2822,17 +3100,26 @@ class RetrievePartners(Operator):
     bl_options = {'UNDO'}
     
     selected = BoolProperty(name="From Selected Neurons?", default = False)   
-    inputs = BoolProperty(name="Retrieve Upstream Partners?", default = True)          
-    outputs = BoolProperty(name="Retrieve Downstream Partners?", default = True)
+    inputs = BoolProperty(name="Upstream Partners", default = True)          
+    outputs = BoolProperty(name="Downstream Partners", default = True)
     minimum_synapses = IntProperty(name="Synapse Threshold", default = 5)
     over_all_synapses = BoolProperty(name="Apply to total #", default = True,
-                                  description = "If checked, synapse threshold applies to sum of synapses over all processed neurons (Incoming/Outgoing always separate!)")
-    import_connectors = BoolProperty(name="Import Connectors", default = True)   
-    resampling = IntProperty(name="Resampling Factor", default = 2, min = 1, max = 20) 
+                                  description = "If checked, synapse threshold applies to sum of synapses over all processed neurons. Incoming/Outgoing processed separately.")
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")   
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!") 
     filter_by_annotation = StringProperty(name="Filter by Annotation", 
                                           default = '',
-                                          description = 'Casesensitive. Must be exact. Separate multiple tags by comma' )   
+                                          description = 'Case-Sensitive. Must be exact. Separate multiple tags by comma w/o spaces.' )                                             
     #Filter by annotation is case-sensitive and needs to be exact
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
     make_curve = False
 
     def execute(self, context):  
@@ -2950,7 +3237,7 @@ class RetrievePartners(Operator):
                        
             print('Loading above-threshold partner: %s  [%i of %i]' % (neuron_names[skid],i,total_number))
             
-            RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.resampling, self.import_connectors)        
+            RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.resampling, self.import_connectors, self.interpolate_virtual)        
             
             
             
@@ -2963,23 +3250,25 @@ class ColorCreator():
             color_count += 1
              
         colormap = []
-        interval = 2/color_count 
-        runs = int(color_count/2)
+        interval = 2/color_count  
+        runs = int(color_count/2)   
        
-        ### Create first half with high saturation and low brightness; second half with low saturation and high brightness
+        ### Create first half with low brightness; second half with high brightness and slightly shifted hue
         if color_range == 'RGB':
             for i in range(runs):
-                ### High saturation
+                ### High brightness
                 h = interval * i
-                s = 0.5
-                v =  0.7
-                hsv = colorsys.hsv_to_rgb(h,s,v)
-                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))             
-                ### Low saturation
                 s = 1
                 v =  1
                 hsv = colorsys.hsv_to_rgb(h,s,v)
-                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))         
+                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))             
+                
+                ### Lower brightness, but shift hue by half an interval
+                h = interval * (i+0.5)
+                s = 1
+                v =  0.5
+                hsv = colorsys.hsv_to_rgb(h,s,v)
+                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))                       
         elif color_range == 'Grayscale':
             h = 0
             s = 0
@@ -2991,7 +3280,7 @@ class ColorCreator():
 
         print(len(colormap),' random colors created')
 
-        return(colormap)
+        return(colormap)   
     
 
 class ShapeCreator:
@@ -3027,7 +3316,7 @@ class ShapeCreator:
 class CATMAIDtoBlender:
     """Extracts Blender relevant data from data retrieved from CATMAID"""
     
-    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True):
+    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = False, interpolate_virtual = False):
         
         index = 1            
         cellname = skid + ' - ' + neuron_name                
@@ -3036,6 +3325,7 @@ class CATMAIDtoBlender:
         XYZcoords = []
         connections = []
         edges = []
+        soma_node = None
         soma = (0,0,0,0)
         connectors_post = []
         connectors_pre = []
@@ -3045,7 +3335,7 @@ class CATMAIDtoBlender:
         
         #Truncate object name is necessary 
         if len(cellname) >= 60:
-            cellname = cellname[0:56] +'...'
+            cellname = cellname[:56] +'...'
             print('Object name too long - truncated: ', cellname)
         
         object_name = '#' + cellname     
@@ -3080,14 +3370,52 @@ class CATMAIDtoBlender:
             
             ### Search for soma
             if entry[6] > 100:
-                soma = (X,Z,Y,round(entry[6]/10000,2))               
+                soma = (X,Z,Y,round(entry[6]/10000,2))
+                soma_node = entry[0]
                 print('Soma found')
+
+        if interpolate_virtual is True:
+            print('Interpolating Virtual Nodes')
+            list_of_childs,nodes_list = CATMAIDtoBlender.insert_virtual_nodes(list_of_childs,nodes_list)
         
         ### Root node's entry is called 'None' because it has no parent
         ### This will be starting point for creation of the curves
-        root_node = list_of_childs[None][0]        
+        root_node = list_of_childs[None][0]            
+
+        if truncate_neuron >= 0 and soma_node is None:
+            print('Unable to truncate main neurite - no soma found! Neuron skipped!')
+            return {'FINISHED'}
+
         if resampling > 1:            
-            resampled_child_list = CATMAIDtoBlender.resample_child_list(list_of_childs, root_node, resampling)
+            new_child_list = CATMAIDtoBlender.resample_child_list(list_of_childs, root_node, soma_node, resampling)
+        else:
+            new_child_list = list_of_childs                 
+
+        #print('Before Trunc',new_child_list)
+
+        if truncate_neuron >= 0 and soma_node is not None:
+            if soma_node != root_node:
+                print('Soma is not Root - Rerooting...')
+                new_child_list = CATMAIDtoBlender.reroot_child_list(new_child_list, soma_node, nodes_list)
+                print('After Reroot:',len(new_child_list))
+                #print(new_child_list)
+
+            longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
+            if truncate_neuron >0:
+                new_child_list = CATMAIDtoBlender.trunc_neuron(longest_neurite_child_list,soma_node,nodes_list,truncate_neuron)                                            
+            else:
+                new_child_list = longest_neurite_child_list
+            print('Neuron Truncated to',len(new_child_list),'nodes:')    
+            root_node = soma_node           
+            
+
+        #Pop 'None' node, so that it doesn't cause trouble later
+        try:
+            new_child_list.pop(None)        
+        except:
+            pass
+
+        Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling)            
 
         ### Search through connectors and create a list with coordinates
         if import_connectors is True:
@@ -3113,27 +3441,74 @@ class CATMAIDtoBlender:
                     connector_post[connector_id] = (nodes_list[connector[0]], connector_coords)                          
                     #print(connector_post[connector_id])          
     
-            print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))         
+            print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))
         
-        if resampling > 1:
-            Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, resampled_child_list, soma, skid, neuron_name, resampling)
-        else:
-            Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, list_of_childs, soma, skid, neuron_name, resampling)
-            
-        if import_connectors is True:    
             Create_Mesh.make_connectors(cellname, connector_pre, connector_post)
         
         return {'FINISHED'}
+
+    def insert_virtual_nodes(list_of_childs,nodes_list):
+        """
+        Checks z resolution of given neuron -> due to virtual nodes, some neurons have less nodes than others
+        Will run into troubles if virtual_nodes_id (has to be integer) happens to be an already used treenode_id
+        """
+        virtual_nodes_id = 0
+        to_delete = []
+        to_add = []
+        for n in list_of_childs:
+            if n is None:
+                continue
+            for c in list_of_childs[n]:
+                #Get distance to child
+                d = round(math.fabs(nodes_list[c][1] - nodes_list[n][1]),3)
+                #If distance is larger than 50nm
+                if d > 0.005:
+                    intervals = (
+                                    (nodes_list[c][0]-nodes_list[n][0])/round(d/0.005),
+                                    (nodes_list[c][1]-nodes_list[n][1])/round(d/0.005),
+                                    (nodes_list[c][2]-nodes_list[n][2])/round(d/0.005)
+                                )
+
+                    #Mark parent - child connection for deletion                   
+                    to_delete.append((n,c))
+
+                    last_parent = int(n)
+
+                    for i in range(1,round(d/0.005)):                        
+                        nodes_list[virtual_nodes_id] = (
+                                                nodes_list[n][0] + intervals[0] * i,
+                                                nodes_list[n][1] + intervals[1] * i,
+                                                nodes_list[n][2] + intervals[2] * i
+                                                )
+
+                        to_add.append((last_parent,virtual_nodes_id))                       
+
+                        last_parent = virtual_nodes_id
+                        virtual_nodes_id += 1
+                    #Connect last virtual node to child                    
+                    to_add.append((last_parent,int(c)))
+
+        for entry in to_delete:
+            list_of_childs[entry[0]].remove(entry[1])  
+
+        for entry in to_add:
+            if entry[0] not in list_of_childs:
+                list_of_childs[entry[0]] = []
+            list_of_childs[entry[0]].append(entry[1])
+
+
+        return (list_of_childs,nodes_list)  
     
-    def resample_child_list(list_of_childs,root_node,resampling_factor):
+    def resample_child_list( list_of_childs, root_node ,soma_node, resampling_factor ):
         
         print('Resampling Child List (Factor: %i)' % resampling_factor)        
         new_child_list = {}
-        new_child_list[None] = root_node
+        new_child_list[None] = [root_node]
         
         #Collect root node, end nodes and branching points in list: fix_nodes
         fix_nodes = []
         fix_nodes.append(root_node)
+        fix_nodes.append(soma_node)
         for node in list_of_childs:
             if len(list_of_childs[node]) == 0:
                 fix_nodes.append(node)
@@ -3180,7 +3555,192 @@ class CATMAIDtoBlender:
             if len(list_of_childs[new_child]) > 1:
                 not_branching = False 
 
-        return new_child            
+        return new_child    
+
+    def trunc_neuron(list_of_childs, soma_node, nodes_list, maximum_length):
+
+        #if len(list_of_childs) < maximum_length:
+        #    print('Child list already smaller than maximum length!')
+        #    return list_of_childs
+
+        new_child_list = dict()        
+        new_child_list[int(soma_node)] = list(list_of_childs[soma_node])
+        
+        for child in list_of_childs[soma_node]:
+            new_child_list.update( CATMAIDtoBlender.till_next_fork( list_of_childs, int(child) , nodes_list , maximum_length, new_child_list) )
+        
+            #print('Exception:',soma_node ,list_of_childs[soma_node])
+
+        return new_child_list
+
+    def dist(v1,v2):        
+        return math.sqrt(sum(((a-b)**2 for a,b in zip(v1,v2))))
+
+    def till_next_fork(list_of_childs, start_node, nodes_list, maximum_length, new_child_list = {}):
+        this_node = int(start_node)
+        length = 0
+        fork = False
+        end = False
+
+        #filename = 'C:\\Users\schlegel.p\\SkyDrive\\Cloudbox\\Python\\CATMAID-Blender-Plugin\\CATMAIDImport_V3_9.py'
+        #exec(compile(open(filename).read(), filename, 'exec'))
+
+        while length < maximum_length and fork is False and end is False:
+            if this_node not in new_child_list:
+                new_child_list[this_node] = []
+
+            new_child_list[this_node] += list(list_of_childs[this_node])
+
+            if len(list_of_childs[this_node]) > 1:
+                fork = True                
+                for child in list_of_childs[this_node]:                    
+                    #if this_node in list_of_childs[child]:
+                    #    print('ATTENTION! Circular relation:',this_node,child)
+
+                    new_child_list = CATMAIDtoBlender.till_next_fork( list_of_childs, int(child), nodes_list, maximum_length - length , new_child_list)
+            elif len(list_of_childs[this_node]) == 1:
+                length += CATMAIDtoBlender.dist(nodes_list[this_node],nodes_list[list_of_childs[this_node][0]])                
+                this_node = list_of_childs[this_node][0]
+            elif len(list_of_childs[this_node]) == 0:                
+                end = True            
+
+        #Make sure the last node is actually listed as not having childs!
+        if length >= maximum_length:       
+            new_child_list[this_node] = []
+
+        return new_child_list
+
+    def test_integrity(list_of_childs,msg=''):
+        for node in list_of_childs:
+            for child in list_of_childs[node]:
+                if node in list_of_childs[child]:
+                    print(msg,'- Integrity compromised! Circular relation:',node,list_of_childs[node],child,list_of_childs[child])
+                    return 
+        print(msg,'- Integrity passed')
+
+    def reroot_child_list(list_of_childs, new_root, nodes_list):
+        new_child_list = dict({int(new_root):list(list_of_childs[new_root])})
+
+        #print('AAAA',new_child_list, new_root)
+
+        list_of_childs.pop(None)
+
+        #First go downstream of new root node 
+        for child in list_of_childs[new_root]:
+            new_child_list = CATMAIDtoBlender.till_next_fork( list_of_childs, child , nodes_list,  float("inf"), new_child_list )        
+
+        #CATMAIDtoBlender.test_integrity(list_of_childs)        
+             
+
+        #Now go upstream and reroot these nodes:
+        new_child_list = CATMAIDtoBlender.upstream_till_next_fork( list_of_childs, int(new_root), nodes_list, new_child_list ) 
+
+        return new_child_list
+
+
+    def upstream_till_next_fork(list_of_childs, start_node, nodes_list, new_child_list = {}):
+        this_node = int(start_node)
+        i = 0        
+        has_parents = True
+
+        #CATMAIDtoBlender.test_integrity(list_of_childs,'Initial Integrity Test')                                
+
+        while has_parents is True:
+            #First find parent node:
+            #print(this_node)
+            has_parents = False
+            parent_node = None
+            for node in list_of_childs:
+                #print(node,list_of_childs[node], this_node)                
+                if this_node in list_of_childs[node]:
+                    parent_node = int(node) 
+                    has_parents = True
+                    #print('Found parent of',this_node,':',parent_node)
+                    break
+
+            if this_node not in new_child_list:
+                    new_child_list[this_node] = []
+
+            if has_parents is True:
+                #CATMAIDtoBlender.test_integrity(list_of_childs,'1st Pass')
+                #print(new_child_list)                
+
+                new_child_list[this_node].append(parent_node) ##!!!!!!Das hier ist das Arschloch. Hier passiert der Zirkelschluss.
+
+                #CATMAIDtoBlender.test_integrity(list_of_childs,'2nd Pass')   
+
+                if len(list_of_childs[parent_node]) > 1:
+                    #print('Parent forks:',list_of_childs[parent_node])
+                    if parent_node not in new_child_list:
+                        #Add parent node here, in case it is also a root node as this will end the while loop
+                        new_child_list[parent_node] = []                    
+                    for child in list_of_childs[parent_node]:
+                        #Don't go backwards
+                        if child == this_node:
+                            continue
+                        #print('Going down', child)  
+                        #Add childs to parent node    
+                        new_child_list[parent_node].append(int(child))     
+                        #Go downstream all others childs -> at root node this should cover all childs and automatically go down the other way
+                        new_child_list = CATMAIDtoBlender.till_next_fork( list_of_childs, int(child), nodes_list, float("inf"), new_child_list )
+
+                this_node = int(parent_node)
+            else:
+                #print('Found old root node:',this_node,list_of_childs[this_node])
+                pass
+
+        return new_child_list
+
+    def extract_longest_neurite(list_of_childs):
+        #list_of_childs must be without 'None' entry!   
+        try:
+            list_of_childs.pop(None)     
+        except:
+            pass
+
+        print('Searching for longest neurite...')
+
+        end_nodes = []
+
+        for node in list_of_childs:
+            if len(list_of_childs[node]) == 0:
+                end_nodes.append(node)
+
+        max_length = 0
+
+        for i,en in enumerate(end_nodes):
+            #print('checking end node',i,'of',len(end_nodes))
+            length = 0
+            has_parents = True
+            this_node = int(en)
+            child_list_temp = dict({
+                                    int(en):list(list_of_childs[en])
+                                    })
+
+            while has_parents is True:
+                #First find parent node:                
+                has_parents = False
+                parent_node = None
+                for node in list_of_childs:
+                    #print(node,list_of_childs[node], this_node)                
+                    if this_node in list_of_childs[node]:
+                        parent_node = int(node) 
+                        has_parents = True
+                        #print('Found parent of',this_node,':',parent_node)
+                        break                
+
+                if has_parents is True:                  
+                    length += 1                    
+                    child_list_temp[int(parent_node)] = [this_node]
+                    this_node = int(parent_node)                               
+
+            if length > max_length:
+                new_child_list = dict(child_list_temp)
+                max_length = length
+
+        print('Longest arbor found:' , max_length , '(nodes)')
+
+        return new_child_list
 
 
 class ConnectToCATMAID(Operator):      
@@ -3241,8 +3801,10 @@ class ExportAllToSVG(Operator, ExportHelper):
     bl_label = "Export neuron(s) (only curves!) to SVG"
     bl_options = {'PRESET'}
     
-    all_neurons = BoolProperty(name="Process All Neurons", default = False)
-    merge = BoolProperty(name="Merge into One", default = False)
+    all_neurons = BoolProperty(name="Process All Neurons", default = False,
+                                description = "Export all neurons in scene, not just the active neuron.")
+    merge = BoolProperty(name="Merge into One", default = False,
+                        description = "If exporting more than one neuron, render them all on top of each other, not in separate panels.")
     random_colors = BoolProperty(name="Use Random Colors", 
                                  default = False,
                                  description = "Give Exported Neurons a random color (default = black)")
@@ -3270,10 +3832,10 @@ class ExportAllToSVG(Operator, ExportHelper):
                              description = "Use curve's bevel depth. Will be multiplied with base line width."  )       
     export_as_points = BoolProperty(name="Export as Pointcloud", 
                                     default = False,
-                                    description ="Exports neurons as point cloud rather than edges (e.g. DCVs)")
+                                    description ="Exports neurons as point cloud rather than edges (e.g. for dense core vesicles)")
     export_ring_gland = BoolProperty(name="Export Ring Gland", 
                                      default = True,
-                                     description = "Adds Outlines of Ring Gland to SVG") 
+                                     description = "Adds Outlines of Ring Gland to SVG")
     views_to_export = EnumProperty(name="Views to export",
                                    items = (("Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal"),
                                             ("Front/Top/Lateral","Front/Top/Lateral","Front/Top/Lateral"),
@@ -3292,7 +3854,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                                    description="Sets perspective shift along vertical axis",
                                    default = -0.01, max = 2, min = -2)                                    
     add_neuron_name = BoolProperty(name='Include neuron name', 
-                                   description='If checked, neuron name(s) will be included in figure',
+                                   description='If checked, neuron name(s) will be included as figure legend.',
                                    default = True)
 
     
@@ -4235,7 +4797,7 @@ class Create_Mesh (Operator):
 
     def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1):
         ### Creates Neuron from Curve data that was imported from CATMAID
-        start_creation = time.clock()        
+        #start_creation = time.clock()        
         now = datetime.datetime.now()        
         cu = bpy.data.curves.new(neuron_name + ' Mesh','CURVE')
         ob = bpy.data.objects.new('#' + neuron_name,cu)
@@ -4260,7 +4822,7 @@ class Create_Mesh (Operator):
         for child in child_list[root_node]:
             Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu)
 
-        print('Creating mesh done in ' + str(time.clock()-start_creation)+'s')        
+        #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s')        
         Create_Mesh.assign_material (ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
         
         if soma != (0,0,0,0):
@@ -4304,6 +4866,9 @@ class Create_Mesh (Operator):
             active_node = child_list[active_node][0]
             #print('Number of child of node %s: %i' % (active_node, len(child_list[active_node])) )
             number_of_childs = len(child_list[active_node])
+
+        if nodes_created >= 10000:
+            print('Creation aborted prematurely!')
             
             ### If active node is branch point, start new splines for each child    
         if number_of_childs  > 1:
@@ -4559,7 +5124,7 @@ class RandomMaterial (Operator):
         return context.window_manager.invoke_props_dialog(self)  
     
 class ColorByPairs (Operator):
-    """Assigns Random Materials to Neurons"""  
+    """Gives Paired Neurons the same Color (Annotation-based)"""  
     bl_idname = "color.by_pairs"  
     bl_label = "Gives Paired Neurons the same Color (Annotation-based)"  
     bl_options = {'UNDO'}
@@ -4569,11 +5134,11 @@ class ColorByPairs (Operator):
                                             ("Grayscale","Grayscale","Grayscale"),                                            
                                             ),
                                     default =  "RGB",
-                                    description = "Choose mode of randomizing colors")
+                                    description = "Choose mode of randomizing colors.")
     
-    unpaired_black = BoolProperty(  name="Color unpaired Neurons black",                                   
+    unpaired_black = BoolProperty(  name="Don't color unpaired",                                   
                                     default =  True,
-                                    description = "If unchecked, unpaired neurons will be given random color"
+                                    description = "If unchecked, unpaired neurons will be given random color."
                                  )
 
     def execute(self, context):        
@@ -4680,7 +5245,7 @@ class ColorByPairs (Operator):
         
     
 class SetupMaterialsForRender (Operator):
-    """Prepares all Neuron's materials for Render"""  
+    """Prepares all Neuron's materials for Render: Emit Value and Transparency"""  
     bl_idname = "for_render.all_materials"  
     bl_label = "Assign Properties to all Neurons Materials"  
     bl_options = {'UNDO'}
@@ -5100,6 +5665,289 @@ class ColorByAnnotation(Operator):
             return True
         else:
             return False
+
+def availableOptions(self, context):
+    available_options = [('Morphology','Morphology','Morphology')]
+    if connected:
+        available_options.append(('Synapse-Distr.','Synapse-Distr.','Synapse-Distr.'))
+    else:
+        available_options.append(('Connect For More Options','Connect For More Options','Connect For More Options'))
+    return available_options            
+
+class ColorBySimilarity(Operator):
+    """Color neurons by similarity of morphology or synapse distribution"""  
+    bl_idname = "color.by_similarity"  
+    bl_label = "Color neurons by similarity of morphology or synapse distribution" 
+    bl_options = {'UNDO'}
+
+    compare = EnumProperty( name='Compare',
+                            items=availableOptions
+                            )
+    method = EnumProperty( name='Cluster Method (Distance)',
+                            items=[('avg','avg','avg'),('min','min','min'),('max','max','max')],
+                            description = "Define if clusters are merged based on average, minimal or maximal distance between its members."
+                            )
+    cluster_at = FloatProperty (
+                                name='Cluster at similarity of:',
+                                min = 0,
+                                max = 1,
+                                default = 0.2,
+                                description = 'Sets similarity threshold for picking clusters that will have the same color. 1 = perfect match; 0 = not similar at all.'
+                                )
+
+    def execute (self, context):
+        #Get neurons first
+        neurons = []
+        skids = []   
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)
+                    neurons.append(object)                
+                    skids.append(skid)
+                    object['skid'] = skid
+                except:
+                    pass
+
+        print('Collecting data of %i neurons' % len(neurons))
+        if self.compare == 'Morphology':
+            neuron_data = {}
+            neuron_parent_vectors = {}
+            for n in neurons:                
+                neuron_data[n['skid']] = []
+                neuron_parent_vectors[n['skid']] = []
+                for spline in n.data.splines:
+                    for i,point in enumerate(spline.points):
+                        #Skip first node (root node of each spline -> has no parent)
+                        if i == 0:
+                            continue                        
+                        parent_vector = list(map(lambda x,y:(x-y) , point.co, spline.points[i-1].co))                        
+                        normal_parent_vector = list(map(lambda x: x/self.length(parent_vector), parent_vector))
+                        neuron_data[n['skid']].append(point.co)
+                        neuron_parent_vectors[n['skid']].append(normal_parent_vector)
+        elif self.compare == 'Synapse-Distr.':
+            print('Synapse comparison not yet implemented :(')
+            return {'FINISHED'}
+                        
+        print('Done!')
+
+
+        matching_scores = {}
+        for i,neuronA in enumerate(neurons):                
+            print('Comparing neuron', neuronA.name, '[',i,'of',len(neurons),']')
+            #print('Resolution:', self.check_resolution(neuronA))  
+            for neuronB in neurons:
+                if self.compare == 'Morphology':
+                    matching_scores[str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_morphology_matching_score(neuron_data[neuronA['skid']],
+                                                                                                                                    neuron_parent_vectors[neuronA['skid']],
+                                                                                                                                    neuron_data[neuronB['skid']],
+                                                                                                                                    neuron_parent_vectors[neuronB['skid']],
+                                                                                                                                    0.2)
+                                                                                                ,5)
+
+        all_clusters,merges_at = self.create_clusters(skids,matching_scores,self.method)    
+
+        for i in range(len(merges_at)):
+            try:
+                if merges_at[i+1] < self.cluster_at:
+                    clusters_to_plot = all_clusters[i]
+                    break
+            except:
+                print('Morphology - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.cluster_at,merges_at[i]))
+                print( all_clusters[i])
+                clusters_to_plot = all_clusters[i]                   
+
+        colors = ColorCreator.random_colors(len(clusters_to_plot),'RGB')
+
+        colormap = {}
+        for c in clusters_to_plot:                      
+            for skid in c:                                
+                colormap[skid] = colors[0]
+            colors.pop(0)
+
+        for n in neurons:
+            skid = re.search('#(.*?) -',n.name).group(1)
+            n.active_material.diffuse_color[0] = colormap[skid][0]/255
+            n.active_material.diffuse_color[1] = colormap[skid][1]/255
+            n.active_material.diffuse_color[2] = colormap[skid][2]/255
+        #for entry in matching_scores:
+        #    print(entry,'\t',matching_scores[entry])
+                
+        return{'FINISHED'}
+
+
+    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB,sigma=50): 
+
+        #nodes_list = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
+
+        #Sigma defines how close two points have to be to be considered similar (in nanometers)
+        #Kohl et al. -> 3000nm (light microscopy + registration)    
+
+        all_values = []
+
+        nA = np.array(nodeDataA)     
+        nB = np.array(nodeDataB)
+
+        for i,a in enumerate(nA):
+            #Generate distance Matrix of point a and all points in nB
+            d = np.sum((nB-a)**2,axis=1)
+
+            #Calculate final distance by taking the sqrt!
+            min_dist = math.sqrt(d[d.argmin()])
+
+            normal_parent_vectorB = parentVectorsB[d.argmin()] 
+            normal_parent_vectorA = parentVectorsA[i]
+
+            dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
+
+            this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * sigma**2))            
+
+            all_values.append(this_treenode_value)  
+
+        
+        return (sum(all_values)/len(all_values))  
+
+    def closest_node(node,nodes):
+        nodes = numpy.asarray(nodes)
+        dist = numpy.sum((nodes - node)**2, axis = 1)
+        return np.argmin(dist_2)    
+
+    def dotproduct(self,v1, v2):
+        return sum((a*b) for a, b in zip(v1, v2))
+
+    def length(self,v):
+        return math.sqrt(self.dotproduct(v, v))  
+
+    def dist(self,v1,v2):        
+        return math.sqrt(sum(((a-b)**2 for a,b in zip(v1,v2))))   
+
+    def manhattan_dist(self,v1,v2):
+        return sum(((a-b) for a,b in zip(v1,v2)))
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)  
+
+    def check_resolution(self,neuron):
+        """
+       Checks z resolution of given neuron -> due to virtual nodes, some neurons have less nodes than others
+        """
+
+        distances = []
+        for spline in neuron.data.splines:
+            for i,point in enumerate(spline.points):
+                #Skip first node (root node of each spline -> has no parent)
+                if i == 0:
+                    continue  
+                #Virtual nodes basically skip z-sections, so points are more than 50nm (0.005 in CATMAID coords)) apart in z-direction (y-direction in Blender)
+                dist = math.fabs(point.co[1] - spline.points[i-1].co[1])
+                if dist > 0:
+                    distances.append(dist)
+
+        return round(sum(distances)/len(distances),3)
+
+    def create_clusters(self,skids,matching_scores,method):
+        similarity = 1
+        step_size = 0.01
+
+        clusters = list(map(lambda x:[x], skids))   
+        all_clusters = [copy.deepcopy(clusters)]
+        merges_at = [1] 
+
+        print('Start clusters:',clusters)
+
+        while similarity >= 0:
+            #Find cluster that will be merged in this round
+            #merge contains indices of c in clusters
+            merge = {}
+            for c1 in clusters:
+                for c2 in clusters:
+                    #if clusters are identical
+                    if c1 == c2:
+                        continue
+                    all_similarities = []
+                    for neuronA in c1:              
+                        #if c1 has already been merged to c2 in previous iteration
+                        #if clusters.index(c2) in merge:
+                        #   if clusters.index(c1) in merge[clusters.index(c2)]:
+                                #print('!Skipped redundant merging:',c1,c2)
+                        #       continue
+                        #merged = False
+                        for neuronB in c2:
+                            #if merged is True:
+                            #   continue
+                            #Calculate average from both comparisons: A -> B and B -> A (will be different!!!!)
+                            avg_matching_score = (matching_scores[str(neuronA)+'-'+str(neuronB)] + matching_scores[str(neuronB)+'-'+str(neuronA)]) / 2
+                            all_similarities.append(avg_matching_score)                     
+
+
+                    #Important: for method 'max' (maximal distance), find pair of neurons for which the similarity is minimal 
+                    #           for method 'min' (minimal distance), find pair of neurons for which the similarity is maximal
+                    if ((    method == 'avg' and (sum(all_similarities)/len(all_similarities)) >= similarity ) 
+                        or ( method == 'max' and min(all_similarities) >= similarity )  
+                        or ( method == 'min' and max(all_similarities) >= similarity )): 
+                        if clusters.index(c1) not in merge:
+                            merge[clusters.index(c1)] = []
+                        if clusters.index(c2) not in merge[clusters.index(c1)]:
+                            merge[clusters.index(c1)].append(clusters.index(c2))
+                            #merged = True
+
+            if len(merge) != 0:
+                #Check if multiple clusters need to be merged:
+                print('Merge:',merge)
+                temp_to_be_merged = []
+                for c1 in merge:
+                    #print('C1:',c1)
+                    exists = []
+                    for c2 in merge[c1]:                                        
+                        for entry in temp_to_be_merged:
+                            if c1 in entry or c2 in entry:
+                                if temp_to_be_merged.index(entry) not in exists:
+                                    exists.append(temp_to_be_merged.index(entry))
+
+                    #print('Exists:', exists)
+
+                    if len(exists) > 0:
+                        temp_to_be_merged[exists[0]].append(c1)
+                        temp_to_be_merged[exists[0]] += merge[c1]
+                        for entry in exists[1:]:
+                            temp_to_be_merged[exists[0]] += temp_to_be_merged[entry]
+                            temp_to_be_merged.remove(temp_to_be_merged[entry])
+                    else:
+                        to_append = [c1]
+                        to_append += merge[c1]
+                        temp_to_be_merged.append(to_append)                 
+
+                #Make sure each cluster shows up only once in to_be_merged:
+                to_be_merged = []
+                for entry in temp_to_be_merged:
+                    to_be_merged.append(list(set(entry)))
+
+                #print('Merging at similarity', similarity,':',to_be_merged,merge)
+
+                temp_clusters = copy.deepcopy(clusters)
+
+                #First merge clusters
+                for entry in to_be_merged:  
+                    for c in entry[1:]:
+                        temp_clusters[entry[0]] += copy.deepcopy(clusters[c])
+
+                #Then delete 
+                for entry in to_be_merged:                                          
+                    for c in entry[1:]:
+                        temp_clusters.remove(clusters[c])       
+
+                clusters = copy.deepcopy(temp_clusters)
+                all_clusters.append(copy.deepcopy(temp_clusters))
+                merges_at.append(similarity)
+                
+
+                print(temp_clusters,'\n')
+
+            similarity -= step_size
+
+        return all_clusters,merges_at
+
+
     
 
 class ColorBySpatialDistribution(Operator):
