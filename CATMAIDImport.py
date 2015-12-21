@@ -247,7 +247,7 @@ project_id = 1
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (4, 0, 0),
+ "version": (4, 1, 0),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
