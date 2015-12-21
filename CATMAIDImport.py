@@ -19,6 +19,12 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.1 21/12/2015:
+    - added Token System to replace catmaid user+pw 
+
+### V4.01 17/11/2015:
+    - had to change get_connectivity_url due to changes in CATMAID API to skeletons/connectivity and postdata to source_skeleton_ids
+
 ### V4.0 10/11/2015:
     - added import of neurons in given volume
     - added clustering (coloring) of neurons based on morphological similarity (after Kohl et al., 2013)
@@ -209,6 +215,7 @@ import copy
 import http.cookiejar as cj
 import mathutils
 import numpy as np
+import base64
 
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
@@ -220,19 +227,16 @@ from bpy.props import FloatVectorProperty, FloatProperty, StringProperty, BoolPr
 pw_file = 'c:\\Program Files\\Blender Foundation\\Blender\\2.68\\scripts\\addons\\PW.txt'
 
 try:
-    with open(pw_file,'r') as f:
-        catmaid_user = f.readline()[:-1] #remove \n from readline
+    with open(pw_file,'r') as f:        
         http_user = f.readline()[:-1]
-        catmaid_pw = f.readline()[:-1]
-        http_pw = f.readline()  #no new line after this one
+        http_pw = f.readline()[:-1]
+        token = f.readline()  #no new line after this one
     f.close()
 except:    
     print("No File containing credentials found! You will have to enter them by hand :(")
-    catmaid_user = ''
     http_user = ''
-
-    catmaid_pw = ''
-    http_pw = ''    
+    http_pw = ''
+    token = ''
 ###
 
 remote_instance = None
@@ -426,117 +430,131 @@ class CatmaidInstance:
     """ A class giving access to a CATMAID instance.
     """
 
-    def __init__(self, srv, catmaid_usr, catmaid_pwd,
-            http_usr=None, http_pwd=None):
-        # Store server and user information
-        self.server = srv
-        self.user = catmaid_usr
-        self.password = catmaid_pwd
-        # Cookie storage
-        self.cookies = cj.CookieJar()
-        # Handlers
-        handlers = []
-        # Add redirect handler
-        handlers.append( urllib.request.HTTPRedirectHandler() )
-        # Add cookie handler
-        handlers.append( urllib.request.HTTPCookieProcessor( self.cookies ) )
-        # Add HTTP authentification if needed
-        if http_usr and http_pwd:
-            authinfo = urllib.request.HTTPPasswordMgrWithDefaultRealm()
-            authinfo.add_password(None, srv, http_usr, http_pwd)
-            auth_handler = urllib.request.HTTPBasicAuthHandler(authinfo)
-            # Add authentication handler
-            handlers.append( auth_handler )
-        # Create final opener
-        self.opener = urllib.request.build_opener( *handlers )
-        
+    def __init__(self, server, authname, authpassword, authtoken):
+        self.server = server
+        self.authname = authname
+        self.authpassword = authpassword
+        self.authtoken = authtoken
+        self.opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())    
 
-    def mkurl(self, path):
+    def djangourl(self, path):
+        """ Expects the path to lead with a slash '/'. """
         return self.server + path
-    
 
-    def login(self):
-        url = self.mkurl("/accounts/login")
-        opts = {
-            'name': self.user,
-            'pwd': self.password
-        }
+    def auth(self, request):
+        if self.authname:
+            base64string = base64.encodestring(('%s:%s' % (self.authname, self.authpassword)).encode()).decode().replace('\n', '')
+            request.add_header("Authorization", "Basic %s" % base64string)
+        if self.authtoken:
+            request.add_header("X-Authorization", "Token {}".format(self.authtoken))
 
-        data = urllib.parse.urlencode(opts)
-        data = data.encode('utf-8')
-        request = urllib.request.Request(url, data)
-        response = self.opener.open(request)
-        self.cookies.extract_cookies(response, request)
-
-        return response.read()
-    
-
-    #Retrieves url from Server    
-    def get_page(self, url, data=None):
-        if data:
-            data = urllib.parse.urlencode(data)
+    def fetch(self, url, post=None):
+        """ Requires the url to connect to and the variables for POST, if any, in a dictionary. """
+        if post:
+            data = urllib.parse.urlencode(post)
             data = data.encode('utf-8')
-            request = urllib.request.Request(url, data)
+            request = urllib.request.Request(url, data = data)
         else:
             request = urllib.request.Request(url)
 
+        self.auth(request)
+
         response = self.opener.open(request)
 
-        #Decode into array format
-        return json.loads(response.read().decode("utf-8"))  #may have to adapt this depending on url requested
+        return json.loads(response.read().decode("utf-8"))
+    
 
     #Use to parse url for retrieving stack infos
     def get_stack_info_url(self, pid, sid):
-        return self.mkurl("/" + str(pid) + "/stack/" + str(sid) + "/info")
+        return self.djangourl("/" + str(pid) + "/stack/" + str(sid) + "/info")
 
     #Use to parse url for retrieving skeleton nodes (no info on parents or synapses, does need post data)
     def get_skeleton_nodes_url(self, pid):
-        return self.mkurl("/" + str(pid) + "/treenode/table/list")
+        return self.djangourl("/" + str(pid) + "/treenode/table/list")
 
     #ATTENTION: this url doesn't work properly anymore as of 07/07/14
     #use compact-skeleton instead
     #Used to parse url for retrieving all info the 3D viewer gets (does NOT need post data)
-    #Format: name, nodes, tags, connectors, reviews 
+    #Format: name, nodes, tags, connectors, reviews
     def get_skeleton_for_3d_viewer_url(self, pid, skid):
-        return self.mkurl("/" + str(pid) + "/skeleton/" + str(skid) + "/compact-json")
+        return self.djangourl("/" + str(pid) + "/skeleton/" + str(skid) + "/compact-json")
     
     #Use to parse url for retrieving connectivity (does need post data)
     def get_connectivity_url(self, pid):
-        return self.mkurl("/" + str(pid) + "/skeleton/connectivity" )
+        return self.djangourl("/" + str(pid) + "/skeletons/connectivity" )
     
     #Use to parse url for retrieving info connectors (does need post data)
     def get_connectors_url(self, pid):
-        return self.mkurl("/" + str(pid) + "/connector/skeletons" )
-    
-    #Use to parse url for retrieving annotated neurons (does need post data)
-    def get_annotated_url(self, pid):
-        #return self.mkurl("/" + str(pid) + "/neuron/query-by-annotations" )
-        return self.mkurl("/" + str(pid) + "/annotations/query-targets" )
-    
-    #Use to parse url for retrieving list of all annotations (and their IDs) (does NOT need post data)
-    def get_annotation_list(self, pid):
-        return self.mkurl("/" + str(pid) + "/annotations/" )
-    
+        return self.djangourl("/" + str(pid) + "/connector/skeletons" )
+
+    #Use to parse url for names for a list of skeleton ids (does need post data: pid, skid)    
+    def get_neuronnames(self, pid):
+        return self.djangourl("/" + str(pid) + "/skeleton/neuronnames" )
+
+    #Get user list for project
+    def get_user_list(self):
+        return self.djangourl("/user-list" )
+
+    #Use to parse url for a SINGLE neuron (will also give you neuronid)   
+    def get_single_neuronname(self, pid, skid):
+        return self.djangourl("/" + str(pid) + "/skeleton/" + str(skid) + "/neuronname" )    
+
+    #Use to get skeletons review status
+    def get_review_status(self, pid):
+        return self.djangourl("/" + str(pid) + "/skeleton/review-status" )
+
+    #Use to get annotations for given neuron. DOES need skid as postdata
+    def get_neuron_annotations(self, pid):
+        return self.djangourl("/" + str(pid) + "/annotations/table-list" )    
+
+    """
+    ATTENTION!!!!: This does not seem to work anymore as of 20/10/2015 -> although it still exists in CATMAID code
+    use get_annotations_for_skid_list2
+    """
     #Use to get annotations for given neuron. DOES need skid as postdata
     def get_annotations_for_skid_list(self, pid):
-        return self.mkurl("/" + str(pid) + "/skeleton/annotationlist" )     
-    
-    #Use to parse url for retrieving ancestry (e.g. name) of an id (does need post data: pid, skid)
-    def get_ancestry(self, pid):
-        return self.mkurl("/" + str(pid) + "/skeleton/ancestry" )
-    
-    #Use to parse url for names for a list of skeleton ids (does need post data: pid, skid)
-    def get_neuronnames(self, pid):
-        return self.mkurl("/" + str(pid) + "/skeleton/neuronnames" )   
+        return self.djangourl("/" + str(pid) + "/annotations/skeletons/list" )   
+    """
+    !!!!
+    """ 
+
+    #Use to get annotations for given neuron. DOES need skid as postdata
+    def get_annotations_for_skid_list2(self, pid):
+        return self.djangourl("/" + str(pid) + "/skeleton/annotationlist" )    
+
+    #Use to parse url for retrieving list of all annotations (and their IDs!!!) (does NOT need post data)
+    def get_annotation_list(self, pid):        
+        return self.djangourl("/" + str(pid) + "/annotations/" )
+
+    #Use to parse url for retrieving contributor statistics for given skeleton (does NOT need post data)
+    def get_contributions_url(self, pid, skid):
+       return self.djangourl("/" + str(pid) + "/skeleton/" + str(skid) + "/contributor_statistics" )     
+
+    #Use to parse url for retrieving annotated neurons (does need post data)
+    def get_annotated_url(self, pid):
+        #return self.djangourl("/" + str(pid) + "/neuron/query-by-annotations" )
+        return self.djangourl("/" + str(pid) + "/annotations/query-targets" )
 
     #Use to parse url for retrieving list of nodes (needs post data)
     def get_node_list(self, pid):
-        return self.mkurl("/" + str(pid) + "/node/list" )        
-    
+        return self.djangourl("/" + str(pid) + "/node/list" )
+
     #Use to parse url for retrieving all info the 3D viewer gets (does NOT need post data)
     #Returns, in JSON, [[nodes], [connectors], [tags]], with connectors and tags being empty when 0 == with_connectors and 0 == with_tags, respectively
     def get_compact_skeleton_url(self, pid, skid, connector_flag = 1, tag_flag = 1):        
-        return self.mkurl("/" + str(pid) + "/" + str(skid) + "/" + str(connector_flag) + "/" + str(tag_flag) + "/compact-skeleton") 
+        return self.djangourl("/" + str(pid) + "/" + str(skid) + "/" + str(connector_flag) + "/" + str(tag_flag) + "/compact-skeleton")
+
+    #The difference between this function and the compact_skeleton function is that
+    #the connectors contain the whole chain from the skeleton of interest to the
+    #partner skeleton: contains [treenode_id, confidence_to_connector, connector_id, confidence_from_connector, connected_treenode_id, connected_skeleton_id, relation1, relation2]
+    #relation1 = 1 means presynaptic (this neuron is upstream), 0 means postsynaptic (this neuron is downstream)
+    def get_compact_arbor_url(self, pid, skid, nodes_flag = 1, connector_flag = 1, tag_flag = 1):        
+        return self.djangourl("/" + str(pid) + "/" + str(skid) + "/" + str(nodes_flag) + "/" + str(connector_flag) + "/" + str(tag_flag) + "/compact-arbor")    
+
+    #Use to parse url for retrieving edges between given skeleton ids (does need postdata)
+    #Returns list of edges: [source_skid, target_skid, weight]
+    def get_edges_url(self, pid):
+        return self.djangourl("/" + str(pid) + "/skeletongroup/skeletonlist_confidence_compartment_subgraph" )
     
     
 def get_annotations_from_list (skid_list, remote_instance):
@@ -553,7 +571,7 @@ def get_annotations_from_list (skid_list, remote_instance):
 
     print('Asking for %i skeletons annotations (Project ID: %i)' % (len(get_annotations_postdata),project_id), end = ' ')   
 
-    annotation_list_temp = remote_instance.get_page( remote_get_annotations_url , get_annotations_postdata )
+    annotation_list_temp = remote_instance.fetch( remote_get_annotations_url , get_annotations_postdata )
     
     print(annotation_list_temp)
     
@@ -571,6 +589,38 @@ def get_annotations_from_list (skid_list, remote_instance):
    
     return(annotation_list)
 
+def retrieve_connectivity (skids, remote_instance, threshold = 1):
+    """
+    ATTENTION! Threshold doesn't seem to be working
+    """
+
+    remote_connectivity_url = remote_instance.get_connectivity_url( 1 )
+
+    connectivity_post = {}
+    #connectivity_post['threshold'] = threshold
+    connectivity_post['boolean_op'] = 'OR'
+    i = 0
+    for skid in skids:
+        tag = 'source_skeleton_ids[%i]' %i
+        connectivity_post[tag] = skid
+        i +=1
+    print('Retrieving... Postdata:')
+    print(connectivity_post)
+
+    connectivity_data = remote_instance.fetch( remote_connectivity_url , connectivity_post )
+
+    #As of 08/2015, # of synapses is returned as list of nodes with 0-5 confidence: {'skid': [0,1,2,3,4,5]}
+    #This is being collapsed into a single value before returning it:
+
+    #print('Connectivity_data:', connectivity_data)
+
+    for direction in ['incoming','outgoing']:
+        for entry in connectivity_data[direction]:
+            for skid in connectivity_data[direction][entry]['skids']:
+                connectivity_data[direction][entry]['skids'][skid] = sum(connectivity_data[direction][entry]['skids'][skid])
+        
+    return(connectivity_data)
+
 def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=True):
 
     #By seperating up and downstream retrieval we make sure that we don't go back in the second hop
@@ -587,16 +637,16 @@ def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=Tru
     for hop in range(hops):  
         upstream_partners_temp = {}
         connectivity_post = {}
-        connectivity_post['threshold'] = 1
-        connectivity_post['boolean_op'] = 'logic_OR' 
+        #connectivity_post['threshold'] = 1
+        connectivity_post['boolean_op'] = 'OR' 
         if upstream is True:        
             for i in range(len(skids_upstream_to_retrieve)):
-                tag = 'source[%i]' % i
+                tag = 'source_skeleton_ids[%i]' % i
                 connectivity_post[tag] = skids_upstream_to_retrieve[i]
                 
             print( "Retrieving Upstream Partners for %i neurons [%i. hop]..." % (len(skids_upstream_to_retrieve),hop+1))
             connectivity_data = []
-            connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post ) 
+            connectivity_data = remote_instance.fetch( remote_connectivity_url , connectivity_post ) 
             print("Done.")
             
             #print(connectivity_data)  
@@ -624,16 +674,16 @@ def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=Tru
         
         connectivity_post = {}     
         connectivity_post['threshold'] = 1
-        connectivity_post['boolean_op'] = 'logic_OR'         
+        connectivity_post['boolean_op'] = 'OR'         
         downstream_partners_temp = {}
         if downstream is True:        
             for i in range(len(skids_downstream_to_retrieve)):
-                tag = 'source[%i]' % i
+                tag = 'source_skeleton_ids[%i]' % i
                 connectivity_post[tag] = skids_downstream_to_retrieve[i]
         
             print( "Retrieving Downstream Partners for %i neurons [%i. hop]..." % (len(skids_downstream_to_retrieve),hop+1))
             connectivity_data = []
-            connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )   
+            connectivity_data = remote_instance.fetch( remote_connectivity_url , connectivity_post )   
             print("Done!")
         
             new_skids_downstream_to_retrieve = []
@@ -680,7 +730,7 @@ def get_neuronnames(skids):
             print('Skipped illegal skid in retrieving neuron names: ', skid)
 
     ### Retrieve neuron names: {'skid': 'neuron_name' , ... }
-    neuron_names = remote_instance.get_page( remote_get_names , get_names_postdata )
+    neuron_names = remote_instance.fetch( remote_get_names , get_names_postdata )
     
     return(neuron_names)
 
@@ -722,7 +772,7 @@ def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
                                     'labels': False
                                 }
 
-        node_list = remote_instance.get_page( remote_nodes_list , node_list_postdata )
+        node_list = remote_instance.fetch( remote_nodes_list , node_list_postdata )
 
         
 
@@ -838,7 +888,7 @@ class TestHttpRequest(Operator):
         
         #get_names_postdata = {'pid' : 1 ,'skids[0]': '10418394', 'skids[1]': '4453485'}
 
-        names = remote_instance.get_page( remote_get_names , get_names_postdata )
+        names = remote_instance.fetch( remote_get_names , get_names_postdata )
         
         print(names)
         
@@ -861,11 +911,19 @@ class UpdateNeurons(Operator):
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = True,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
-    truncate_neuron = IntProperty(   name="Truncate Neuron", 
-                                        min=-1,
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
                                         max=10,
-                                        default = -1,
-                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
                                     ) 
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
@@ -923,9 +981,9 @@ class UpdateNeurons(Operator):
             print('Updating Neuron %s' % neuron)
             if self.keep_resampling is True:       
                 resampling = neurons_to_reload[neuron]['resampling']     
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual) 
+                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual) 
             else:
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.new_resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual) 
+                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.new_resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual) 
         
         return{'FINISHED'} 
     
@@ -958,12 +1016,20 @@ class RetrieveNeuron(Operator):
                              min = 1, 
                              max = 20,
                              description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
-    truncate_neuron = IntProperty(   name="Truncate Neuron", 
-                                        min=-1,
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
                                         max=10,
-                                        default = -1,
-                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
-                                    ) 
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
+                                    )  
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
@@ -993,7 +1059,7 @@ class RetrieveNeuron(Operator):
         
             else:
                 print( "Retrieving Treenodes for %s [%i of %i]" % (skid,self.count,len(skeletons_to_retrieve)))
-                error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
+                error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
                 self.count += 1
                 
                 if error_temp != '':
@@ -1011,7 +1077,7 @@ class RetrieveNeuron(Operator):
         return {'FINISHED'}
 
 
-    def add_skeleton(self, skeleton_id, neuron_name = '', resampling = 1, import_connectors = True, truncate_neuron = -1, interpolate_virtual = False):
+    def add_skeleton(self, skeleton_id, neuron_name = '', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1,  interpolate_virtual = False):
         
         if neuron_name == '':
             print('Retrieving name of skeleton %s' % str(skeleton_id))
@@ -1036,13 +1102,13 @@ class RetrieveNeuron(Operator):
         else:
             remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id ,0,0)            
         node_data = []
-        node_data = remote_instance.get_page( remote_get_compact_skeleton_url )
+        node_data = remote_instance.fetch( remote_get_compact_skeleton_url )
 
         print("%i entries for neuron %s retrieved" % (len(node_data),skeleton_id) )
                 
         ### Continue only of data retrieved contains 5 entries (if less there was an error while importing)
         if len(node_data) == 3 or len(node_data) == 2:             
-            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, interpolate_virtual)
+            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, truncate_value, interpolate_virtual)
         else:
             print('No/bad data retrieved')
             print('Data:')
@@ -1079,11 +1145,19 @@ class RetrievePairs(Operator):
                              min = 1, 
                              max = 20,
                              description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
-    truncate_neuron = IntProperty(   name="Truncate Neuron", 
-                                        min=-1,
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
                                         max=10,
-                                        default = -1,
-                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
                                     ) 
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
@@ -1194,12 +1268,20 @@ class RetrieveInVolume(Operator):
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = False,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
-    truncate_neuron = IntProperty(   name="Truncate Neuron", 
-                                        min=-1,
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
                                         max=10,
-                                        default = -1,
-                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
-                                    )
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
+                                    ) 
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")                                       
@@ -1247,12 +1329,21 @@ class RetrieveByAnnotation(Operator):
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = True,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
-    truncate_neuron = IntProperty(   name="Truncate Neuron", 
-                                        min=-1,
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
                                         max=10,
-                                        default = -1,
-                                        description = "< 0 don't truncate, 0 = only main neurite, >0 only main neurite up to given length. Requires soma to be defined by a radius larger than -1!"
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
                                     ) 
+    
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
@@ -1276,7 +1367,7 @@ class RetrieveByAnnotation(Operator):
         print('Retrieving list of Annotations...')
         
         remote_annotation_list_url = remote_instance.get_annotation_list( project_id )
-        list = remote_instance.get_page( remote_annotation_list_url )
+        list = remote_instance.fetch( remote_annotation_list_url )
         
         for dict in list['annotations']:
             #print(dict['name'])
@@ -1295,7 +1386,7 @@ class RetrieveByAnnotation(Operator):
         #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
         annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
         remote_annotated_url = remote_instance.get_annotated_url( project_id )
-        neuron_list = remote_instance.get_page( remote_annotated_url, annotation_post )
+        neuron_list = remote_instance.fetch( remote_annotated_url, annotation_post )
         count = 0        
         
         wm = bpy.context.window_manager
@@ -1311,7 +1402,7 @@ class RetrieveByAnnotation(Operator):
         for entry in neuron_list['entities']:
             skid = str(entry['skeleton_ids'][0])
             print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(neuron_list['entities'])))
-            RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
+            RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
             wm.progress_update(count)
             count += 1
             
@@ -1399,7 +1490,7 @@ class RetrieveConnectors(Operator):
         ### Retrieve compact json data and filter connector ids
         print('Retrieving connector data for skid %s...' % active_skeleton)
         remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
-        node_data = remote_instance.get_page( remote_compact_skeleton_url )
+        node_data = remote_instance.fetch( remote_compact_skeleton_url )
 
         if node_data:
             print('Success!')            
@@ -1445,14 +1536,14 @@ class RetrieveConnectors(Operator):
         if self.get_outputs is True:
             print( "Retrieving Postsynaptic Targets..." )
             ### Get connector data for all presynapses to determine number of postsynaptic targets and filter
-            connector_data_post = remote_instance.get_page( remote_connector_url , connector_post_postdata )
+            connector_data_post = remote_instance.fetch( remote_connector_url , connector_post_postdata )
         else:
             connector_data_post = []        
         
         if self.get_inputs is True:
             print( "Retrieving Presynaptic Targets..." )
             ### Get connector data for all presynapses to filter later           
-            connector_data_pre = remote_instance.get_page( remote_connector_url , connector_pre_postdata ) 
+            connector_data_pre = remote_instance.fetch( remote_connector_url , connector_pre_postdata ) 
         else:
             connector_data_pre = []  
         
@@ -1683,7 +1774,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         print('Retrieving connector data for skid %s...' % active_skeleton)
         remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
 
-        node_data = remote_instance.get_page( remote_compact_skeleton_url )
+        node_data = remote_instance.fetch( remote_compact_skeleton_url )
 
         if node_data:
             print('Success!')
@@ -1747,14 +1838,14 @@ class ConnectorsToSVG(Operator, ExportHelper):
     
         if self.export_outputs is True:        
             print( "Retrieving Target Connectors..." )        
-            connector_data_post = remote_instance.get_page( remote_connector_url , connector_postdata_postsynapses )
+            connector_data_post = remote_instance.fetch( remote_connector_url , connector_postdata_postsynapses )
             #print(connector_data_post)
         else:
             connector_data_post = []
 
         if self.export_inputs is True:    
             print( "Retrieving Source Connectors..." )
-            connector_data_pre = remote_instance.get_page( remote_connector_url , connector_postdata_presynapses )
+            connector_data_pre = remote_instance.fetch( remote_connector_url , connector_postdata_presynapses )
             #print(connector_data_pre)
         else:
             connector_data_pre = []
@@ -2905,16 +2996,16 @@ class ConnectorsToSVG(Operator, ExportHelper):
         
         remote_connectivity_url = remote_instance.get_connectivity_url( project_id )  
         connectivity_post = {}
-        connectivity_post['threshold'] = 1
-        connectivity_post['boolean_op'] = 'logic_OR'                
+        #connectivity_post['threshold'] = 1
+        connectivity_post['boolean_op'] = 'OR'                
         for i in range(len(neurons)):
-            tag = 'source[%i]' % i
+            tag = 'source_skeleton_ids[%i]' % i
             connectivity_post[tag] = neurons[i]
             connection_count[neurons[i]] = 0
                 
         print( "Retrieving Partners for %i neurons..." % len(neurons))
         connectivity_data = []
-        connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post ) 
+        connectivity_data = remote_instance.fetch( remote_connectivity_url , connectivity_post ) 
         print("Done.")      
         
         #Retrieve neuron names for filtering
@@ -3115,7 +3206,23 @@ class RetrievePartners(Operator):
                              description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!") 
     filter_by_annotation = StringProperty(name="Filter by Annotation", 
                                           default = '',
-                                          description = 'Case-Sensitive. Must be exact. Separate multiple tags by comma w/o spaces.' )                                             
+                                          description = 'Case-Sensitive. Must be exact. Separate multiple tags by comma w/o spaces.' )      
+    
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=0,
+                                        max=10,
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
+                                    ) 
+
     #Filter by annotation is case-sensitive and needs to be exact
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
@@ -3125,39 +3232,36 @@ class RetrievePartners(Operator):
     def execute(self, context):  
         global remote_instance
         
-        if self.selected is True and len(bpy.context.selected_objects) != 0:
-            count = 0
+        if self.selected is True and len(bpy.context.selected_objects) != 0:            
             to_process = []
             print('Loading partners for all selected neurons...')            
             for object in bpy.context.selected_objects:
                 if object.name.startswith('#'):
                     to_process.append(object)   
-            for neuron in to_process: 
-                print('Retrieving partners for %s [%i of %i]...' % (neuron.name,count,len(to_process)))
-                skid = re.search('#(.*?) -',neuron.name).group(1)
-                self.get_partners(skid)
-                count += 1
+             
+            print('Retrieving partners for %i neurons...' % len(to_process))
+            skids = []
+            for n in to_process:
+                skids.append(re.search('#(.*?) -',n.name).group(1))
+            self.get_partners(skids)            
         elif bpy.context.active_object is None:
             print ('No Object Active')        
         elif '#' not in bpy.context.active_object.name:
             print ('Active Object not a Neuron')
         elif self.selected is False:
             active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-            self.get_partners(active_skeleton)
+            self.get_partners([active_skeleton])
         
                         
         return {'FINISHED'}  
     
-    def get_partners(self, skid):
-        connectivity_post = { 'source[0]': skid, 'threshold': 0 , 'boolean_op': 'logic_OR' }             
-        remote_connectivity_url = remote_instance.get_connectivity_url( project_id )
+    def get_partners(self, skids):        
         print( "Retrieving Partners..." )
-        connectivity_data = []
-        connectivity_data = remote_instance.get_page( remote_connectivity_url , connectivity_post )
+        connectivity_data = retrieve_connectivity (skids, remote_instance)
 
         if connectivity_data:
             print("Connectivity successfully retrieved")
-            self.extract_partners(skid, connectivity_data, self.inputs, self.outputs, self.make_curve)
+            self.extract_partners(connectivity_data, self.inputs, self.outputs, self.make_curve)
         else:
             print('No data retrieved') 
         
@@ -3172,24 +3276,22 @@ class RetrievePartners(Operator):
         else:
             return False    
 
-    def extract_partners (self, source, connectivity_data, get_inputs, get_outputs, make_curve):
+    def extract_partners (self, connectivity_data, get_inputs, get_outputs, make_curve):
         partners = []
-        number_of_inputs = str(len(connectivity_data['incoming']))      
-        number_of_outputs = str(len(connectivity_data['outgoing']))
         
-        print('%s Inputs detected' % number_of_inputs)
-        print('%s Outputs detected' % number_of_outputs)
-        
-        neuron_names = {}    
+        print('%i Inputs detected' % len(connectivity_data['incoming']))
+        print('%i Outputs detected' % len(connectivity_data['outgoing']))
+
+        neuron_names = {}
         
         ### Cycle through connectivity data and retrieve skeleton ids
         if get_inputs is True:            
             for entry in connectivity_data['incoming']:
                 total_synapses = 0
                 for connection in connectivity_data['incoming'][entry]['skids']:
-                    total_synapses += sum(connectivity_data['incoming'][entry]['skids'][connection])
+                    total_synapses += connectivity_data['incoming'][entry]['skids'][connection]
                     if self.over_all_synapses is False:
-                        if sum(connectivity_data['incoming'][entry]['skids'][connection]) >= self.minimum_synapses:
+                        if connectivity_data['incoming'][entry]['skids'][connection] >= self.minimum_synapses:
                             partners.append(entry)
                 if total_synapses >= self.minimum_synapses and self.over_all_synapses is True:
                     partners.append(entry)                    
@@ -3198,9 +3300,9 @@ class RetrievePartners(Operator):
             for entry in connectivity_data['outgoing']:
                 total_synapses = 0
                 for connection in connectivity_data['outgoing'][entry]['skids']:
-                    total_synapses += sum(connectivity_data['outgoing'][entry]['skids'][connection])
+                    total_synapses += connectivity_data['outgoing'][entry]['skids'][connection]
                     if self.over_all_synapses is False:
-                        if sum(connectivity_data['outgoing'][entry]['skids'][connection]) >= self.minimum_synapses:
+                        if connectivity_data['outgoing'][entry]['skids'][connection] >= self.minimum_synapses:
                             partners.append(entry)
                 if total_synapses >= self.minimum_synapses and self.over_all_synapses is True:
                     partners.append(entry)                     
@@ -3235,11 +3337,9 @@ class RetrievePartners(Operator):
                 print('Tag not found for %s: %s' % (neuron_names[skid],str(annotations[skid])))
                 continue           
                        
-            print('Loading above-threshold partner: %s  [%i of %i]' % (neuron_names[skid],i,total_number))
+            print('Loading above-threshold partner: %s  [%i of %i]' % (neuron_names[skid],i,total_number))           
             
-            RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.resampling, self.import_connectors, self.interpolate_virtual)        
-            
-            
+            RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
             
 class ColorCreator():
     """Class used to create distinctive colors"""  
@@ -3316,7 +3416,7 @@ class ShapeCreator:
 class CATMAIDtoBlender:
     """Extracts Blender relevant data from data retrieved from CATMAID"""
     
-    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = False, interpolate_virtual = False):
+    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1 , interpolate_virtual = False):
         
         index = 1            
         cellname = skid + ' - ' + neuron_name                
@@ -3382,7 +3482,7 @@ class CATMAIDtoBlender:
         ### This will be starting point for creation of the curves
         root_node = list_of_childs[None][0]            
 
-        if truncate_neuron >= 0 and soma_node is None:
+        if truncate_neuron != 'none' and soma_node is None:
             print('Unable to truncate main neurite - no soma found! Neuron skipped!')
             return {'FINISHED'}
 
@@ -3393,18 +3493,20 @@ class CATMAIDtoBlender:
 
         #print('Before Trunc',new_child_list)
 
-        if truncate_neuron >= 0 and soma_node is not None:
+        if truncate_neuron != 'none' and soma_node is not None:
             if soma_node != root_node:
                 print('Soma is not Root - Rerooting...')
                 new_child_list = CATMAIDtoBlender.reroot_child_list(new_child_list, soma_node, nodes_list)
                 print('After Reroot:',len(new_child_list))
-                #print(new_child_list)
-
-            longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
-            if truncate_neuron >0:
-                new_child_list = CATMAIDtoBlender.trunc_neuron(longest_neurite_child_list,soma_node,nodes_list,truncate_neuron)                                            
-            else:
+                #print(new_child_list)            
+            if truncate_neuron == 'main_neurite' and truncate_value > 0:
+                longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
+                new_child_list = CATMAIDtoBlender.trunc_neuron(longest_neurite_child_list,soma_node,nodes_list,truncate_value)
+            elif truncate_neuron == 'main_neurite' and truncate_value == 0:
+                longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
                 new_child_list = longest_neurite_child_list
+            elif truncate_neuron == 'strahler_index':
+                new_child_list = CATMAIDtoBlender.trunc_strahler(new_child_list,soma_node,truncate_value)                                       
             print('Neuron Truncated to',len(new_child_list),'nodes:')    
             root_node = soma_node           
             
@@ -3742,6 +3844,122 @@ class CATMAIDtoBlender:
 
         return new_child_list
 
+    def trunc_strahler(list_of_childs,root_node,truncate_value):
+
+        print(list_of_childs)
+
+        strahler_index = CATMAIDtoBlender.calc_strahler_index(list_of_childs,root_node)
+
+        max_strahler_index = strahler_index[root_node]        
+
+        #First remove nodes that have a below threshold strahler index
+        for entry in strahler_index:
+            if strahler_index[entry] < (max_strahler_index - truncate_value):
+                list_of_childs.pop(entry)
+
+        #Now remove connections to these nodes
+        for entry in list_of_childs:
+            for child in list(list_of_childs[entry]):
+                if strahler_index[child] < (max_strahler_index - truncate_value): 
+                    list_of_childs[entry].remove(child)       
+
+        return list_of_childs
+
+
+    def calc_strahler_index(list_of_childs,root_node):
+        """
+        Calculates Strahler Index -> starts with index of 1 at each leaf, at forks with varying incoming strahler index, the highest index
+        is continued, at forks with the same incoming strahler index, highest index + 1 is continued
+        Starts with end nodes, then works its way from branch nodes to branch nodes up to root node
+        """
+
+        try:
+            list_of_childs.pop(None)     
+        except:
+            pass
+
+        #print('Calculating Strahler Indices...')
+
+        end_nodes = []
+        branch_nodes = []
+        strahler_index = {}
+
+        for node in list_of_childs:
+            strahler_index[node] = None
+            if len(list_of_childs[node]) == 0:
+                end_nodes.append(int(node))
+            elif len(list_of_childs[node]) > 1:
+                branch_nodes.append(int(node))                    
+
+        starting_points = end_nodes + branch_nodes
+        nodes_processed = []
+
+        while starting_points:
+            print(len(starting_points))
+            starting_points_done = []
+
+            for i,en in enumerate(starting_points):
+
+                this_node = int(en)
+
+                #First check, if all childs of this starting point have already been processed
+                node_done = True 
+                for child in list_of_childs[this_node]:
+                    if child not in nodes_processed:
+                        node_done = False
+
+                #If not all childs of given starting node have been processed, skip it for now
+                if node_done is False:
+                    continue
+
+                #Calculate index for this branch                
+                previous_indices = []
+                for child in list_of_childs[this_node]:
+                    previous_indices.append(strahler_index[child])
+
+                if len(previous_indices) == 0:
+                    this_branch_index = 1
+                elif len(previous_indices) == 1:
+                    this_branch_index = previous_indices[0]
+                elif previous_indices.count(max(previous_indices)) >= 2:
+                    this_branch_index = max(previous_indices) + 1
+                else:
+                    this_branch_index = max(previous_indices)                
+
+                strahler_index[this_node] = this_branch_index 
+                nodes_processed.append(this_node)
+                starting_points_done.append(this_node)
+
+                #Find parent
+                for node in list_of_childs:                    
+                    if this_node in list_of_childs[node]:
+                        parent_node = int(node)                                                 
+                        break
+
+                while parent_node not in branch_nodes and parent_node != None:
+                    this_node = parent_node
+                    parent_node = None
+
+                    #Find next parent
+                    for node in list_of_childs:                    
+                        if this_node in list_of_childs[node]:
+                            parent_node = int(node)                                                 
+                            break 
+
+                    if this_node not in branch_nodes:
+                        strahler_index[this_node] = this_branch_index                   
+                        nodes_processed.append(this_node)
+
+            #Remove those starting_points that could be processed in this run before the next iteration
+            for node in starting_points_done:
+                starting_points.remove(node)
+
+        print('Done')
+
+        return  strahler_index
+
+
+
 
 class ConnectToCATMAID(Operator):      
     """Connects to CATMAID database using given credentials"""
@@ -3752,10 +3970,13 @@ class ConnectToCATMAID(Operator):
     #subtype = 'PASSWORD' seems to be buggy in Blender 2.71
     #local_http_pw = StringProperty(name="HTTP Password", subtype = 'PASSWORD')
     local_http_pw = StringProperty(name="HTTP Password")
-    local_catmaid_user = StringProperty(name="CATMAID User")
+    local_token = StringProperty(name="Token",
+                                description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")
+    #local_catmaid_user = StringProperty(name="CATMAID User")
+
     #subtype = 'PASSWORD' seems to be buggy in Blender 2.71    
     #local_catmaid_pw = StringProperty(name="CATMAID Password", subtype = 'PASSWORD')
-    local_catmaid_pw = StringProperty(name="CATMAID Password")
+    #local_catmaid_pw = StringProperty(name="CATMAID Password")
     standard_pid = IntProperty(name='Project ID', default = project_id)
     
     def execute(self, context):               
@@ -3766,11 +3987,14 @@ class ConnectToCATMAID(Operator):
         
         print('Connecting to CATMAID server')
         print('HTTP user: %s' % self.local_http_user)
-        print('CATMAID user: %s' % self.local_catmaid_user)        
+        #print('CATMAID user: %s' % self.local_catmaid_user)        
+        print('Token: %s' % self.local_token)        
 
-        remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, \
-                                           self.local_http_pw )        
-        response = json.loads( remote_instance.login().decode( 'utf-8' ) )
+        #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, \                                           self.local_http_pw )          
+        remote_instance = CatmaidInstance( server_url, self.local_http_user, self.local_http_pw, self.local_token )      
+
+        """
+        response = json.loads( remote_instance.auth().decode( 'utf-8' ) )
         print( response ) 
         
         if  'error' in response:
@@ -3779,7 +4003,9 @@ class ConnectToCATMAID(Operator):
         else:
             print ('Connection successful')
             connected = True
-            
+        """
+          
+        connected = True    
         #Set standard project ID
         project_id = self.standard_pid
         
@@ -3789,9 +4015,10 @@ class ConnectToCATMAID(Operator):
     def invoke(self, context, event):
         global catmaid_user, http_user, http_pw, catmaid_pw
         self.local_http_user = http_user
-        self.local_catmaid_user = catmaid_user
+        self.local_token = token
         self.local_http_pw = http_pw
-        self.local_catmaid_pw = catmaid_pw
+        #self.local_catmaid_user = catmaid_user
+        #self.local_catmaid_pw = catmaid_pw
         return context.window_manager.invoke_props_dialog(self)      
       
     
@@ -4041,7 +4268,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                     print('Retrieving Connectors for Color by Density..')
                     skid = re.search('#(.*?) ',neuron.name).group(1)
                     remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
-                    node_data = remote_instance.get_page( remote_compact_skeleton_url )
+                    node_data = remote_instance.fetch( remote_compact_skeleton_url )
                     
                     #Reset density_data for every neuron!
                     density_data = []
@@ -4086,7 +4313,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                            
                         remote_connector_url = remote_instance.get_connectors_url( project_id )
                         print( "Retrieving Info on Connectors for Filtering..." )        
-                        connector_data = remote_instance.get_page( remote_connector_url , connector_postdata )                    
+                        connector_data = remote_instance.fetch( remote_connector_url , connector_postdata )                    
                         print("Connectors retrieved: ", len(connector_data))
                         
                         #Get neuron names of upstream and downstream neurons of this connector                                
@@ -4155,7 +4382,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                     skid = re.search('#(.*?) ',neuron.name).group(1)
                     print('Retrieving connector data for skid %s...' % skid)
                     remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
-                    node_data = remote_instance.get_page( remote_compact_skeleton_url )
+                    node_data = remote_instance.fetch( remote_compact_skeleton_url )
                     
                     list_of_synapses = {}
                     
@@ -5361,7 +5588,7 @@ class ColorBySynapseCount(Operator):
         synapse_count = {}    
         connectivity_post = {} 
         connectivity_post['threshold'] = 0
-        connectivity_post['boolean_op'] = 'logic_OR'         
+        connectivity_post['boolean_op'] = 'OR'         
 
         filter_include_list = self.filter_include.split(',')
         if self.filter_exclude != '':
