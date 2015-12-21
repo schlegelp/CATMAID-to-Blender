@@ -10,6 +10,10 @@ Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATM
 ## Before First Use:
 Open CATMAIDImport.py, search for 'server_url' variable and set to your server's url and restart Blender
 
+## Tokens:
+The CATMAID API authorizes requests using an API token tied to user account instead of a username and password.
+For Information on how to retrieve your Token look here [here](http://catmaid.github.io/dev/api.html#api-token).
+
 ![server_url](https://cloud.githubusercontent.com/assets/7161148/5357317/7ab20c38-7fa6-11e4-82d7-3b7d3e039a69.PNG)
 
 ## Quickstart Guide:
