@@ -14,7 +14,7 @@ Open CATMAIDImport.py, search for 'server_url' variable and set to your server's
 
 ## Tokens:
 The CATMAID API authorizes requests using an API token tied to user account instead of a username and password.
-For Information on how to retrieve your Token look here [here](http://catmaid.github.io/dev/api.html#api-token).
+For Information on how to retrieve your Token look [here](http://catmaid.github.io/dev/api.html#api-token).
 
 ## Quickstart Guide:
 Import/Export panel will show up under the 'Scene' tab in the 'Properties' windows
