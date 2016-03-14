@@ -19,6 +19,11 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.2 14/03/2015:
+    - added option to export barplot to SVG export- this will export distribution of pre-, postsynaptic sites or node count along vertical 
+      and horizontal axis
+    - various bug fixes
+
 ### V4.1 21/12/2015:
     - added Token System to replace catmaid user+pw 
 
@@ -216,6 +221,7 @@ import http.cookiejar as cj
 import mathutils
 import numpy as np
 import base64
+import statistics
 
 from bpy.types import Operator
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
@@ -247,7 +253,7 @@ project_id = 1
 bl_info = {
  "name": "Import/Export Neuron from CATMAID",
  "author": "Philipp Schlegel",
- "version": (4, 1, 0),
+ "version": (4, 2, 0),
  "blender": (2, 7, 1),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -555,13 +561,35 @@ class CatmaidInstance:
     #Returns list of edges: [source_skid, target_skid, weight]
     def get_edges_url(self, pid):
         return self.djangourl("/" + str(pid) + "/skeletongroup/skeletonlist_confidence_compartment_subgraph" )
+
+def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1 ):
+
+    #If list of skids is provided
+    if type(skids) == type(list()):
+        sk_data = []
+        for skeleton_id in skids:
+            #Create URL for retrieving example skeleton from server
+            remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id, connector_flag, tag_flag )
+
+            #Retrieve node_data for example skeleton
+            skeleton_data = remote_instance.fetch( remote_compact_skeleton_url )
+
+            sk_data.append(skeleton_data)
+
+            print('%s retrieved' % str(skeleton_id))
+    #if only a single skids is provided
+    else:
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skids, connector_flag, tag_flag )
+        sk_data = remote_instance.fetch( remote_compact_skeleton_url )
+
+    return (sk_data)
     
     
 def get_annotations_from_list (skid_list, remote_instance):
     #Takes list of skids and retrieves annotations
     #Attention! It seems like this URL does not process more than 250 skids at a time!
 
-    remote_get_annotations_url = remote_instance.get_annotations_for_skid_list( project_id )
+    remote_get_annotations_url = remote_instance.get_annotations_for_skid_list2( project_id )
 
     get_annotations_postdata = {'metaannotations':0,'neuronnames':0}              
 
@@ -920,7 +948,7 @@ class UpdateNeurons(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -1025,7 +1053,7 @@ class RetrieveNeuron(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -1095,14 +1123,10 @@ class RetrieveNeuron(Operator):
             
         if object_name in bpy.data.objects:
             print('Neuron already exists! Skipping.')
-            return error
+            return error        
         
-        if import_connectors is True:
-            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id ,1,0)
-        else:
-            remote_get_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id ,0,0)            
-        node_data = []
-        node_data = remote_instance.fetch( remote_get_compact_skeleton_url )
+
+        node_data = get_3D_skeleton ( [skeleton_id], remote_instance, int(import_connectors), 1 )[0]
 
         print("%i entries for neuron %s retrieved" % (len(node_data),skeleton_id) )
                 
@@ -1154,7 +1178,7 @@ class RetrievePairs(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -1277,7 +1301,7 @@ class RetrieveInVolume(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -1338,7 +1362,7 @@ class RetrieveByAnnotation(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -1396,15 +1420,17 @@ class RetrieveByAnnotation(Operator):
         print('Retrieving names of annotated neurons...')
         annotated_skids = []
         for entry in neuron_list['entities']:
-            annotated_skids.append(str(entry['skeleton_ids'][0]))
+            if entry['type'] == 'neuron':
+                annotated_skids.append(str(entry['skeleton_ids'][0]))
         neuron_names = get_neuronnames(annotated_skids)
         
         for entry in neuron_list['entities']:
-            skid = str(entry['skeleton_ids'][0])
-            print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(neuron_list['entities'])))
-            RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
-            wm.progress_update(count)
-            count += 1
+            if entry['type'] == 'neuron':
+                skid = str(entry['skeleton_ids'][0])
+                print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(neuron_list['entities'])))
+                RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
+                wm.progress_update(count)
+                count += 1
             
         wm.progress_end()          
          
@@ -1422,14 +1448,24 @@ class RetrieveByAnnotation(Operator):
 
 
 class RetrieveConnectors(Operator):      
-    """Retrieves Connectors of active/all Neuron from CATMAID database"""
+    """Retrieves Connectors of active/selected/all Neuron from CATMAID database"""
     bl_idname = "retrieve.connectors"  
     bl_label = "Connectors will be created in Layer 3!!!"
-     
-    all_neurons = BoolProperty(name="Process All", default = False)
-    selected_neurons = BoolProperty(name="Process Selected", default = False)
-    random_colors = BoolProperty(name="Random Colors", default = False)
-    basic_radius = FloatProperty(name="Basic Radius", default = 0.01)
+
+    which_neurons = EnumProperty(name = "For which Neuron(s)?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose for which neurons to connectors.")
+    color_prop = EnumProperty(name = "Colors", 
+                                      items = [('Black','Black','Black'),('Mesh-color','Mesh-color','Mesh-color'),('Random','Random','Random')],
+                                      description = "How to color the connectors.")    
+    basic_radius = FloatProperty(   name="Basic Radius", 
+                                    default = 0.01,
+                                    description = "Set to -1 to not weigh connectors")
+    layer = IntProperty(   name="Create in Layer", 
+                                    default = 2,
+                                    min = 0,
+                                    max = 19,
+                                    description = "Set layer in which to create connectors")
     get_inputs = BoolProperty(name="Retrieve Inputs", default = True)
     get_outputs = BoolProperty(name="Retrieve Ouputs", default = True)
     filter = StringProperty(name="Filter Connectors",
@@ -1446,18 +1482,18 @@ class RetrieveConnectors(Operator):
     def execute(self, context):  
         global remote_instance
         
-        bpy.context.scene.layers[2] = True
+        bpy.context.scene.layers[self.layer] = True
         
-        if self.all_neurons is False and self.selected_neurons is False:
+        if self.which_neurons == 'Active':
             if bpy.context.active_object is None:
                 print ('No Object Active')
             elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name:
                 print ('Active Object not a Neuron') 
             else:                      
                 active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-                self.get_connectors(active_skeleton)   
+                self.get_connectors(active_skeleton, bpy.context.active_object.active_material.diffuse_color[0:3])   
         
-        elif self.all_neurons is True:
+        if self.which_neurons == 'All':
             n = 0
             n_total = len(bpy.data.objects)
             for neuron in bpy.data.objects:
@@ -1465,10 +1501,10 @@ class RetrieveConnectors(Operator):
                 if '#' in neuron.name:
                     print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
                     skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid)
+                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])
                     bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
         
-        elif self.selected_neurons is True:
+        if self.which_neurons == 'Selected':
             n = 0
             n_total = len(bpy.context.selected_objects)
             for neuron in bpy.context.selected_objects:
@@ -1476,21 +1512,20 @@ class RetrieveConnectors(Operator):
                 if '#' in neuron.name:
                     print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
                     skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid)           
+                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])           
                     bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
                 
             
         return {'FINISHED'}   
     
         
-    def get_connectors(self, active_skeleton):
+    def get_connectors(self, active_skeleton, mesh_color = None):
         node_data = []
         connector_ids = []
                         
         ### Retrieve compact json data and filter connector ids
         print('Retrieving connector data for skid %s...' % active_skeleton)
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
-        node_data = remote_instance.fetch( remote_compact_skeleton_url )
+        node_data = get_3D_skeleton ( active_skeleton, remote_instance, connector_flag = 1, tag_flag = 0 )
 
         if node_data:
             print('Success!')            
@@ -1529,18 +1564,18 @@ class RetrieveConnectors(Operator):
                 
                 i_post += 1            
        
-        print('%s Up- / %s Downstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
+        print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
 
         remote_connector_url = remote_instance.get_connectors_url( project_id )
 
-        if self.get_outputs is True:
+        if self.get_outputs is True and len(connector_post_postdata) > 0:
             print( "Retrieving Postsynaptic Targets..." )
             ### Get connector data for all presynapses to determine number of postsynaptic targets and filter
             connector_data_post = remote_instance.fetch( remote_connector_url , connector_post_postdata )
         else:
             connector_data_post = []        
         
-        if self.get_inputs is True:
+        if self.get_inputs is True and len(connector_pre_postdata) > 0:
             print( "Retrieving Presynaptic Targets..." )
             ### Get connector data for all presynapses to filter later           
             connector_data_pre = remote_instance.fetch( remote_connector_url , connector_pre_postdata ) 
@@ -1601,7 +1636,14 @@ class RetrieveConnectors(Operator):
                     number_of_targets[connector[0]] = len(connector[1]['postsynaptic_to'])              
                 
             ### Create a sphere for every connector - presynapses will be scaled based on number of postsynaptic targets
-            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, self.random_colors, self.basic_radius)
+            if self.color_prop == 'Black':
+                connector_color = (0,0,0)
+            elif self.color_prop == 'Random':
+                connector_color = [random.randrange(0,100)/100 for e in [0,0,0]]
+            elif self.color_prop == 'Mesh-color':
+                connector_color = mesh_color
+
+            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius)
                 
         else:
             print('No connector data for presnypases retrieved')                    
@@ -1627,16 +1669,18 @@ class ConnectorsToSVG(Operator, ExportHelper):
     bl_label = "Export Connectors (=Synapses) to SVG"
 
     # ExportHelper mixin class uses this
-    filename_ext = ".svg"    
-     
-    all_neurons = BoolProperty(name="Process All", default = True)
+    filename_ext = ".svg"   
+
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose which neurons to reload.")    
     random_colors = BoolProperty(name="Use Random Colors", default = False)
     mesh_colors = BoolProperty(name="Use Mesh Colors", default = False,
                                 description = "Neurons are exported with their Blender material diffuse color")
     #gray_colors = BoolProperty(name="Use Gray Colors", default = False)
     merge = BoolProperty(name="Merge into One", default = True,
                         description = "All neurons to process are rendered into the same brain.")
-    color_by_input = BoolProperty(name="Color by Input", default = True,
+    color_by_input = BoolProperty(name="Color by Input", default = False,
                         description = "Postsynapses from the same presynaptic neuron are given the same color.")
     color_by_strength = BoolProperty(name="Color Presynapses by # of Postsynapses", default = False)
     color_by_connections = StringProperty(name="Color by Connections to Neuron (Skid)", default = '',
@@ -1655,18 +1699,24 @@ class ConnectorsToSVG(Operator, ExportHelper):
     scale_outputs = BoolProperty(name="Scale Presynapses", default = False,
                                  description = "Size of Presynapses based on number of postsynaptically connected neurons")    
     basic_radius = FloatProperty(name="Base Radius", default = 0.5) 
-    use_arrows = BoolProperty(  name="Use Arrows", 
-                                default = False,
-                                description = "Use Arrows instead of Circles to indicate Incoming/Outgoing Synapses")
+    export_as = EnumProperty(name="Export as:",
+                                   items = (("Circles","Circles","Circles"),
+                                            ("Arrows","Arrows","Arrows"),
+                                            ("Lines","Lines","Lines")                                                                                        
+                                            ),
+                                    default =  "Circles",
+                                    description = "Choose symbol that connectors will be exported as.")    
     export_ring_gland = BoolProperty(name="Export Ring Gland", default = False,
                                     description = "Export Outlines of the ring gland in addition to outlines of CNS")
     export_neuron = BoolProperty(name="Include Neuron", default = True,
                                     description = "Export neurons skeletons as well")
+    barplot = BoolProperty(name="Add Barplot", default = False,
+                                    description = "Export Barplot along X/Y axis to show synapse distribution")
     filter_connectors = StringProperty(name="Filter Connector:", default = '',
                                      description="Filter Connectors by edges from/to neuron name(s)! (syntax: to exclude start with ! / to set synapse threshold start with > / applies to neuron names / case INsensitive / comma-separated -> ORDER MATTERS! ) ")
     #filter_downstream = StringProperty(name="Filter Outputs:", default = '')
     
-    x_persp_offset = FloatProperty(name="Horizontal Perspective", default = 0.5, max = 2, min = -2)  
+    x_persp_offset = FloatProperty(name="Horizontal Perspective", default = 0.9, max = 2, min = -2)  
     y_persp_offset = FloatProperty(name="Vertical Perspective", default = -0.01, max = 2, min = -2)
     views_to_export = EnumProperty(name="Views to export",
                                    items = (("Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal"),
@@ -1678,7 +1728,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                             ("Perspective-Dorsal","Perspective-Dorsal","Perspective-Dorsal")
                                             ),
                                     default =  "Front/Top/Lateral/Perspective-Dorsal",
-                                    description = "Choose which views should be included in final SVG")\
+                                    description = "Choose which views should be included in final SVG")
+    add_legend = BoolProperty(name="Add legend", default = True,
+                                    description = "Add legend to figure")
+
                     
     
     neuron_names = {}
@@ -1702,7 +1755,56 @@ class ConnectorsToSVG(Operator, ExportHelper):
         connector_data = {}
         neurons_to_export = []  
         skids_to_export = []  
-        
+
+        if self.which_neurons == 'Active':
+            if bpy.context.active_object is None and self.which_neurons == 'Active':
+                print ('No Object Active')       
+                return
+            elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.which_neurons == 'Active':
+                print ('Active Object not a Neuron') 
+                return
+            active_skid = re.search('#(.*?) -',bpy.context.active_object.name).group(1)                
+            skids_to_export.append(active_skid)
+            neurons_to_export.append(bpy.context.active_object)
+
+            if self.mesh_colors:
+                self.mesh_color[active_skeleton] =  bpy.context.active_object.active_material.diffuse_color   
+
+        elif self.which_neurons == 'Selected':
+            for neuron in bpy.context.selected_objects:
+                if neuron.name.startswith('#'):
+                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
+                    skids_to_export.append(skid)
+                    neurons_to_export.append(neuron)
+                    if self.mesh_colors:
+                        self.mesh_color[skid] =  neuron.active_material.diffuse_color
+
+        elif self.which_neurons == 'All':
+            for neuron in bpy.data.objects:
+                if neuron.name.startswith('#'):
+                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
+                    skids_to_export.append(skid)
+                    neurons_to_export.append(neuron)
+                    if self.mesh_colors:
+                        self.mesh_color[skid] =  neuron.active_material.diffuse_color
+
+        for n in skids_to_export:
+            connector_data[n] = self.get_connectors(n)
+
+        if self.color_by_connections:
+            #If outputs are exported then count only upstream connections (upstream sources of these outputs)
+            #If inputs are exported then count only downstream connections (downstream targets of these inputs)
+            #-> just use them invertedly for use_inputs/outputs when calling get_connectivity
+            self.connections_for_color = self.get_connectivity(skids_to_export,self.export_outputs,self.export_inputs)  
+
+        if self.export_neuron is True:        
+            neurons_svg_string = self.create_svg_for_neuron(neurons_to_export)                    
+        else:
+            neurons_svg_string = {}
+    
+        self.export_to_svg(connector_data, neurons_svg_string) 
+
+        """
         if bpy.context.active_object is None and self.all_neurons is False:
             print ('No Object Active')       
         elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.all_neurons is False:
@@ -1749,6 +1851,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 neurons_svg_string = {}
         
             self.export_to_svg(connector_data, neurons_svg_string) 
+        """
             
         return {'FINISHED'} 
       
@@ -1772,9 +1875,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         
         ### Retrieve compact json data and filter connector ids
         print('Retrieving connector data for skid %s...' % active_skeleton)
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , active_skeleton, 1, 0 )
-
-        node_data = remote_instance.fetch( remote_compact_skeleton_url )
+        node_data = get_3D_skeleton ( [active_skeleton], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
 
         if node_data:
             print('Success!')
@@ -2367,8 +2468,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     f.write(neurons_svg_string[neuron]['front'])
                     f.write('</g> \n')
                 ### Export Inputs from front view
-                line_to_write = '<g id="Inputs">' 
-                f.write(line_to_write + '\n')                        
+                line_to_write = '<g id="Inputs">'                                        
                 
                 for target_treenode in connectors_pre:
                     for connector in connectors_pre[target_treenode]: 
@@ -2390,39 +2490,41 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                 shape_temp = ''
                                 for node in input_shape_map[source_neuron]:
                                     shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
-                                line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(shape_temp),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))                                                        
                             else:
-                                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))
                                                 
-                        elif self.use_arrows is True:
-                            line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                        elif self.export_as == 'Arrows' or self.export_as == 'Lines':
+                            #Arrow line
+                            line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                             % ( connector_x-10,connector_y,
                                                 connector_x-2,connector_y,
                                                 str(inputs_color),str(basic_radius/3)
                                                )
-                            line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                            % ( connector_x-1,connector_y,
-                                                connector_x-3,connector_y+1,
-                                                connector_x-3,connector_y-1,                                                
-                                                str(inputs_color)
-                                               )                        
-                            
-                        else:                 
-                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                            if self.export_as == 'Arrows':
+                                #Arrow head
+                                line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                                % ( connector_x-1,connector_y,
+                                                    connector_x-3,connector_y+1,
+                                                    connector_x-3,connector_y-1,                                                
+                                                    str(inputs_color)
+                                                   )                                                 
+                        elif self.export_as == 'Circles':                 
+                            line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                       % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                       str(inputs_color_stroke),str(inputs_width_stroke))
-                        f.write(line_to_write + '\n')
+                        line_to_write += '\n'
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')   
+                if self.export_inputs is True:
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n')   
           
                 ### Export Outputs from front view
-                line_to_write = '<g id="Outputs">' 
-                f.write(line_to_write + '\n')                         
+                line_to_write = '<g id="Outputs">'                                        
                 
                 for connector in connectors_post:
                     connector_x = round(connectors_post[connector]['coords'][0] * 10,1)
@@ -2437,25 +2539,32 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     else:
                         radius = basic_radius
                         
-                    if self.use_arrows is True:
-                        line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
-                                        % ( connector_x-9,connector_y,
+                    if self.export_as == 'Arrows' or self.export_as == 'Lines':
+                        line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
+                                        % ( connector_x-10,connector_y,
                                             connector_x-2,connector_y,
                                             str(outputs_color),str(radius/3)
                                            )
-                        line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                        % ( connector_x-10,connector_y,
-                                            connector_x-8,connector_y+1,
-                                            connector_x-8,connector_y-1,                                                
-                                            str(outputs_color)
-                                           )     
-                    else:
-                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
+                        if self.export_as == 'Arrows':
+                            line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                            % ( connector_x-10,connector_y,
+                                                connector_x-8,connector_y+1,
+                                                connector_x-8,connector_y-1,                                                
+                                                str(outputs_color)
+                                               )                     
+                    elif self.export_as == 'Circles':
+                        line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
                                      % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(outputs_width_stroke))
+                    line_to_write += '\n'
+
+                if self.export_outputs is True:
+                    line_to_write += '</g>' 
                     f.write(line_to_write + '\n')
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')
+                if self.barplot is True and self.merge is False:
+                    self.create_barplot(f, connector_data, [neuron] , 0, 2 , x_factor = 1, y_factor = -1)    
+                elif self.barplot is True and self.merge is True and first_neuron is True:
+                    self.create_barplot(f, connector_data, [n for n in connector_data] , 0, 2 , x_factor = 1, y_factor = -1)            
 
                 ### Add front brain shape
                 if self.merge is False or first_neuron is True:
@@ -2477,8 +2586,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     f.write(neurons_svg_string[neuron]['lateral'])
                     f.write('</g> \n')
                 ### Export Inputs from lateral view
-                line_to_write = '<g id="Inputs">' 
-                f.write(line_to_write + '\n')
+                line_to_write = '<g id="Inputs"> \n'                                
                 
                 for target_treenode in connectors_pre:                                                
                     for connector in connectors_pre[target_treenode]: 
@@ -2492,45 +2600,48 @@ class ConnectorsToSVG(Operator, ExportHelper):
                             inputs_color = density_color_map[connector]                             
                                             
                         connector_x = round(connectors_pre[target_treenode][connector]['coords'][1] * 10,1)
-                        connector_y = round(connectors_pre[target_treenode][connector]['coords'][2] * - 10,1)                                
+                        connector_y = round(connectors_pre[target_treenode][connector]['coords'][2] * - 10,1)   
+                        
+
                         #If color by input is true, also use different shapes
                         if self.color_by_input is True:                                 
                             if input_shape_map[source_neuron] != 'circle':          
                                 shape_temp = ''
                                 for node in input_shape_map[source_neuron]:
                                     shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
-                                line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write += '<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(shape_temp),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))                                                        
                             else:
-                                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write += '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))
                                                 
-                        elif self.use_arrows is True:
-                            line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                        elif self.export_as == 'Arrows' or self.export_as == 'Lines':
+                            line_to_write += '<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                             % ( connector_x,connector_y-10,
                                                 connector_x,connector_y-2,
                                                 str(inputs_color),str(basic_radius/3)
                                                )
-                            line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                            % ( connector_x,connector_y-1,
-                                                connector_x+1,connector_y-3,
-                                                connector_x-1,connector_y-3,                                                
-                                                str(inputs_color)
-                                               )
-                            
-                        else:                 
-                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                            if self.export_as == 'Arrows':
+                                line_to_write += '<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                                % ( connector_x,connector_y-1,
+                                                    connector_x+1,connector_y-3,
+                                                    connector_x-1,connector_y-3,                                                
+                                                    str(inputs_color)
+                                                   )
+                        elif self.export_as == 'Circles':                 
+                            line_to_write += '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                       % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                       str(inputs_color_stroke),str(inputs_width_stroke))
-                        f.write(line_to_write + '\n')                
+                        line_to_write += '\n'
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')   
+                if self.export_inputs is True:        
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n')
+
                 ### Export Outputs from lateral view
-                line_to_write = '<g id="Outputs">' 
-                f.write(line_to_write + '\n')                         
+                line_to_write = '<g id="Outputs">'                 
                 
                 for connector in connectors_post:
                     connector_x = round(connectors_post[connector]['coords'][1] * 10,1)
@@ -2542,27 +2653,34 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     if self.scale_outputs is True:
                         radius = basic_radius * (0.8 + connectors_weight[connector]/5) #connectors with 5 targets will be double the size
                     else:
-                        radius = basic_radius
+                        radius = basic_radius                    
                         
-                    if self.use_arrows is True:
-                        line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                    if self.export_as == 'Arrows' or self.export_as == 'Lines':
+                        line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                         % ( connector_x,connector_y-9,
                                             connector_x,connector_y-2,
                                             str(outputs_color),str(radius/3)
                                            )
-                        line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                        % ( connector_x,connector_y-10,
-                                            connector_x+1,connector_y-8,
-                                            connector_x-1,connector_y-8,                                                
-                                            str(outputs_color)
-                                           )    
-                    else:
-                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
-                                        % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(outputs_width_stroke))
+                        if self.export_as == 'Arrows':      
+                            line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                            % ( connector_x,connector_y-10,
+                                                connector_x+1,connector_y-8,
+                                                connector_x-1,connector_y-8,                                                
+                                                str(outputs_color)
+                                               )    
+                    elif self.export_as == 'Circles': 
+                        line_to_write += '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
+                                        % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(outputs_width_stroke))         
+                    line_to_write += '\n'          
+
+                if self.export_outputs is True:
+                    line_to_write += '</g>' 
                     f.write(line_to_write + '\n')
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')
+                if self.barplot is True and self.merge is False:
+                    self.create_barplot(f, connector_data, [neuron] , 1, 2 , x_factor = 1, y_factor = -1)
+                elif self.barplot is True and self.merge is True and first_neuron is True:
+                    self.create_barplot(f, connector_data, [n for n in connector_data] , 1, 2 , x_factor = 1, y_factor = -1)
 
                 ### Add lateral brain shape
                 if self.merge is False or first_neuron is True:
@@ -2584,8 +2702,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     f.write(neurons_svg_string[neuron]['perspective'])
                     f.write('</g> \n')
                 ### Export Inputs from perspective view
-                line_to_write = '<g id="Inputs">' 
-                f.write(line_to_write + '\n')
+                line_to_write = '<g id="Inputs">'                 
                 
                 for target_treenode in connectors_pre:       
                     for connector in connectors_pre[target_treenode]:                          
@@ -2617,41 +2734,41 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                 shape_temp = ''
                                 for node in input_shape_map[source_neuron]:
                                     shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
-                                line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(shape_temp),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))                                                        
                             else:
-                                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))
                                                 
-                        elif self.use_arrows is True:
-                            line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                        elif self.export_as == 'Arrows' or self.export_as == 'Lines':
+                            line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                             % ( connector_x-10,connector_y,
                                                 connector_x-2,connector_y,
                                                 str(inputs_color),str(basic_radius/3)
                                                )
-                            line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                            % ( connector_x-1,connector_y,
-                                                connector_x-3,connector_y+1,
-                                                connector_x-3,connector_y-1,                                                
-                                                str(inputs_color)
-                                               )  
-                            
-                        else:                 
-                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                            if self.export_as == 'Arrows':
+                                line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                                % ( connector_x-1,connector_y,
+                                                    connector_x-3,connector_y+1,
+                                                    connector_x-3,connector_y-1,                                                
+                                                    str(inputs_color)
+                                                   )
+                        elif self.export_as == 'Circles':                 
+                            line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                       % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                       str(inputs_color_stroke),str(inputs_width_stroke))
-                        f.write(line_to_write + '\n')
+                        line_to_write += '\n'
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')   
+                if self.export_inputs is True:
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n') 
+
                 ### Export Outputs from perspective view
-                line_to_write = '<g id="Outputs">' 
-                f.write(line_to_write + '\n')                         
+                line_to_write = '<g id="Outputs">'                                         
                 
-                for connector in connectors_post:
-                    
+                for connector in connectors_post:                    
                     if self.color_by_density is True:
                         outputs_color = density_color_map[connector]
                     #connector_x = round(connectors_post[connector]['coords'][1] * 10,1)
@@ -2671,25 +2788,27 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         connector_x = round(connectors_post[connector]['coords'][0]*10,1) + x_persp_offset * persp_scale_factor
                         connector_y = round(connectors_post[connector]['coords'][2]*-10,1) + y_persp_offset * persp_scale_factor  
                     
-                    if self.use_arrows is True:
-                        line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                    if self.export_as == 'Arrows' or self.export_as == 'Lines':
+                        line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                         % ( connector_x-9,connector_y,
                                             connector_x-2,connector_y,
                                             str(outputs_color),str(radius/3)
                                            )
-                        line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                        % ( connector_x-10,connector_y,
-                                            connector_x-8,connector_y+1,
-                                            connector_x-8,connector_y-1,                                                
-                                            str(outputs_color)
-                                           ) 
-                    else:
-                        line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
+                        if self.export_as == 'Arrows':
+                            line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                            % ( connector_x-10,connector_y,
+                                                connector_x-8,connector_y+1,
+                                                connector_x-8,connector_y-1,                                                
+                                                str(outputs_color)
+                                               ) 
+                    elif self.export_as == 'Circles':
+                        line_to_write += '<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
                                         % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(outputs_width_stroke))
-                    f.write(line_to_write + '\n')
+                    line_to_write += '\n'
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')    
+                if self.export_outputs is True:
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n')    
                 
                 line_to_write = '</g>'
                 f.write(line_to_write + '\n \n \n')
@@ -2709,8 +2828,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     f.write(neurons_svg_string[neuron]['top'])
                     f.write('</g> \n')
                 ### Export Inputs from top view
-                line_to_write = '<g id="Inputs">' 
-                f.write(line_to_write + '\n')
+                line_to_write = '<g id="Inputs">'                 
                 
                 for target_treenode in connectors_pre:
                     for connector in connectors_pre[target_treenode]: 
@@ -2731,37 +2849,39 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                 shape_temp = ''
                                 for node in input_shape_map[source_neuron]:
                                     shape_temp += str(node[0]+connector_x) + ',' + str(node[1]+connector_y) + ' '
-                                line_to_write='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<polygon points="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(shape_temp),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))                                                        
                             else:
-                                line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                                line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                             % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                                 str(inputs_color_stroke),str(inputs_width_stroke))
                                                 
-                        elif self.use_arrows is True:
-                            line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                        elif self.export_as == 'Arrows' or self.export_as == 'Lines':
+                            line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                             % ( connector_x-10,connector_y,
                                                 connector_x-2,connector_y,
                                                 str(inputs_color),str(basic_radius/3)
                                                )
-                            line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                            % ( connector_x-1,connector_y,
-                                                connector_x-3,connector_y+1,
-                                                connector_x-3,connector_y-1,                                                
-                                                str(inputs_color)
-                                               )                              
-                        else:                 
-                            line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
+                            if self.export_as == 'Arrows':
+                                line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                                % ( connector_x-1,connector_y,
+                                                    connector_x-3,connector_y+1,
+                                                    connector_x-3,connector_y-1,                                                
+                                                    str(inputs_color)
+                                                   )                              
+                        elif self.export_as == 'Circles':                 
+                            line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="rgb%s" stroke-width="%s"  />' \
                                       % (str(connector_x),str(connector_y),str(basic_radius),str(inputs_color),\
                                       str(inputs_color_stroke),str(inputs_width_stroke))
-                        f.write(line_to_write + '\n')    
+                        line_to_write += '\n'
+                            
+                if self.export_inputs is True:
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n')
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n')   
                 ### Export Outputs from top view
-                line_to_write = '<g id="Outputs">' 
-                f.write(line_to_write + '\n')                         
+                line_to_write = '<g id="Outputs">'                                         
                 
                 for connector in connectors_post:
                     connector_x = round(connectors_post[connector]['coords'][0] * 10,1)
@@ -2775,25 +2895,32 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     else:
                         radius = basic_radius
                         
-                    if self.use_arrows is True:
-                        line_to_write='<path d="M%i,%i L%i,%i" stroke="rgb%s" stroke-width="%s"/> \n' \
+                    if self.export_as == 'Arrows' or self.export_as == 'Lines':
+                        line_to_write +='<path d="M%f,%f L%f,%f" stroke="rgb%s" stroke-width="%s"/> \n' \
                                         % ( connector_x-9,connector_y,
                                             connector_x-2,connector_y,
                                             str(outputs_color),str(radius/3)
                                            )
-                        line_to_write+='<polygon points="%i,%i %i,%i %i,%i" fill="rgb%s" stroke-width="0"/>' \
-                                        % ( connector_x-10,connector_y,
-                                            connector_x-8,connector_y+1,
-                                            connector_x-8,connector_y-1,                                                
-                                            str(outputs_color)
-                                           ) 
-                    else:                    
-                        line_to_write='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
+                        if self.export_as == 'Arrows':
+                            line_to_write +='<polygon points="%f,%f %f,%f %f,%f" fill="rgb%s" stroke-width="0"/>' \
+                                            % ( connector_x-10,connector_y,
+                                                connector_x-8,connector_y+1,
+                                                connector_x-8,connector_y-1,                                                
+                                                str(outputs_color)
+                                               ) 
+                    elif self.export_as == 'Circles':                    
+                        line_to_write +='<circle cx="%s" cy="%s" r="%s" fill="rgb%s" stroke="black" stroke-width="%s"  />' \
                                       % (str(connector_x),str(connector_y), str(radius),str(outputs_color),str(inputs_width_stroke))
-                    f.write(line_to_write + '\n')
+                    line_to_write += '\n'
+                    
+                if self.export_outputs is True:
+                    line_to_write += '</g>' 
+                    f.write(line_to_write + '\n') 
 
-                line_to_write = '</g>' 
-                f.write(line_to_write + '\n') 
+                if self.barplot is True and self.merge is False:
+                    self.create_barplot(f, connector_data, [neuron] , 0, 1 , x_factor = 1, y_factor = -1)
+                elif self.barplot is True and self.merge is True and first_neuron is True:
+                    self.create_barplot(f, connector_data, [n for n in connector_data] , 0, 1 , x_factor = 1, y_factor = -1)
                 
                 ### Add top brain shape
                 if self.merge is False or first_neuron is True:
@@ -2804,7 +2931,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
             offsetY_forLegend = -150
             ### Create legend for neurons if merged
-            if self.merge is True and self.color_by_input is False and self.color_by_strength is False:
+            if self.merge is True and self.color_by_input is False and self.color_by_strength is False and self.add_legend is True:
                 line_to_write ='\n <g> \n <text x="150" y = "%s" font-size="8"> \n %s \n </text> \n' \
                                 % (str(offsetY_forMergeLegend+5), str(self.neuron_names[int(neuron)]) + ' #' + neuron)                
                 f.write(line_to_write + '\n')
@@ -2846,7 +2973,350 @@ class ConnectorsToSVG(Operator, ExportHelper):
         print('Export finished')
         
         return {'FINISHED'}
-    
+
+    def create_barplot(self, f, connector_data , neurons_to_plot , x_coord, y_coord, x_factor = 1, y_factor = -1):
+        """
+        Creates Barplot for given svg based on distribution of 
+        """
+
+        #Bin width is in 1/1000 nm = um
+        bin_width = 2
+        scale_factor = 1
+
+        hist_data = { e : {'x_pre':[],'y_pre':[],'x_post':[],'y_post':[]} for e in neurons_to_plot }        
+
+        #Collect data first:
+        for e in neurons_to_plot:
+            connectors_pre = connector_data[e][1]
+            connectors_post = connector_data[e][2]
+
+            for tn in connectors_pre:
+                for c in connectors_pre[tn]:                    
+                    hist_data[e]['x_pre'].append( round(connectors_pre[tn][c]['coords'][x_coord] * 10 * x_factor, 1) ) 
+                    hist_data[e]['y_pre'].append( round(connectors_pre[tn][c]['coords'][y_coord] * 10 * y_factor, 1) ) 
+
+            for c in connectors_post:
+                hist_data[e]['x_post'].append( round(connectors_post[c]['coords'][x_coord] * 10 * x_factor, 1) )
+                hist_data[e]['y_post'].append( round(connectors_post[c]['coords'][y_coord] * 10 * y_factor, 1) )
+
+        all_x_pre = [e for item in hist_data for e in hist_data[item]['x_pre'] ]
+        all_y_pre = [e for item in hist_data for e in hist_data[item]['y_pre'] ]
+        all_x_post = [e for item in hist_data for e in hist_data[item]['x_post'] ]
+        all_y_post = [e for item in hist_data for e in hist_data[item]['y_post'] ]
+
+        #First get min and max values and bin numbers over all neurons 
+        all_max_x_pre = max(all_x_pre+[0])
+        all_max_y_pre = max(all_y_pre+[0])
+        all_max_x_post = max(all_x_post+[0])
+        all_max_y_post = max(all_y_post+[0])
+
+        all_min_x_pre = min(all_x_pre + [ max(all_x_pre + [0] ) ] )
+        all_min_y_pre = min(all_y_pre + [ max(all_y_pre + [0] ) ] )
+        all_min_x_post = min(all_x_post + [ max(all_x_post + [0] ) ] )
+        all_min_y_post = min(all_y_post + [ max(all_y_post + [0] ) ] ) 
+
+
+        #Everthing starts with 
+        bin_sequences = {'x_pre': list ( np.arange( all_min_x_pre, all_max_x_pre, bin_width ) ),
+                        'y_pre': list ( np.arange( all_min_y_pre, all_max_y_pre, bin_width ) ),
+                        'x_post': list ( np.arange( all_min_x_post, all_max_x_post, bin_width ) ),
+                        'y_post': list ( np.arange( all_min_y_post, all_max_y_post, bin_width ) )
+                        }
+
+        #Create Histograms
+        histograms = { e : {} for e in neurons_to_plot }
+        for e in neurons_to_plot:
+            histograms[e]['x_pre'] , bin_edges_x_pre = np.histogram( hist_data[e]['x_pre'], bin_sequences['x_pre'] )
+            histograms[e]['y_pre'] , bin_edges_y_pre = np.histogram( hist_data[e]['y_pre'], bin_sequences['y_pre'] )
+            histograms[e]['x_post'] , bin_edges_x_post = np.histogram( hist_data[e]['x_post'], bin_sequences['x_post'] )
+            histograms[e]['y_post'] , bin_edges_y_post = np.histogram( hist_data[e]['y_post'], bin_sequences['y_post'] )
+
+        #Now calculate mean and stdevs over all neurons
+        means = {}
+        stdevs = {}     
+        variances = {}   
+        stderror = {}
+        for d in ['x_pre','y_pre','x_post','y_post']:
+            means[d] = []
+            stdevs[d] = []
+            variances[d] = []
+            stderror[d] = []
+            #print([histograms[n][d] for n in neurons_to_plot],bin_sequences[d])
+            for i in range ( len( bin_sequences[d] ) - 1 ):                
+                #conversion to int from numpy.int32 is important because statistics.stdev fails otherwise
+                v = [ int ( histograms[n][d][i] ) for n in neurons_to_plot ]                
+                means[d].append ( sum ( v ) / len ( v ) )
+                #print(d,i,v,means[d],type(v[0]))
+                if len ( neurons_to_plot ) > 1:
+                    stdevs[d].append( statistics.stdev ( v ) )  
+                    variances[d].append( statistics.pvariance ( v ) )
+                    stderror[d].append( math.sqrt( statistics.pvariance ( v ) ) )
+
+        #!!!!!!!!!!!
+        #This defines which statistical value to use:
+        #Keep in mind that stdev is probably the best parameter to use!
+        stats = stdevs
+
+        #Now start creating svg:            
+        line_to_write = '<g id="Barplot" transform="translate(0,0)">' 
+        f.write(line_to_write + '\n')
+
+        f.write('<g id="x-axis">')
+        #write horizontal barplot
+        for e,b in enumerate ( means['x_pre'] ):
+            #Inputs
+            f.write( '<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,0,255)" stroke-width="0"/> \n' \
+                    % ( bin_sequences['x_pre'][e], 0,
+                        bin_width,
+                        b * scale_factor
+                        )
+                    )
+
+        #Error bar
+        if len( neurons_to_plot ) > 1:
+            for e,b in enumerate ( means['x_pre'] ):
+                if stats['x_pre'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( bin_sequences['x_pre'][e] + 1/2 * bin_width, b * scale_factor + stats['x_pre'][e] * scale_factor,
+                            bin_sequences['x_pre'][e] + 1/2 * bin_width, b * scale_factor - stats['x_pre'][e] * scale_factor
+                            ) 
+                        )
+
+        for e,b in enumerate(means['x_post']):
+            #Outputs
+            f.write( '<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(255,0,0)" stroke-width="0"/> \n' \
+                    % ( bin_sequences['x_post'][e], 0,
+                        bin_width,
+                        -b * scale_factor
+                        )
+                    )
+
+        #Error bar
+        if len( neurons_to_plot ) > 1:
+            for e,b in enumerate(means['x_post']):
+                if stats['x_post'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( bin_sequences['x_post'][e] + 1/2 * bin_width, -b * scale_factor + stats['x_post'][e] * scale_factor,
+                            bin_sequences['x_post'][e] + 1/2 * bin_width, -b * scale_factor - stats['x_post'][e] * scale_factor
+                            ) 
+                        ) 
+
+        #horizontal line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( min([all_min_x_pre, all_min_x_post]) , 0,
+                            max([all_max_x_pre, all_max_x_post]) , 0                                       
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+
+        f.write('<g id="y-axis">')
+
+        #write vertical barplot
+        for e,b in enumerate(means['y_pre']):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,0,255)" stroke-width="0"/> \n' \
+                    % ( 0 , bin_sequences['y_pre'][e],
+                        b * scale_factor,
+                        bin_width
+                        )
+                    )
+
+        #Error bar 
+        if len( neurons_to_plot ) > 1: 
+            for e,b in enumerate(means['y_pre']):
+                if stats['y_pre'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( b * scale_factor + stats['y_pre'][e] * scale_factor, bin_sequences['y_pre'][e] + 1/2 * bin_width, 
+                            b * scale_factor - stats['y_pre'][e] * scale_factor, bin_sequences['y_pre'][e] + 1/2 * bin_width
+                            ) 
+                        )
+
+        for e,b in enumerate(means['y_post']):
+            #Outputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(255,0,0)" stroke-width="0"/> \n' \
+                    % ( 0, bin_sequences['y_post'][e],
+                        -b * scale_factor,
+                        bin_width
+                        )
+                    )
+        #Error bar
+        if len( neurons_to_plot ) > 1:
+            for e,b in enumerate(means['y_post']):
+                if stats['y_post'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( -b * scale_factor + stats['y_post'][e] * scale_factor, bin_sequences['y_post'][e] + 1/2 * bin_width, 
+                            -b * scale_factor - stats['y_post'][e] * scale_factor, bin_sequences['y_post'][e] + 1/2 * bin_width
+                            ) 
+                        )
+
+        #vertical line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( 0 , min([all_min_y_pre, all_min_y_post]),
+                            0 , max([all_max_y_pre, all_max_y_post]) 
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+
+        #Bin size bar
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max([all_max_x_pre, all_max_x_post]) + 10 , 0 ,
+                            max([all_max_x_pre, all_max_x_post]) + 10 + bin_width , 0                                       
+                           )
+        line_to_write += '<text x="%i" y = "%i" font-size="5"> \n %s \n </text>' \
+                        % ( max([all_max_x_pre,all_max_x_post]) + 10,
+                            - 1,
+                            str(bin_width) + ' um'
+
+                            )
+        f.write(line_to_write + '\n')
+
+        #Axis scale
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max([all_max_x_pre,all_max_x_post]) + 10 + bin_width, 0 ,
+                            max([all_max_x_pre,all_max_x_post]) + 10 + bin_width, 5                                       
+                           )
+        line_to_write += '<text x="%i" y = "%f" font-size="5"> \n %s \n </text>' \
+                        % ( max([all_max_x_pre,all_max_x_post]) + 12 + bin_width, 
+                            4,                                        
+                            str(5 / scale_factor) + ' synapses'
+                            )
+        f.write(line_to_write + '\n')   
+
+
+        line_to_write = '</g>' 
+        f.write(line_to_write + '\n')
+
+        """
+
+        line_to_write = '<g id="Barplot" transform="translate(0,0)">' 
+        f.write(line_to_write + '\n')
+        barplot_y_data_pre = []
+        barplot_x_data_pre = []
+        barplot_y_data_post = []
+        barplot_x_data_post = []
+
+        #Gather coordinates of pre and postsynaptic connectors
+        for tn in connectors_pre:
+            for c in connectors_pre[tn]:                            
+                barplot_y_data_pre.append( round(connectors_pre[tn][c]['coords'][y_coord] * 10 * y_factor, 1) )
+                barplot_x_data_pre.append( round(connectors_pre[tn][c]['coords'][x_coord] * 10 * x_factor, 1) )
+
+        for c in connectors_post:
+            barplot_y_data_post.append( round(connectors_post[c]['coords'][y_coord] * 10 * y_factor, 1) )
+            barplot_x_data_post.append( round(connectors_post[c]['coords'][x_coord] * 10 * x_factor, 1) )        
+
+        #Make sure that there is at least 1 bin!
+        # max(..._data_...) will fail if array is empty!
+        max_barplot_x_data_pre = max(barplot_x_data_pre+[0])
+        max_barplot_y_data_pre = max(barplot_y_data_pre+[0])
+        max_barplot_x_data_post = max(barplot_x_data_post+[0])
+        max_barplot_y_data_post = max(barplot_y_data_post+[0])
+
+        min_barplot_x_data_pre = min(barplot_x_data_pre + [ max(barplot_x_data_pre + [0] ) ] )
+        min_barplot_y_data_pre = min(barplot_y_data_pre + [ max(barplot_y_data_pre + [0] ) ] )
+        min_barplot_x_data_post = min(barplot_x_data_post + [ max(barplot_x_data_post + [0] ) ] )
+        min_barplot_y_data_post = min(barplot_y_data_post + [ max(barplot_y_data_post + [0] ) ] ) 
+        
+        x_bins_pre =  max([ int ( ( max_barplot_x_data_pre - min_barplot_x_data_pre ) / bin_width ) ,1])
+        y_bins_pre =  max([ int ( ( max_barplot_y_data_pre - min_barplot_x_data_pre ) / bin_width ) ,1])
+        x_bins_post = max([ int ( ( max_barplot_x_data_post - min_barplot_y_data_post ) / bin_width ),1])    
+        y_bins_post = max([ int ( ( max_barplot_y_data_post - min_barplot_y_data_post ) / bin_width ),1])        
+        
+        
+        hist_x_pre , bin_edges_x_pre = np.histogram( barplot_x_data_pre, x_bins_pre )
+        hist_y_pre , bin_edges_y_pre = np.histogram( barplot_y_data_pre, y_bins_pre )
+        hist_x_post , bin_edges_x_post = np.histogram( barplot_x_data_post, x_bins_post )
+        hist_y_post , bin_edges_y_post = np.histogram( barplot_y_data_post, y_bins_post )
+
+        f.write('<g id="x-axis">')
+
+        #write horizontal barplot
+        for e,b in enumerate(hist_x_pre):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,0,255)" stroke-width="0"/> \n' \
+                    % ( bin_edges_x_pre[e], 0,
+                        bin_width,
+                        b * scale_factor
+                        )
+                    )
+        for e,b in enumerate(hist_x_post):
+            #Outputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(255,0,0)" stroke-width="0"/> \n' \
+                    % ( bin_edges_x_post[e], 0,
+                        bin_width,
+                        -b * scale_factor
+                        )
+                    )        
+
+        #horizontal line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( min([min_barplot_x_data_pre,min_barplot_x_data_post]) , 0,
+                            max([max_barplot_x_data_pre,max_barplot_x_data_post]) , 0                                       
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+        
+        f.write('<g id="y-axis">')
+
+        #write vertical barplot
+        for e,b in enumerate(hist_y_pre):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,0,255)" stroke-width="0"/> \n' \
+                    % ( 0, bin_edges_y_pre[e],
+                        b * scale_factor,
+                        bin_width
+                        )
+                    )
+        for e,b in enumerate(hist_y_post):
+            #Outputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(255,0,0)" stroke-width="0"/> \n' \
+                    % ( 0, bin_edges_y_post[e],
+                        -b * scale_factor,
+                        bin_width
+                        )
+                    )
+
+        #vertical line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( 0 , min([min_barplot_y_data_pre,min_barplot_y_data_post]),
+                            0 , max([max_barplot_y_data_pre,max_barplot_y_data_post]) 
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+
+        #Bin size bar
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 10 , 0 ,
+                            max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 10 + bin_width , 0                                       
+                           )
+        line_to_write += '<text x="%i" y = "%i" font-size="5"> \n %s \n </text>' \
+                        % ( max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 10,
+                            - 1,
+                            str(bin_width) + ' um'
+
+                            )
+        f.write(line_to_write + '\n')
+
+        #Axis scale
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 10 + bin_width, 0 ,
+                            max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 10 + bin_width, 5                                       
+                           )
+        line_to_write += '<text x="%i" y = "%f" font-size="5"> \n %s \n </text>' \
+                        % ( max([max_barplot_x_data_pre,max_barplot_x_data_post]) + 12 + bin_width, 
+                            4,                                        
+                            str(5 / scale_factor) + ' synapses'
+                            )
+        f.write(line_to_write + '\n')   
+
+
+        line_to_write = '</g>' 
+        f.write(line_to_write + '\n')
+        """
     
     def create_legends (self, f, input_weight_map, input_shape_map ,x_pos = 0,  source_neurons_list = [], connector_data = [], max_values = [], neuron_for_legend = 'none' ):        
         offsetX = 0
@@ -3217,7 +3687,7 @@ class RetrievePartners(Operator):
                                     description = "Choose if neuron should be truncated.")
     
     truncate_value = IntProperty(   name="Truncate by Value", 
-                                        min=0,
+                                        min=-10,
                                         max=10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
@@ -3431,7 +3901,7 @@ class CATMAIDtoBlender:
         connectors_pre = []
         child_count = {}   
         nodes_list = {}    
-        list_of_childs = {} 
+        list_of_childs = {}         
         
         #Truncate object name is necessary 
         if len(cellname) >= 60:
@@ -3474,6 +3944,11 @@ class CATMAIDtoBlender:
                 soma_node = entry[0]
                 print('Soma found')
 
+        #if no soma is found, then search for nerve ending (for sensory neurons)
+        #print(node_data[2])       
+        if 'nerve ending' in node_data[2] and soma_node is None:
+            soma_node = node_data[2]['nerve ending'][0]        
+
         if interpolate_virtual is True:
             print('Interpolating Virtual Nodes')
             list_of_childs,nodes_list = CATMAIDtoBlender.insert_virtual_nodes(list_of_childs,nodes_list)
@@ -3483,33 +3958,33 @@ class CATMAIDtoBlender:
         root_node = list_of_childs[None][0]            
 
         if truncate_neuron != 'none' and soma_node is None:
-            print('Unable to truncate main neurite - no soma found! Neuron skipped!')
+            print('Unable to truncate main neurite - no soma or nerve exit found! Neuron skipped!')
             return {'FINISHED'}
 
         if resampling > 1:            
-            new_child_list = CATMAIDtoBlender.resample_child_list(list_of_childs, root_node, soma_node, resampling)
+            new_child_list = nodes_to_keep = CATMAIDtoBlender.resample_child_list(list_of_childs, root_node, soma_node, resampling)
         else:
-            new_child_list = list_of_childs                 
+            new_child_list = nodes_to_keep = list_of_childs                 
 
         #print('Before Trunc',new_child_list)
 
+        #Do this is soma node has been found
         if truncate_neuron != 'none' and soma_node is not None:
             if soma_node != root_node:
                 print('Soma is not Root - Rerooting...')
-                new_child_list = CATMAIDtoBlender.reroot_child_list(new_child_list, soma_node, nodes_list)
+                new_child_list = nodes_to_keep = CATMAIDtoBlender.reroot_child_list(new_child_list, soma_node, nodes_list)
                 print('After Reroot:',len(new_child_list))
                 #print(new_child_list)            
             if truncate_neuron == 'main_neurite' and truncate_value > 0:
                 longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
-                new_child_list = CATMAIDtoBlender.trunc_neuron(longest_neurite_child_list,soma_node,nodes_list,truncate_value)
-            elif truncate_neuron == 'main_neurite' and truncate_value == 0:
+                new_child_list = nodes_to_keep = CATMAIDtoBlender.trunc_neuron(longest_neurite_child_list,soma_node,nodes_list,truncate_value)
+            elif truncate_neuron == 'main_neurite' and truncate_value <= 0:
                 longest_neurite_child_list = CATMAIDtoBlender.extract_longest_neurite(new_child_list)
-                new_child_list = longest_neurite_child_list
+                new_child_list = nodes_to_keep = longest_neurite_child_list
             elif truncate_neuron == 'strahler_index':
-                new_child_list = CATMAIDtoBlender.trunc_strahler(new_child_list,soma_node,truncate_value)                                       
+                nodes_to_keep = CATMAIDtoBlender.trunc_strahler(new_child_list,soma_node,truncate_value)                                       
             print('Neuron Truncated to',len(new_child_list),'nodes:')    
-            root_node = soma_node           
-            
+            root_node = soma_node
 
         #Pop 'None' node, so that it doesn't cause trouble later
         try:
@@ -3517,7 +3992,7 @@ class CATMAIDtoBlender:
         except:
             pass
 
-        Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling)            
+        Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep)            
 
         ### Search through connectors and create a list with coordinates
         if import_connectors is True:
@@ -3846,24 +4321,37 @@ class CATMAIDtoBlender:
 
     def trunc_strahler(list_of_childs,root_node,truncate_value):
 
-        print(list_of_childs)
+        #print(list_of_childs)
+
+        nodes_to_keep = dict(list_of_childs)
 
         strahler_index = CATMAIDtoBlender.calc_strahler_index(list_of_childs,root_node)
 
         max_strahler_index = strahler_index[root_node]        
 
         #First remove nodes that have a below threshold strahler index
-        for entry in strahler_index:
-            if strahler_index[entry] < (max_strahler_index - truncate_value):
-                list_of_childs.pop(entry)
+        if truncate_value >= 0:
+            for entry in strahler_index:
+                if strahler_index[entry] < (max_strahler_index - truncate_value):
+                    nodes_to_keep.pop(entry)
+        else:
+            for entry in strahler_index:
+                if strahler_index[entry] > math.fabs(truncate_value):
+                    nodes_to_keep.pop(entry)
 
         #Now remove connections to these nodes
-        for entry in list_of_childs:
-            for child in list(list_of_childs[entry]):
-                if strahler_index[child] < (max_strahler_index - truncate_value): 
-                    list_of_childs[entry].remove(child)       
+        if truncate_value >= 0:
+            for entry in nodes_to_keep:
+                for child in list(nodes_to_keep[entry]):
+                    if strahler_index[child] < (max_strahler_index - truncate_value): 
+                        nodes_to_keep[entry].remove(child)  
+        else:     
+            for entry in nodes_to_keep:
+                for child in list(nodes_to_keep[entry]):
+                    if strahler_index[child] > math.fabs(truncate_value): 
+                        nodes_to_keep[entry].remove(child)
 
-        return list_of_childs
+        return nodes_to_keep
 
 
     def calc_strahler_index(list_of_childs,root_node):
@@ -4027,9 +4515,10 @@ class ExportAllToSVG(Operator, ExportHelper):
     bl_idname = "exportall.to_svg"  
     bl_label = "Export neuron(s) (only curves!) to SVG"
     bl_options = {'PRESET'}
-    
-    all_neurons = BoolProperty(name="Process All Neurons", default = False,
-                                description = "Export all neurons in scene, not just the active neuron.")
+
+    which_neurons = EnumProperty(name = "For which Neuron(s)?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose for which neurons to connectors.")
     merge = BoolProperty(name="Merge into One", default = False,
                         description = "If exporting more than one neuron, render them all on top of each other, not in separate panels.")
     random_colors = BoolProperty(name="Use Random Colors", 
@@ -4060,6 +4549,8 @@ class ExportAllToSVG(Operator, ExportHelper):
     export_as_points = BoolProperty(name="Export as Pointcloud", 
                                     default = False,
                                     description ="Exports neurons as point cloud rather than edges (e.g. for dense core vesicles)")
+    barplot = BoolProperty(name="Add Barplot", default = False,
+                                    description = "Export Barplot along X/Y axis to show node distribution")
     export_ring_gland = BoolProperty(name="Export Ring Gland", 
                                      default = True,
                                      description = "Adds Outlines of Ring Gland to SVG")
@@ -4182,28 +4673,32 @@ class ExportAllToSVG(Operator, ExportHelper):
         f = open(self.filepath, 'w', encoding='utf-8')  
         f.write(self.svg_header)
 
-        if self.merge is True or self.all_neurons is True:
-            to_process = bpy.data.objects
-            
-        elif re.search('#.*',bpy.context.active_object.name) and bpy.context.active_object.type == 'CURVE':
-            to_process = []
-            to_process.append(bpy.context.active_object)
-            
-        elif self.merge is False:
-            print('Error: Active Object is Not a Neuron')
-            to_process = []
-            return
+        to_process = []
+        if self.which_neurons == 'Active':
+            if re.search('#.*',bpy.context.active_object.name) and bpy.context.active_object.type == 'CURVE':                
+                to_process.append(bpy.context.active_object)
+            else:
+                print('Error: Active Object is Not a Neuron')                
+                return
+        elif self.which_neurons == 'Selected':
+            for obj in bpy.context.selected_objects:
+                if re.search('#.*',obj.name) and obj.type == 'CURVE':                    
+                    to_process.append(obj) 
+        elif self.which_neurons == 'All':
+            for obj in bpy.data.objects:
+                if re.search('#.*',obj.name) and obj.type == 'CURVE':                    
+                    to_process.append(obj) 
         
         #Sort objects in to_process by color
         sorted_by_color = {}
-        for object in to_process:           
+        for obj in to_process:           
             try:                
-                color = str(object.active_material.diffuse_color)
+                color = str(obj.active_material.diffuse_color)
             except:
                 color = 'None'
             if color not in sorted_by_color:
                 sorted_by_color[color] = []
-            sorted_by_color[color].append(object)
+            sorted_by_color[color].append(obj)
         
         to_process_sorted = []
         for color in sorted_by_color:
@@ -4216,7 +4711,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                 neuron_count += 1
             
         colormap = ColorCreator.random_colors(neuron_count)
-        print(str(neuron_count) + ' colors created')
+        print ( str ( neuron_count) + ' colors created')
         
         if self.use_bevel is True:
             base_line_width = self.line_width        
@@ -4267,8 +4762,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                 if self.color_by_density is True and self.object_for_density == 'Synapses':   
                     print('Retrieving Connectors for Color by Density..')
                     skid = re.search('#(.*?) ',neuron.name).group(1)
-                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
-                    node_data = remote_instance.fetch( remote_compact_skeleton_url )
+                    node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
                     
                     #Reset density_data for every neuron!
                     density_data = []
@@ -4380,9 +4874,8 @@ class ExportAllToSVG(Operator, ExportHelper):
                 if self.color_by_inputs_outputs is True:
                     #Retrieve list of connectors for this neuron           
                     skid = re.search('#(.*?) ',neuron.name).group(1)
-                    print('Retrieving connector data for skid %s...' % skid)
-                    remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skid, 1, 0 )
-                    node_data = remote_instance.fetch( remote_compact_skeleton_url )
+                    print('Retrieving connector data for skid %s...' % skid)                    
+                    node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
                     
                     list_of_synapses = {}
                     
@@ -4571,9 +5064,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                                                                    + x_persp_targ +','+ y_persp_targ + ' '
                                                                    , density_count
                                                                    )
-                                                                  )  
-                            
-                                                            
+                                                                  )
     
                     polyline_front.append(polyline_front_temp) 
                     polyline_top.append(polyline_top_temp)  
@@ -4674,6 +5165,12 @@ class ExportAllToSVG(Operator, ExportHelper):
                                         % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius*soma_radius), str(color), str(color))
                         f.write(line_to_write + '\n')
 
+                    if self.barplot is True and self.merge is False:
+                        self.create_barplot( f, [neuron] , 0, 2 , x_factor = 1, y_factor = -1) 
+                    elif self.barplot is True and self.merge is True and first_neuron is True:
+                        self.create_barplot( f, to_process_sorted , 0, 2 , x_factor = 1, y_factor = -1) 
+
+
                     ### Add front brain shape
                     if self.merge is False or first_neuron is True:
                         f.write('\n' + brain_shape_front_string + '\n') 
@@ -4745,6 +5242,11 @@ class ExportAllToSVG(Operator, ExportHelper):
                         line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
                                         % (str(round(soma_pos[0]*10,1)),str(round(soma_pos[1]*-10,1)), str(self.basic_radius*soma_radius), str(color), str(color))
                         f.write(line_to_write + '\n')
+
+                    if self.barplot is True and self.merge is False:
+                        self.create_barplot( f, [neuron] , 0, 1 , x_factor = 1, y_factor = -1) 
+                    elif self.barplot is True and self.merge is True and first_neuron is True:
+                        self.create_barplot( f, to_process_sorted , 0, 1 , x_factor = 1, y_factor = -1)
                 
                     ### Add top brain shape
                     if self.merge is False or first_neuron is True:
@@ -4842,9 +5344,6 @@ class ExportAllToSVG(Operator, ExportHelper):
                         line_to_write = '<circle cx="%s" cy="%s" r="%s" fill="%s" stroke="%s" stroke-width="0.1"  />' \
                                         % (x_persp,y_persp, str(self.basic_radius*soma_radius), str(color), str(color))
                         f.write(line_to_write + '\n')
-                
-                    
-                                                 
                         
                     
                     line_to_write = '</g>'
@@ -4913,6 +5412,11 @@ class ExportAllToSVG(Operator, ExportHelper):
                                         % (str(round(soma_pos[1]*10,1)),str(round(soma_pos[2]*-10,1)), str(self.basic_radius*soma_radius), \
                                         str(color), str(color))
                         f.write(line_to_write + '\n')
+
+                    if self.barplot is True and self.merge is False:
+                        self.create_barplot( f, [neuron] , 1 , 2 , x_factor = 1, y_factor = -1) 
+                    elif self.barplot is True and self.merge is True and first_neuron is True:
+                        self.create_barplot( f, to_process_sorted , 1 , 2 , x_factor = 1, y_factor = -1)   
                 
                     ### Add lateral brain shape
                     if self.merge is False or first_neuron is True:
@@ -4935,8 +5439,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                                         str(neuron.name)
                                         )                
                     f.write(line_to_write + '\n')
-                    f.write('</g> \n \n')
-                
+                    f.write('</g> \n \n')                
                     offsetY_forText += 10 
                     
                 ### Add density info
@@ -4968,6 +5471,290 @@ class ExportAllToSVG(Operator, ExportHelper):
             self.line_width = base_line_width
         
         return{'FINISHED'} 
+
+    
+    def create_barplot(self, f, neurons_to_plot , x_coord, y_coord, x_factor = 1, y_factor = -1):
+        """
+        Creates Barplot for given svg based on distribution of nodes
+        """
+
+        to_plot = []
+
+        #First filter neurons_to_plot for non neurons
+        for neuron in neurons_to_plot:
+            if re.search('#.*',neuron.name) and neuron.type == 'CURVE': 
+                to_plot.append(neuron)
+
+        print(to_plot,x_coord,y_coord)
+
+        #Bin width is in 1/1000 nm = um
+        bin_width = 2
+        scale_factor = 0.2
+
+        all_nodes = { 'x' : [] , 'y' : [] }
+
+        for e in to_plot:
+            #Create list of all points for all splines
+            nodes_y = [round( n.co[y_coord] * 10 * y_factor , 1 ) for sp in e.data.splines for n in sp.points]
+            nodes_x = [round( n.co[x_coord] * 10 * x_factor , 1 ) for sp in e.data.splines for n in sp.points]
+            
+            all_nodes['x'] += nodes_x
+            all_nodes['y'] += nodes_y
+
+        #First get min and max values and bin numbers over all neurons 
+        all_max_x = max(all_nodes['x']+[0])
+        all_max_y = max(all_nodes['y']+[0])        
+
+        all_min_x = min(all_nodes['x'] + [ max(all_nodes['x'] + [0] ) ] )
+        all_min_y = min(all_nodes['y'] + [ max(all_nodes['y'] + [0] ) ] )
+
+        #Everthing starts with 
+        bin_sequences = {'x': list ( np.arange( all_min_x, all_max_x, bin_width ) ),
+                        'y': list ( np.arange( all_min_y, all_max_y, bin_width ) )
+                        }
+
+        #Create Histograms
+        histograms = { e : {} for e in to_plot }
+        for e in to_plot:
+            nodes_y = [round( n.co[y_coord] * 10 * y_factor , 1 ) for sp in e.data.splines for n in sp.points]
+            nodes_x = [round( n.co[x_coord] * 10 * x_factor , 1 ) for sp in e.data.splines for n in sp.points]
+
+            histograms[e]['x'] , bin_edges_x_pre = np.histogram( nodes_x, bin_sequences['x'] )
+            histograms[e]['y'] , bin_edges_y_pre = np.histogram( nodes_y, bin_sequences['y'] )        
+
+        #Now calculate mean and stdevs over all neurons
+        means = {}
+        stdevs = {}     
+        variances = {}   
+        stderror = {}
+        for d in ['x','y']:
+            print('!!!!',d)
+            means[d] = []
+            stdevs[d] = []
+            variances[d] = []
+            stderror[d] = []
+            #print([histograms[n][d] for n in neurons_to_plot],bin_sequences[d])
+            for i in range ( len( bin_sequences[d] ) - 1 ):                
+                #conversion to int from numpy.int32 is important because statistics.stdev fails otherwise
+                v = [ int ( histograms[n][d][i] ) for n in to_plot ]                
+                means[d].append ( sum ( v ) / len ( v ) )
+                #print(d,i,v,means[d],type(v[0]))
+                if len ( to_plot ) > 1:
+                    stdevs[d].append( statistics.stdev ( v ) )  
+                    variances[d].append( statistics.pvariance ( v ) )
+                    stderror[d].append( math.sqrt( statistics.pvariance ( v ) ) )
+                    print(v, sum ( v ) / len ( v ), math.sqrt( statistics.pvariance ( v ) ))
+
+        #!!!!!
+        #This defines which statistical value to use:
+        #Keep in mind that stdev is probably the best parameter to use
+        stats = stdevs
+
+        #Now start creating svg:            
+        line_to_write = '<g id="Barplot" transform="translate(0,0)">' 
+        f.write(line_to_write + '\n')
+
+        f.write('<g id="x-axis">')
+        #write horizontal barplot
+        for e,b in enumerate ( means['x'] ):
+            #Inputs
+            f.write( '<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,255,0)" stroke-width="0"/> \n' \
+                    % ( bin_sequences['x'][e], 0,
+                        bin_width,
+                        b * scale_factor
+                        )
+                    )
+
+        #Error bar
+        for e,b in enumerate ( means['x'] ):
+            if len ( to_plot ) > 1:
+                if stats['x'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( bin_sequences['x'][e] + 1/2 * bin_width, ( b * scale_factor ) + ( stats['x'][e] * scale_factor ),
+                            bin_sequences['x'][e] + 1/2 * bin_width, ( b * scale_factor ) - ( stats['x'][e] * scale_factor )
+                            ) 
+                        )        
+
+        #horizontal line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( all_min_x , 0,
+                            all_max_x , 0                                       
+                           )
+        f.write(line_to_write + '\n')
+
+        f.write('</g>')
+
+        f.write('<g id="y-axis">')
+
+        #write vertical barplot
+        for e,b in enumerate(means['y']):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,255,0)" stroke-width="0"/> \n' \
+                    % ( 0 , bin_sequences['y'][e],
+                        b * scale_factor,
+                        bin_width
+                        )
+                    )
+
+        #Error bar
+        for e,b in enumerate(means['y']):
+            if len ( to_plot ) > 1:
+                if stats['y'][e] != 0:
+                    f.write('<line x1="%f" y1="%f" x2="%f" y2="%f" style="stroke:rgb(0,0,0);stroke-width:0.25" /> \n' \
+                        % ( ( b * scale_factor ) + ( stats['y'][e] * scale_factor ), bin_sequences['y'][e] + 1/2 * bin_width, 
+                            ( b * scale_factor ) - ( stats['y'][e] * scale_factor ), bin_sequences['y'][e] + 1/2 * bin_width
+                            ) 
+                        )
+
+        #vertical line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( 0 , all_min_y,
+                            0 , all_max_y
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+
+        #Bin size bar
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( all_max_x + 10 , 0 ,
+                            all_max_x + 10 + bin_width , 0                                       
+                           )
+        line_to_write += '<text x="%i" y = "%i" font-size="5"> \n %s \n </text>' \
+                        % ( all_max_x + 10,
+                            - 1,
+                            str(bin_width) + ' um'
+
+                            )
+        f.write(line_to_write + '\n')
+
+        #Axis scale
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( all_max_x + 10 + bin_width, 0 ,
+                            all_max_x + 10 + bin_width, 5                                       
+                           )
+        line_to_write += '<text x="%i" y = "%f" font-size="5"> \n %s \n </text>' \
+                        % ( all_max_x + 12 + bin_width, 
+                            4,                                        
+                            str(5 / scale_factor) + ' nodes'
+                            )
+        f.write(line_to_write + '\n')
+
+        line_to_write = '</g>' 
+        f.write(line_to_write + '\n')
+
+        """
+        line_to_write = '<g id="Barplot" transform="translate(0,0)">'
+        f.write(line_to_write + '\n')
+        barplot_y_data = []
+        barplot_x_data = []
+
+        #Create list of all points for all splines
+        nodes = [n.co for sp in splines for n in sp.points]
+
+        #Gather coordinates of nodes
+        for n in nodes:
+            barplot_y_data.append( round(n[y_coord] * 10 * y_factor, 1) )
+            barplot_x_data.append( round(n[x_coord] * 10 * x_factor, 1) )
+
+        #Make sure that there is at least 1 bin!
+        # max(..._data_...) will fail if array is empty!
+        max_barplot_x_data = max(barplot_x_data)
+        max_barplot_y_data = max(barplot_y_data)
+
+        min_barplot_x_data = min(barplot_x_data)
+        min_barplot_y_data = min(barplot_y_data)
+        
+        x_bins =  max([ int ( ( max_barplot_x_data - min_barplot_x_data ) / bin_width ) ,1])
+        y_bins =  max([ int ( ( max_barplot_y_data - min_barplot_x_data ) / bin_width ) ,1])
+        
+        
+        hist_x , bin_edges_x = np.histogram( barplot_x_data, x_bins )
+        hist_y , bin_edges_y = np.histogram( barplot_y_data, y_bins )        
+
+        f.write('<g id="x-axis">')        
+
+        #write horizontal barplot
+        for e,b in enumerate(hist_x):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,255,0)" stroke-width="0"/> \n' \
+                    % ( bin_edges_x[e], 0,
+                        bin_width,
+                        b * scale_factor
+                        )
+                    )
+
+        
+        #This plots a line on top of the barplot
+        #line_plot_coords = [(x + (0.5 * bin_width) , y * scale_factor ) for x,y in zip(bin_edges_x,hist_x)]
+        #f.write('<path d="M %i,%i L %s" stroke="rgb(0,255,0)" stroke-width="0.5" fill="none"/> \n' \
+        #         % (line_plot_coords[0][0],line_plot_coords[0][1],
+        #            " ".join(str(p)[1:-1] for p in line_plot_coords[1:])
+        #            )
+        #        )
+        
+
+
+        #horizontal line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( min_barplot_x_data , 0,
+                            max_barplot_x_data , 0                                       
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+        
+        f.write('<g id="y-axis">')
+
+        #write vertical barplot
+        for e,b in enumerate(hist_y):
+            #Inputs
+            f.write('<rect x="%f" y="%f" width="%f" height="%f" fill="rgb(0,255,0)" stroke-width="0"/> \n' \
+                    % ( 0, bin_edges_y[e],
+                        b * scale_factor,
+                        bin_width
+                        )
+                    )        
+
+        #vertical line
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/>' \
+                        % ( 0 , min_barplot_y_data,
+                            0 , max_barplot_y_data 
+                           )
+        f.write(line_to_write + '\n') 
+
+        f.write('</g>')
+
+        #Bin size bar
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max_barplot_x_data + 10 , 0 ,
+                            max_barplot_x_data + 10 + bin_width , 0                                       
+                           )
+        line_to_write += '<text x="%i" y = "%i" font-size="5"> \n %s \n </text>' \
+                        % ( max_barplot_x_data + 10,
+                            - 1,
+                            str(bin_width) + ' um'
+
+                            )
+        f.write(line_to_write + '\n')
+
+        #Axis scale
+        line_to_write ='<path d="M%f,%f L%f,%f" stroke="rgb(0,0,0)" stroke-width="0.5"/> \n' \
+                        % ( max_barplot_x_data + 10 + bin_width, 0 ,
+                            max_barplot_x_data + 10 + bin_width, 5                                       
+                           )
+        line_to_write += '<text x="%i" y = "%f" font-size="5"> \n %s \n </text>' \
+                        % ( max_barplot_x_data + 12 + bin_width, 
+                            4,                                        
+                            str(5 / scale_factor) + ' nodes'
+                            )
+        f.write(line_to_write + '\n')   
+
+
+        line_to_write = '</g>' 
+        f.write(line_to_write + '\n')
+
+        """
     
 
 class Create_Mesh (Operator):
@@ -4975,15 +5762,18 @@ class Create_Mesh (Operator):
     bl_idname = "create.new_neuron"  
     bl_label = "Create New Neuron"  
 
-    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, random_colors = False, basic_radius = 0.01):
+    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, unify_materials = True):
         ### Takes Connector data and create spheres in layer 3!!!
         ### For Downstream targets: sphere radius refers to # of targets
         print('Creating connector meshes')   
         start_creation = time.clock()
          
         for connector in connectors_post:
-            #print('Creating connector %s' % connectors_post[connector]['id'])    
-            co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]    
+            #print('Creating connector %s' % connectors_post[connector]['id']) 
+            if basic_radius != -1:   
+                co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]    
+            else:
+                co_size = 0.01
             co_loc = connectors_post[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
@@ -4991,18 +5781,19 @@ class Create_Mesh (Operator):
                                                                     False, False, False, False, False, False, False, False, False, \
                                                                     False, False, False))            
             bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
-            bpy.ops.object.shade_smooth()            
-            #Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat', 0 , 0.8 , 0.8)
-
-            if random_colors is True:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, random.randrange(0,100)/100 , \
-                                            random.randrange(0,100)/100, random.randrange(0,100)/100)        
+            bpy.ops.object.shade_smooth()                        
+            
+            if unify_materials is False:
+                Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
             else:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, 1 , 0 , 0)        
+                Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])        
 
         for connector in connectors_pre:
             #print('Creating connector %s' % connectors_pre[connector]['id']) 
-            co_size = basic_radius
+            if basic_radius != -1:
+                co_size = basic_radius
+            else:
+                co_size = 0.01
             co_loc = connectors_pre[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
@@ -5010,19 +5801,18 @@ class Create_Mesh (Operator):
                                                                     False, False, False, False, False, False, False, False, False, \
                                                                     False, False, False))            
             bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
-            bpy.ops.object.shade_smooth()            
-
-            if random_colors is True:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, random.randrange(0,100)/100 , \
-                                            random.randrange(0,100)/100, random.randrange(0,100)/100)        
+            bpy.ops.object.shade_smooth()                        
+            
+            if unify_materials is False:
+                Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])       
             else:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, 0 , 0.8 , 0.8)       
+                Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])       
 
         print('Done in ' + str(time.clock()-start_creation)+'s')
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
 
 
-    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1):
+    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = []):
         ### Creates Neuron from Curve data that was imported from CATMAID
         #start_creation = time.clock()        
         now = datetime.datetime.now()        
@@ -5047,7 +5837,7 @@ class Create_Mesh (Operator):
         print('Creating Neuron %s  (%s nodes)' %(ob.name, len(child_list)))
 
         for child in child_list[root_node]:
-            Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu)
+            Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep)
 
         #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s')        
         Create_Mesh.assign_material (ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
@@ -5069,21 +5859,24 @@ class Create_Mesh (Operator):
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
         
 
-    def create_spline (start_node, first_child, nodes_dic, child_list, cu):
-        newSpline = cu.splines.new('POLY')
-            
-        ### Create start node            
-        newPoint = newSpline.points[-1]
-        newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
+    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep):
+        if start_node in nodes_to_keep or first_child in nodes_to_keep:
+            newSpline = cu.splines.new('POLY')
+                
+            ### Create start node            
+            newPoint = newSpline.points[-1]
+            newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
+
         active_node = first_child
         number_of_childs = len(child_list[active_node])
         ### nodes_created is a failsafe for while loop
         nodes_created = 0
             
         while nodes_created < 10000:
-            newSpline.points.add()
-            newPoint = newSpline.points[-1]
-            newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
+            if active_node in nodes_to_keep:
+                newSpline.points.add()
+                newPoint = newSpline.points[-1]
+                newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
             nodes_created += 1
             
             ### Stop after creation of leaf or branch node
@@ -5100,7 +5893,7 @@ class Create_Mesh (Operator):
             ### If active node is branch point, start new splines for each child    
         if number_of_childs  > 1:
             for child in child_list[active_node]:
-                Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu)
+                Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep)
 
     
     def make_neuron(neuron_name, index, XYZcoords, origin, edges, faces, convert_to_curve=True, soma = (0,0,0)): 
@@ -5296,15 +6089,30 @@ class Create_Mesh (Operator):
         ob.data.fill_mode = 'FULL'        
 
         
-    def assign_material (ob, material, diff_1=0.8, diff_2=0.8, diff_3=0.8):
-        ###Checks if material exists, if not is is created and assigned
-        if material not in bpy.data.materials:
-            new_mat = bpy.data.materials.new(material)
-            new_mat.diffuse_color[0] = diff_1
-            new_mat.diffuse_color[1] = diff_2            
-            new_mat.diffuse_color[2] = diff_3            
+    def assign_material (ob, material=None, diff_1=0.8, diff_2=0.8, diff_3=0.8):
+        #If Material is not none, check if material exists, if not is is created and assigned
+        if material:
+            if material not in bpy.data.materials:
+                new_mat = bpy.data.materials.new(material)
+                new_mat.diffuse_color[0] = diff_1
+                new_mat.diffuse_color[1] = diff_2            
+                new_mat.diffuse_color[2] = diff_3            
+            else:
+                new_mat = bpy.data.materials[material]
+        #If no material is provided, check if given color already exists for any generic material
         else:
-            new_mat = bpy.data.materials[material]
+            new_mat = None
+            for mat in bpy.data.materials:
+                if mat.diffuse_color[0:3] == (diff_1, diff_2, diff_3) and mat.name.startswith('Generic'):
+                    new_mat = mat
+                    break
+
+            if new_mat is None:
+                new_mat = bpy.data.materials.new('Generic Mat %f %f %f' % (diff_1, diff_2, diff_3))
+                new_mat.diffuse_color[0] = diff_1
+                new_mat.diffuse_color[1] = diff_2            
+                new_mat.diffuse_color[2] = diff_3  
+
             
         bpy.context.scene.objects.active = ob
         ob.select = True
@@ -5921,18 +6729,23 @@ class ColorBySimilarity(Operator):
                                 default = 0.2,
                                 description = 'Sets similarity threshold for picking clusters that will have the same color. 1 = perfect match; 0 = not similar at all.'
                                 )
+    use_saved = BoolProperty (
+                                name='Try using saved data',
+                                default = True,
+                                description = 'If true, will try to use previous data from this session. Uncheck to compute from scratch!'
+                                )
 
     def execute (self, context):
         #Get neurons first
         neurons = []
         skids = []   
-        for object in bpy.data.objects:
-            if object.name.startswith('#'):
+        for obj in bpy.data.objects:
+            if obj.name.startswith('#'):
                 try:
-                    skid = re.search('#(.*?) -',object.name).group(1)
-                    neurons.append(object)                
+                    skid = re.search('#(.*?) -',obj.name).group(1)
+                    neurons.append(obj)                
                     skids.append(skid)
-                    object['skid'] = skid
+                    obj['skid'] = skid
                 except:
                     pass
 
@@ -5953,26 +6766,50 @@ class ColorBySimilarity(Operator):
                         neuron_data[n['skid']].append(point.co)
                         neuron_parent_vectors[n['skid']].append(normal_parent_vector)
         elif self.compare == 'Synapse-Distr.':
-            print('Synapse comparison not yet implemented :(')
-            return {'FINISHED'}
+            synapse_data = {}
+            skeleton_data = get_3D_skeleton (skids, remote_instance, 1 , 0)
+            for i,n in enumerate(skids):
+                synapse_data[n] = skeleton_data[i][1]          
                         
         print('Done!')
 
-
-        matching_scores = {}
+        if self.use_saved is True:
+            try:
+                matching_scores
+            except:
+                print('Creating matching scores from scratch!')
+                matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
+                global matching_scores
+        else:
+            print('Creating matching scores from scratch!')
+            matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
+            global matching_scores
+        
         for i,neuronA in enumerate(neurons):                
             print('Comparing neuron', neuronA.name, '[',i,'of',len(neurons),']')
             #print('Resolution:', self.check_resolution(neuronA))  
             for neuronB in neurons:
-                if self.compare == 'Morphology':
-                    matching_scores[str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_morphology_matching_score(neuron_data[neuronA['skid']],
+                if self.compare == 'Morphology' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
+                    matching_scores[self.compare][str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_morphology_matching_score(
+                                                                                                                                    neuron_data[neuronA['skid']],
                                                                                                                                     neuron_parent_vectors[neuronA['skid']],
                                                                                                                                     neuron_data[neuronB['skid']],
                                                                                                                                     neuron_parent_vectors[neuronB['skid']],
-                                                                                                                                    0.2)
+                                                                                                                                    0.2
+                                                                                                                                   )
+                                                                                                ,5)
+                elif self.compare == 'Synapse-Distr.' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
+                     matching_scores[self.compare][str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_synapse_matching_score(
+                                                                                                                                    synapse_data[neuronA['skid']],
+                                                                                                                                    synapse_data[neuronB['skid']],
+                                                                                                                                    2000,
+                                                                                                                                    2000
+                                                                                                                                  )
                                                                                                 ,5)
 
-        all_clusters,merges_at = self.create_clusters(skids,matching_scores,self.method)    
+        print('Matchin scores:,',matching_scores[self.compare])
+
+        all_clusters,merges_at = self.create_clusters(skids,matching_scores[self.compare],self.method)    
 
         for i in range(len(merges_at)):
             try:
@@ -5980,7 +6817,7 @@ class ColorBySimilarity(Operator):
                     clusters_to_plot = all_clusters[i]
                     break
             except:
-                print('Morphology - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.cluster_at,merges_at[i]))
+                print('%s - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.compare,self.cluster_at,merges_at[i]))
                 print( all_clusters[i])
                 clusters_to_plot = all_clusters[i]                   
 
@@ -6001,6 +6838,52 @@ class ColorBySimilarity(Operator):
         #    print(entry,'\t',matching_scores[entry])
                 
         return{'FINISHED'}
+
+    def calc_synapse_matching_score(self,synapsesA,synapsesB,sigma=50,omega=500):
+        all_values = []
+
+        coordsA = {}
+        coordsB = {}
+
+        #Create numpy arrays for pre- and postsynaptic connectors separately,
+        #to allow comparison of only pre- with pre- and post- with postsynaptic sites
+        coordsA['presynapses'] = np.array([e[3:6] for e in synapsesA if e[2] == 0])
+        coordsA['postsynapses'] = np.array([e[3:6] for e in synapsesA if e[2] == 1])        
+
+        coordsB['presynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 0])
+        coordsB['postsynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 1])
+
+        for direction in ['presynapses','postsynapses']:
+            for synA in coordsA[direction]:
+                try:
+                    #Generate distance Matrix of point a and all points in nB
+                    d = np.sum((coordsB[direction]-synA)**2,axis=1)
+
+                    #Calculate final distance by taking the sqrt!
+                    min_dist = math.sqrt(d[d.argmin()])
+                    closest_syn = coordsB[direction][d.argmin()]                    
+
+                    #Distances of synA to all synapses of the same neuron
+                    dA = np.sum((coordsA[direction]-synA)**2,axis=1)
+                    around_synA = len([e for e in dA if math.sqrt(e) < omega])
+
+                    #Distances of closest synapses in B to all synapses of the same neuron
+                    dB = np.sum((coordsB[direction]-closest_syn)**2,axis=1)
+                    around_synB = len([e for e in dB if math.sqrt(e) < omega])
+
+                    this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * sigma**2))
+
+                except:
+                    #will fail if no pre-/postsynapses in coordsB
+                    this_synapse_value = 0
+
+                all_values.append(this_synapse_value) 
+
+        try:
+            return (sum(all_values)/len(all_values))    
+        except:
+            #When len(all_values) = 0
+            return 0
 
 
     def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB,sigma=50): 
