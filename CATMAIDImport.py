@@ -25,6 +25,9 @@
     - added self.report() to all error messages -> will show error message at cursor loc
     - connecting to CATMAID now does a test call by asking for user list
     - improved prepare 4 blender functionality
+    - added advanced tooltip to some functions
+    - added 'Active/Selected/All neurons' option to remaining functions
+    - optimized function icons
 
 
 ### V4.21 15/03/2015:
@@ -298,54 +301,59 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_similarity", text = "By Similarity", icon ='COLOR')
+        row.operator("color.by_similarity", text = "By Similarity", icon ='PARTICLE_PATH')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
 
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_spatial", text = "By Spatial Distr.", icon ='COLOR')
+        row.operator("color.by_spatial", text = "By Spatial Distr.", icon ='ROTATECENTER')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_spatial'
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_annotation", text = "By Annotation", icon ='COLOR')
+        row.operator("color.by_annotation", text = "By Annotation", icon ='SORTALPHA')
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='COLOR')
+        row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("color.by_pairs", text = "By Pairs", icon ='COLOR')       
+        row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'       
 
         
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
-        row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='COLOR')
+        row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='SCENE')
         
 
         layout.label('CATMAID Import')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("connect.to_catmaid", text = "Connect 2 CATMAID", icon = 'EXTERNAL_DATA')#.number=1
+        row.operator("connect.to_catmaid", text = "Connect 2 CATMAID", icon = 'PLUGIN')#.number=1
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.neuron", text = "Retrieve by SkeletonID", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.neuron", text = "Retrieve by SkeletonID", icon = 'ARMATURE_DATA')#.number=1
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'OUTLINER_DATA_FONT')#.number=1
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.partners", text = "Retrieve Partners", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.partners", text = "Retrieve Partners", icon = 'AUTOMERGE_ON')#.number=1
 
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.by_pairs", text = "Retrieve Paired", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.by_pairs", text = "Retrieve Paired", icon = 'MOD_ARRAY')#.number=1
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.by_pairs' 
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'        
-        row.operator("retrieve.in_volume", text = "Retrieve in Volume", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.in_volume", text = "Retrieve in Volume", icon = 'BBOX')#.number=1
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'        
@@ -353,18 +361,18 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'LOAD_FACTORY')#.number=1
+        row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'PMARKER_SEL')#.number=1
 
         
         layout.label(text="Export to SVG:")
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("exportall.to_svg", text = 'Export Morphology')
+        row.operator("exportall.to_svg", text = 'Export Morphology', icon = 'EXPORT')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("connectors.to_svg", text = 'Export Connectors')        
+        row.operator("connectors.to_svg", text = 'Export Connectors', icon = 'EXPORT')        
         
         
 class VersionManager(bpy.types.PropertyGroup):    
@@ -1153,7 +1161,10 @@ class RetrievePairs(Operator):
     bl_idname = "retrieve.by_pairs"  
     bl_label = "Retrieve paired Neurons of existing Neurons"    
     
-    selected_neurons = BoolProperty(name="Of Selected Neurons", default = True)
+    which_neurons = EnumProperty(       name = "For which Neuron(s)?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      default = 'All',
+                                      description = "Choose for which neurons to connectors.")
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = True,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
@@ -1186,17 +1197,33 @@ class RetrievePairs(Operator):
         
         neurons = []
         
-        if self.selected_neurons is True:
-            print('Retrieving annotation of neurons')
+        if self.which_neurons == 'Active':
+            if bpy.context.active_object != None:
+                if bpy.context.active_object.name.startswith('#'):
+                    try:                        
+                        neurons.append(re.search('#(.*?) -',neuron.name).group(1))
+                    except:
+                        pass
+                else:
+                    self.report({'ERROR'},'ERROR: Active object not a neuron')
+                    print('ERROR: Active object not a neuron!')
+            else:
+                self.report({'ERROR'},'ERROR: No active Object')
+                print('ERROR: No active Object')
+        elif self.which_neurons == 'Selected':
             for neuron in bpy.context.selected_objects:    
                 if neuron.name.startswith('#'):
                     try:                        
                         neurons.append(re.search('#(.*?) -',neuron.name).group(1))
                     except:
                         pass
-        else:
-            neurons = [re.search('#(.*?) -',bpy.context.active_object.name).group(1)]           
-
+        elif self.which_neurons == 'All':
+            for neuron in bpy.data.objects:    
+                if neuron.name.startswith('#'):
+                    try:                        
+                        neurons.append(re.search('#(.*?) -',neuron.name).group(1))
+                    except:
+                        pass
                 
         annotations = get_annotations_from_list (neurons, remote_instance)      
         
@@ -3667,7 +3694,11 @@ class RetrievePartners(Operator):
     bl_label = "What partners to retrieve?"
     bl_options = {'UNDO'}
     
-    selected = BoolProperty(name="From Selected Neurons?", default = False)   
+    which_neurons = EnumProperty(       name = "For which Neuron(s)?", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      default = 'All',
+                                      description = "Choose for which neurons to connectors.")
+    #selected = BoolProperty(name="From Selected Neurons?", default = False)   
     inputs = BoolProperty(name="Upstream Partners", default = True)          
     outputs = BoolProperty(name="Downstream Partners", default = True)
     minimum_synapses = IntProperty(name="Synapse Threshold", default = 5)
@@ -3708,29 +3739,29 @@ class RetrievePartners(Operator):
 
     def execute(self, context):  
         global remote_instance
+
+        to_process = []
+
+        if self.which_neurons == 'Active':
+            if bpy.context.active_object.name.startswith('#'):
+                to_process.append(object) 
+            else:
+                print ('ERROR: Active Object not a Neuron')
+                self.report({'ERROR'},'Active Object not a Neuron!') 
+        elif self.which_neurons == 'Selected':                                   
+            for obj in bpy.context.selected_objects:
+                if obj.name.startswith('#'):
+                    to_process.append(obj)
+        elif self.which_neurons == 'All':
+            for obj in bpy.data.objects:
+                if obj.name.startswith('#'):
+                    to_process.append(obj)            
         
-        if self.selected is True and len(bpy.context.selected_objects) != 0:            
-            to_process = []
-            print('Loading partners for all selected neurons...')            
-            for object in bpy.context.selected_objects:
-                if object.name.startswith('#'):
-                    to_process.append(object)   
-             
-            print('Retrieving partners for %i neurons...' % len(to_process))
-            skids = []
-            for n in to_process:
-                skids.append(re.search('#(.*?) -',n.name).group(1))
-            self.get_partners(skids)            
-        elif bpy.context.active_object is None:
-            print ('ERROR: No Object Active')
-            self.report({'ERROR'},'No Active Object!')   
-        elif '#' not in bpy.context.active_object.name:
-            print ('ERROR: Active Object not a Neuron')
-            self.report({'ERROR'},'Active Object not a Neuron!')
-        elif self.selected is False:
-            active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-            self.get_partners([active_skeleton])
-        
+        skids = []
+        for n in to_process:
+            skids.append(re.search('#(.*?) -',n.name).group(1))
+        print('Retrieving partners for %i neurons...' % len(skids))
+        self.get_partners(skids)
                         
         return {'FINISHED'}  
     
@@ -6796,8 +6827,7 @@ class ColorByAnnotation(Operator):
 
 def availableOptions(self, context):
     """
-    This function sets available options for calculating the matching score.
-    If 
+    This function sets available options for calculating the matching score.    
     """
     available_options = [('Morphology','Morphology','Morphology')]
     if connected:
@@ -6807,11 +6837,15 @@ def availableOptions(self, context):
     return available_options            
 
 class ColorBySimilarity(Operator):
-    """Color neurons by similarity of morphology or synapse distribution"""  
+    """Color neurons by similarity"""  
     bl_idname = "color.by_similarity"  
     bl_label = "Color neurons by similarity of morphology or synapse distribution" 
     bl_options = {'UNDO'}
 
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose which neurons to reload.",
+                                      default = 'All')
     compare = EnumProperty( name='Compare',
                             items=availableOptions
                             )
@@ -6841,17 +6875,29 @@ class ColorBySimilarity(Operator):
         #Get neurons first
         neurons = []
         neuron_names = {}
-        skids = []   
-        for obj in bpy.data.objects:
-            if obj.name.startswith('#'):
-                try:
-                    skid = re.search('#(.*?) -',obj.name).group(1)
-                    neurons.append(obj)                
-                    skids.append(skid)
-                    obj['skid'] = skid
-                    neuron_names[skid] = obj.name
-                except:
-                    pass
+        skids = []
+        if self.which_neurons == 'All':   
+            for obj in bpy.data.objects:
+                if obj.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',obj.name).group(1)
+                        neurons.append(obj)                
+                        skids.append(skid)
+                        obj['skid'] = skid
+                        neuron_names[skid] = obj.name
+                    except:
+                        pass
+        elif self.which_neurons == 'Selected':
+            for obj in bpy.context.selected_objects:
+                if obj.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',obj.name).group(1)
+                        neurons.append(obj)              
+                        skids.append(skid)
+                        obj['skid'] = skid
+                        neuron_names[skid] = obj.name
+                    except:
+                        pass
 
         print('Collecting data of %i neurons' % len(neurons))
         if self.compare == 'Morphology':
@@ -6944,9 +6990,10 @@ class ColorBySimilarity(Operator):
 
         if self.save_dendrogram is True and bpy.data.filepath != '':
             try:
+                svg_file = os.path.join ( os.path.dirname( bpy.data.filepath ) , 'dendrogram.svg' )
                 self.plot_dendrogram(skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', neuron_names , self.cluster_at)
                 print('Dendrogram.svg created in ', os.path.dirname( bpy.data.filepath ))
-                self.report({'INFO'},'dendrogram at ' + os.path.dirname( bpy.data.filepath  + '\\' + filename) )
+                self.report({'INFO'},'dendrogram at ' + svg_file )
             except:
                 self.report({'ERROR'},'Could not create dendrogram. See Console!') 
                 self.report({'INFO'},'ERROR. See Console!') 
@@ -7204,8 +7251,10 @@ class ColorBySimilarity(Operator):
         svg_header =    '<svg xmlns="http://www.w3.org/2000/svg" version="1.1" style="background:white">\n'
         text_color = (0,0,0)
 
+        svg_file = os.path.join ( os.path.dirname( bpy.data.filepath ) , 'dendrogram.svg' )
+
         #Now create svg
-        with open( os.path.dirname( bpy.data.filepath ) + '\\' + filename, 'w', encoding='utf-8') as f:  
+        with open( svg_file, 'w', encoding='utf-8') as f:  
             f.write(svg_header)   
 
             #Write neurons first as they are sorted in the last cluster
@@ -7338,6 +7387,41 @@ class ColorBySimilarity(Operator):
             f.close()
 
         return 
+
+class DisplayHelp(Operator):
+    """Displays popup with additional help"""  
+    bl_idname = "display.help"  
+    bl_label = "Advanced Tooltip" 
+    
+    entry = StringProperty(name="which entry to show", default = '',options={'HIDDEN'})
+
+    def execute (self, context):        
+        return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout 
+        if self.entry == 'color.by_similarity':            
+            layout.label(text='This function colors neurons based on how similar they are in respect ')
+            layout.label(text='to either their morphology or their synapse placement.')
+            layout.label(text='Morphological similarity is based on Kohl et al. (2013, Cell). ')
+            layout.label(text='Synapse similarity is based on Schlegel et al (2016, bioRxiv).')
+            layout.label(text='Dendrogram is created in the same directory as your blend file.')
+        elif self.entry == 'color.by_pairs':
+            layout.label(text='Gives paired neurons the same color. Pairing is based on annotations:')
+            layout.label(text='Neuron needs to have a <paired with #skid> annotation. For example')
+            layout.label(text='<paired with #1874652>')
+        elif self.entry == 'color.by_spatial':
+            layout.label(text='This function colors neurons based on spatial clustering of their somas.')
+            layout.label(text='Uses the k-Mean algorithm. You need to set the number of clusters you')
+            layout.label(text='expect and the algorithm finds clusters with smallest variance.')
+        elif self.entry == 'retrieve.by_pairs':
+            layout.label(text='Retrieves neurons paired with already the loaded neurons. Pairing is based')
+            layout.label(text='on annotations: neuron needs to have a <paired with #skid> annotation.')
+            layout.label(text='For example <paired with #1874652>')
+
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self,width=400)
     
 
 class ColorBySpatialDistribution(Operator):
