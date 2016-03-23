@@ -1,16 +1,21 @@
 CATMAID-to-Blender
 ==================
 
-Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATMAID](https://github.com/acardona/CATMAID "CATMAID Repo") servers and request data. Tested with Blender 2.6x and 2.7x
+Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATMAID](https://github.com/acardona/CATMAID "CATMAID Repo") servers and request data. Tested with Blender 2.77
 
 ## Installation:
+Option A:
 1. Download CATMAIDImport.py and place in \Blender\...\scripts\addons
 2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
+Option B:
+1. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> 'Install from File'
+2. Activate by checkbox and 'Save User Setting'
 
 ## Before First Use:
-Open CATMAIDImport.py, search for 'server_url' variable and set to your server's url and restart Blender
+Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
+You may also set credentials to be saved for convenience.
 
-![server_url](https://cloud.githubusercontent.com/assets/7161148/5357317/7ab20c38-7fa6-11e4-82d7-3b7d3e039a69.PNG)
+![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
 
 ## Tokens:
 The CATMAID API authorizes requests using an API token tied to user account instead of a username and password.
