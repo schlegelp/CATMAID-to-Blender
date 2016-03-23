@@ -19,6 +19,17 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.3 23/03/2015:
+    - changed addon name to CATMAIDImport - needs to be the same as bl_label of Addon preference class
+    - added Addon Settings for credentials and server url
+    - added self.report() to all error messages -> will show error message at cursor loc
+    - connecting to CATMAID now does a test call by asking for user list
+    - improved prepare 4 blender functionality
+
+
+### V4.21 15/03/2015:
+    - added option to export dendrogram svg of similarity clustering
+
 ### V4.2 14/03/2015:
     - added option to export barplot to SVG export- this will export distribution of pre-, postsynaptic sites or node count along vertical 
       and horizontal axis
@@ -223,38 +234,18 @@ import numpy as np
 import base64
 import statistics
 
-from bpy.types import Operator
+from bpy.types import Operator, AddonPreferences
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
 from bpy.props import FloatVectorProperty, FloatProperty, StringProperty, BoolProperty, EnumProperty, IntProperty
 
-####
-#Retrieve credentials from PW.txt
-#Change file path as needed:
-pw_file = 'c:\\Program Files\\Blender Foundation\\Blender\\2.68\\scripts\\addons\\PW.txt'
-
-try:
-    with open(pw_file,'r') as f:        
-        http_user = f.readline()[:-1]
-        http_pw = f.readline()[:-1]
-        token = f.readline()  #no new line after this one
-    f.close()
-except:    
-    print("No File containing credentials found! You will have to enter them by hand :(")
-    http_user = ''
-    http_pw = ''
-    token = ''
-###
-
 remote_instance = None
 connected = False
-server_url = 'https://neurocean.janelia.org/catmaidL1'
-project_id = 1
 
 bl_info = {
- "name": "Import/Export Neuron from CATMAID",
+ "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (4, 2, 0),
- "blender": (2, 7, 1),
+ "version": (4, 3, 0),
+ "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
  "warning": "",
@@ -264,7 +255,7 @@ bl_info = {
  
  
 class CATMAIDimportPanel(bpy.types.Panel):
-    """Creates Menu in Properties - scene """
+    """Creates Menu in Properties - Scene """
     bl_label = "CATMAID Import"
     bl_space_type = "PROPERTIES"
     bl_region_type = "WINDOW"
@@ -275,7 +266,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         layout = self.layout   
         
         #Version Check
-        config = bpy.data.scenes[0].CONFIG_VariableManager               
+        config = bpy.data.scenes[0].CONFIG_VersionManager               
         layout.label(text="Script Versions")
         layout.label(text="Your System: %s" % str(round(config.current_version,3)))
         if config.latest_version == 0:
@@ -294,7 +285,6 @@ class CATMAIDimportPanel(bpy.types.Panel):
             
         if config.message != '':
             print('Message from Github: %s' % config.message)
-
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -326,10 +316,11 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("color.by_pairs", text = "By Pairs", icon ='COLOR')       
 
+        
         row = layout.row(align=False)
         row.alignment = 'EXPAND'
         row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='COLOR')
-
+        
 
         layout.label('CATMAID Import')
 
@@ -376,7 +367,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("connectors.to_svg", text = 'Export Connectors')        
         
         
-class VariableManager(bpy.types.PropertyGroup):    
+class VersionManager(bpy.types.PropertyGroup):    
     current_version = bpy.props.FloatProperty(name="Your Script Version", default=0,min=0, description="Current Version of the Script you are using")
     latest_version = bpy.props.FloatProperty(name="Latest Version", default=0,min=0, description="Latest Version on Github")
     last_stable_version = bpy.props.FloatProperty(name="Last Stable Version", default=0,min=0, description="Last Stable Version of the Script")
@@ -416,12 +407,13 @@ class get_version_info(Operator):
             print('Latest version on Github: ', latest_version)              
         except:
             print('Error fetching info on latest version')
+            self.report({'ERROR'},'Error fetching latest info')
             latest_version = 0
             last_stable = 0
             new_features = ''
             message = ''
 
-        config = bpy.data.scenes[0].CONFIG_VariableManager    
+        config = bpy.data.scenes[0].CONFIG_VersionManager    
         config.current_version = current_version
         config.latest_version = float(latest_version)
         config.last_stable_version = float(last_stable)
@@ -601,7 +593,7 @@ def get_annotations_from_list (skid_list, remote_instance):
 
     annotation_list_temp = remote_instance.fetch( remote_get_annotations_url , get_annotations_postdata )
     
-    print(annotation_list_temp)
+    #print(annotation_list_temp)
     
     annotation_list = {}    
 
@@ -611,7 +603,7 @@ def get_annotations_from_list (skid_list, remote_instance):
             annotation_id = entry['id']
             annotation_list[skid].append(annotation_list_temp['annotations'][str(annotation_id)])              
 
-    print('%i retrieved' % len(annotation_list))
+    print('Annotations for %i neurons retrieved' % len(annotation_list))
     
     #Returns dictionary: annotation_list = {skid1 : [annotation1,annotation2,....], skid2: []}
    
@@ -981,7 +973,7 @@ class UpdateNeurons(Operator):
                     else:
                         neurons_to_reload[neuron.name]['resampling'] = 1
                 except:
-                    print('Unable to process neuron', neuron.name)
+                    print('Unable to process neuron', neuron.name)                    
     
         print(len(neurons_to_reload),'neurons to reload:',neurons_to_reload)
 
@@ -1079,8 +1071,7 @@ class RetrieveNeuron(Operator):
 
         self.count = 1
         
-        for skid in skeletons_to_retrieve:           
-        
+        for skid in skeletons_to_retrieve:
             ### Check if skeleton id has only numbers
             if re.search('[a-zA-Z]', self.skeleton_id):
                 print ('Invalid Skeleton ID')                     
@@ -1094,10 +1085,12 @@ class RetrieveNeuron(Operator):
                     errors.append(error_temp)
                 
         if len(errors) == 0:
-            print('Success! %i neurons imported' % len(skeletons_to_retrieve))
+            msg = 'Success! %i neurons imported' % len(skeletons_to_retrieve)
+            self.report({'INFO'}, msg)
 
         else:
             print('%i Error(s) while Importing:' % len(errors))
+            self.report({'ERROR'},'Error(s) while importing (see console)')
 
             for entry in errors:
                 print(entry)
@@ -1218,10 +1211,12 @@ class RetrievePairs(Operator):
                         #Filter for errors in annotation:
                         if neuron == paired_skid:
                             print('Warning - Neuron %s paired with itself' % str(neuron))
+                            self.report({'ERROR'},'Error(s) occurred: see console')
                             continue
                             
                         if paired_skid != None:
                             print('Warning - Multiple paired Annotations found for neuron %s! Neuron skipped!' % str(neuron))
+                            self.report({'ERROR'},'Error(s) occurred: see console')
                             paired_skid = None
                             continue
                             
@@ -1231,7 +1226,8 @@ class RetrievePairs(Operator):
                     
             if paired_skid != None:
                 if paired_skid in paired:
-                    print('Warning - Neuron %s annotated as paired in multiple Neurons!' % str(paired_skid))                    
+                    print('Warning - Neuron %s annotated as paired in multiple Neurons!' % str(paired_skid))
+                    self.report({'ERROR'},'Error(s) occurred: see console')
                 else:
                     paired.append(paired_skid)
                 
@@ -1249,6 +1245,7 @@ class RetrievePairs(Operator):
         
         if len(neuron_names) < len(paired):
             print('Warning! Wrong paired skid(s) in annotations found!')
+            self.report({'ERROR'},'Error(s) occurred: see console')
                 
         for skid in paired:            
             print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(paired)))
@@ -1257,6 +1254,7 @@ class RetrievePairs(Operator):
                 count += 1         
             except:
                 print('Error importing skid %s - wrong annotated skid?' %skid)
+                self.report({'ERROR'},'Error(s) occurred: see console')
         
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
@@ -1383,6 +1381,7 @@ class RetrieveByAnnotation(Operator):
             self.retrieve_annotated(self.annotation, annotation_id)
         else:
             print('Annotation not found in List! Import stopped!')
+            self.report({'ERROR'},'Annotation not found!')
         
         return{'FINISHED'}
     
@@ -1486,8 +1485,10 @@ class RetrieveConnectors(Operator):
         
         if self.which_neurons == 'Active':
             if bpy.context.active_object is None:
+                self.report({'ERROR'},'No Active Object!')
                 print ('No Object Active')
             elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name:
+                self.report({'ERROR'},'Active Object not a Neuron!')
                 print ('Active Object not a Neuron') 
             else:                      
                 active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
@@ -1758,10 +1759,12 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
         if self.which_neurons == 'Active':
             if bpy.context.active_object is None and self.which_neurons == 'Active':
-                print ('No Object Active')       
+                print ('No Object Active')
+                self.report({'ERROR'},'No Active Object!')       
                 return
             elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.which_neurons == 'Active':
                 print ('Active Object not a Neuron') 
+                self.report({'ERROR'},'Active Object not a Neuron!')
                 return
             active_skid = re.search('#(.*?) -',bpy.context.active_object.name).group(1)                
             skids_to_export.append(active_skid)
@@ -2240,7 +2243,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
                             density_data.append(node.co)
                 #print(density_data)
             except:
-                print('Unable to create density data for object!')  
+                print('ERROR: Unable to create density data for object!') 
+                self.report({'ERROR'},'Error(s) occurred: see console')
             
             #Fill density_color_map with density counts first and get max_density
             for neuron in connector_data:
@@ -2971,6 +2975,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         f.write(svg_end)
         f.close()
         print('Export finished')
+        self.report({'INFO'},'Export finished! See console for details')
         
         return {'FINISHED'}
 
@@ -3402,7 +3407,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
             f.write(line_to_write + '\n')
             
         if self.color_by_strength is True and self.merge is True:
-            print('Cannot create Scale for Synaptic Strength if Merged: heterogenous data. Do not merge data.')
+            print('ERROR: Cannot create scale for synaptic strength if merged: heterogenous data. Do not merge data.')
+            self.report({'ERROR'},'Error(s) occurred: see console')
             
         return{'FINISHED'}    
     
@@ -3447,7 +3453,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
             if neuron not in self.neuron_names and neuron != None:
                 skids_to_check.append(neuron)
             elif neuron not in self.neuron_names:
-                print('Invalid Neuron Name found: %s' % neuron )
+                print('ERROR: Invalid Neuron Name found: %s' % neuron )
+                self.report({'ERROR'},'Error(s) occurred: see console')
         
         #print('Checking Skeleton IDs:')
         #print(skids_to_check)
@@ -3715,9 +3722,11 @@ class RetrievePartners(Operator):
                 skids.append(re.search('#(.*?) -',n.name).group(1))
             self.get_partners(skids)            
         elif bpy.context.active_object is None:
-            print ('No Object Active')        
+            print ('ERROR: No Object Active')
+            self.report({'ERROR'},'No Active Object!')   
         elif '#' not in bpy.context.active_object.name:
-            print ('Active Object not a Neuron')
+            print ('ERROR: Active Object not a Neuron')
+            self.report({'ERROR'},'Active Object not a Neuron!')
         elif self.selected is False:
             active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
             self.get_partners([active_skeleton])
@@ -3796,7 +3805,7 @@ class RetrievePartners(Operator):
                             if entry == tag:
                                 tag_found = True
                 except:
-                    print('%s has no annotations - not imported' % skid)
+                    print('WARNING: %s has no annotations - not imported' % skid)
                     annotations[skid] = 'no annotations found'
             else:
                 tag_found = True
@@ -3804,7 +3813,7 @@ class RetrievePartners(Operator):
             i += 1
             
             if tag_found == False:
-                print('Tag not found for %s: %s' % (neuron_names[skid],str(annotations[skid])))
+                print('WARNING: Tag not found for %s: %s' % (neuron_names[skid],str(annotations[skid])))
                 continue           
                        
             print('Loading above-threshold partner: %s  [%i of %i]' % (neuron_names[skid],i,total_number))           
@@ -3855,7 +3864,7 @@ class ColorCreator():
 
 class ShapeCreator:
     """
-    Class used to create distinctive shapes:
+    Class used to create distinctive shapes for svg export:
     Starts with a triangle -> pentagon -> etc.       
     """  
 
@@ -3906,12 +3915,12 @@ class CATMAIDtoBlender:
         #Truncate object name is necessary 
         if len(cellname) >= 60:
             cellname = cellname[:56] +'...'
-            print('Object name too long - truncated: ', cellname)
+            print('WARNING: Object name too long - truncated: ', cellname)
         
         object_name = '#' + cellname     
         
         if object_name in bpy.data.objects:
-            print('Neuron %s already exists!' % cellname)
+            print('WARNING: Neuron %s already exists!' % cellname)
             return{'FINISHED'}
         
         print('Reading node data..')    
@@ -3958,7 +3967,7 @@ class CATMAIDtoBlender:
         root_node = list_of_childs[None][0]            
 
         if truncate_neuron != 'none' and soma_node is None:
-            print('Unable to truncate main neurite - no soma or nerve exit found! Neuron skipped!')
+            print('WARNING: Unable to truncate main neurite - no soma or nerve exit found! Neuron skipped!')
             return {'FINISHED'}
 
         if resampling > 1:            
@@ -4172,7 +4181,7 @@ class CATMAIDtoBlender:
                 fork = True                
                 for child in list_of_childs[this_node]:                    
                     #if this_node in list_of_childs[child]:
-                    #    print('ATTENTION! Circular relation:',this_node,child)
+                    #    print('WARNING! Circular relation:',this_node,child)
 
                     new_child_list = CATMAIDtoBlender.till_next_fork( list_of_childs, int(child), nodes_list, maximum_length - length , new_child_list)
             elif len(list_of_childs[this_node]) == 1:
@@ -4440,9 +4449,7 @@ class CATMAIDtoBlender:
 
             #Remove those starting_points that could be processed in this run before the next iteration
             for node in starting_points_done:
-                starting_points.remove(node)
-
-        print('Done')
+                starting_points.remove(node)        
 
         return  strahler_index
 
@@ -4450,25 +4457,31 @@ class CATMAIDtoBlender:
 
 
 class ConnectToCATMAID(Operator):      
-    """Connects to CATMAID database using given credentials"""
+    """Creates CATMAID remote instances using given credentials"""
     bl_idname = "connect.to_catmaid"  
-    bl_label = "Enter Credentials"    
+    bl_label = "Enter Credentials and press OK"    
     
     local_http_user = StringProperty(name="HTTP User")
-    #subtype = 'PASSWORD' seems to be buggy in Blender 2.71
-    #local_http_pw = StringProperty(name="HTTP Password", subtype = 'PASSWORD')
-    local_http_pw = StringProperty(name="HTTP Password")
+    #subtype = 'PASSWORD' seems to be buggy in Blender 2.71 -> works fine in 2.77    
+    local_http_pw = StringProperty( name="HTTP Password",
+                                    subtype='PASSWORD')
     local_token = StringProperty(name="Token",
-                                description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")
-    #local_catmaid_user = StringProperty(name="CATMAID User")
+                                description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")    
+    local_server_url = StringProperty(name="Server Url")    
+    local_project_id = IntProperty(name='Project ID', default = 0)
 
-    #subtype = 'PASSWORD' seems to be buggy in Blender 2.71    
+    #save_prefs = BoolProperty(name='Save credentials', default = True, description = 'Saves credentials in addon preferences: User Preferences -> Add-ons -> CATMAIDImport -> Preferences')
+
+    #Old settings from before API token was introduced
+    #local_catmaid_user = StringProperty(name="CATMAID User")
+    #subtype = 'PASSWORD' seems to be buggy in Blender 2.71 -> works fine in 2.77   
     #local_catmaid_pw = StringProperty(name="CATMAID Password", subtype = 'PASSWORD')
-    #local_catmaid_pw = StringProperty(name="CATMAID Password")
-    standard_pid = IntProperty(name='Project ID', default = project_id)
+    
     
     def execute(self, context):               
-        global remote_instance, server_url, connected, project_id
+        global remote_instance, connected, project_id
+
+        addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences       
         
         #Check for latest version of the Script
         get_version_info.check_version(context)
@@ -4479,7 +4492,7 @@ class ConnectToCATMAID(Operator):
         print('Token: %s' % self.local_token)        
 
         #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, \                                           self.local_http_pw )          
-        remote_instance = CatmaidInstance( server_url, self.local_http_user, self.local_http_pw, self.local_token )      
+        remote_instance = CatmaidInstance( self.local_server_url, self.local_http_user, self.local_http_pw, self.local_token )      
 
         """
         response = json.loads( remote_instance.auth().decode( 'utf-8' ) )
@@ -4492,19 +4505,61 @@ class ConnectToCATMAID(Operator):
             print ('Connection successful')
             connected = True
         """
-          
-        connected = True    
+
+        """
+        #Save prefs does not work as of yet b/c the user preferences are being reset after each restart.
+        if self.save_prefs:            
+            addon_prefs.http_user = self.local_http_user
+            addon_prefs.http_pw = self.local_http_pw
+            addon_prefs.token = self.local_token
+            addon_prefs.project_id = self.local_project_id
+            self.report({'INFO'},'Credentials saved!')
+        else:
+            addon_prefs.http_user = ''
+            addon_prefs.http_pw = ''
+            addon_prefs.token = ''            
+            self.report({'INFO'},'Credentials cleared!')
+        """
+
+        #Retrieve user list, to test if PW was correct:
+        try:
+            response = remote_instance.fetch( remote_instance.get_user_list() )
+            connected = True    
+            self.report({'INFO'},'Connection successful')
+            print('Test call successful')
+        except:
+            self.report({'ERROR'},'Connection failed: see console')
+            print('ERROR: Test call to server failed. Credentials incorrect?')
         #Set standard project ID
-        project_id = self.standard_pid
+        project_id = self.local_project_id
         
         return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row(align=True)
+        row.prop(self, "local_http_user")
+        row = layout.row(align=True)
+        row.prop(self, "local_http_pw")
+        row = layout.row(align=True)
+        row.prop(self, "local_token")        
+        row = layout.row(align=True)
+        row.prop(self, "local_project_id")
+        row = layout.row(align=True)
+        row.prop(self, "local_server_url")
+        #row = layout.row(align=True)
+        #row.prop(self, "save_prefs")
+
+        layout.label(text="Permanently set credentials and server url in addon prefs.")
      
     
     def invoke(self, context, event):
-        global catmaid_user, http_user, http_pw, catmaid_pw
-        self.local_http_user = http_user
-        self.local_token = token
-        self.local_http_pw = http_pw
+        addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences        
+        self.local_http_user = addon_prefs.http_user
+        self.local_token = addon_prefs.token
+        self.local_http_pw = addon_prefs.http_pw
+        self.local_project_id = addon_prefs.project_id
+        self.local_server_url = addon_prefs.server_url
         #self.local_catmaid_user = catmaid_user
         #self.local_catmaid_pw = catmaid_pw
         return context.window_manager.invoke_props_dialog(self)      
@@ -4619,11 +4674,13 @@ class ExportAllToSVG(Operator, ExportHelper):
         
         #Check Connection to CATMAID server as requirement for this option to work
         if self.color_by_inputs_outputs is True and connected is False:
-            print('You need to connect to CATMAID server first to use <Color by Input/Output Ratio>!')                
+            print('ERROR: You need to connect to CATMAID server first to use <Color by Input/Output Ratio>!') 
+            self.report({'ERROR'},'Error(s) occurred - cannot color by input/output: see console')
             self.color_by_inputs_outputs = False
             
         if self.color_by_density is True and self.object_for_density == 'Synapses' and connected is False:
-                print('You need to connect to CATMAID server first to use <Color by Synapse Density>!')                
+                print('ERROR: You need to connect to CATMAID server first to use <Color by Synapse Density>!')
+                self.report({'ERROR'},'Error(s) occurred - cannot color by synapse density: see console')
                 self.color_by_density = False       
         
         manual_max = None       
@@ -4655,7 +4712,8 @@ class ExportAllToSVG(Operator, ExportHelper):
                             density_data.append(node.co)
                 #print(density_data)
             except:
-                print('Unable to create density data for object!')  
+                print('ERROR: Unable to create density data for object!') 
+                self.report({'ERROR'},'Error(s) occurred: see console')
 
         brain_shape_top_string = '<g id="brain shape top">\n <polyline points="28.3,-5.8 34.0,-7.1 38.0,-9.4 45.1,-15.5 50.8,-20.6 57.7,-25.4 59.6,-25.6 63.2,-22.8 67.7,-18.7 70.7,-17.2 74.6,-14.3 78.1,-12.8 84.3,-12.6 87.7,-15.5 91.8,-20.9 98.1,-32.4 99.9,-38.3 105.2,-48.9 106.1,-56.4 105.6,-70.1 103.2,-75.8 97.7,-82.0 92.5,-87.2 88.8,-89.1 82.6,-90.0 75.0,-89.9 67.4,-89.6 60.8,-85.6 55.3,-77.2 52.4,-70.2 51.9,-56.7 55.0,-47.0 55.9,-36.4 56.0,-32.1 54.3,-31.1 51.0,-33.4 50.7,-42.5 52.7,-48.6 49.9,-58.4 44.3,-70.8 37.4,-80.9 33.1,-84.0 24.7,-86.0 14.2,-83.9 8.3,-79.1 2.9,-68.3 1.3,-53.5 2.5,-46.9 3.0,-38.3 6.3,-28.2 10.9,-18.7 16.3,-9.7 22.2,-6.4 28.3,-5.8" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="88.8,-89.1 90.9,-97.7 92.9,-111.3 95.6,-125.6 96.7,-139.4 95.9,-152.0 92.8,-170.2 89.4,-191.0 87.2,-203.7 80.6,-216.6 73.4,-228.3 64.5,-239.9 56.4,-247.3 48.8,-246.9 39.0,-238.3 29.6,-226.9 24.7,-212.0 22.9,-201.2 23.1,-186.9 18.7,-168.3 14.1,-150.4 12.6,-138.0 13.7,-121.5 16.3,-105.1 18.3,-84.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         brain_shape_front_string = '<g id="brain shape front"> \n <polyline points="51.5,24.0 52.0,21.3 52.0,17.6 50.2,11.2 46.8,6.5 40.5,2.5 33.8,1.1 25.4,3.4 18.8,8.0 13.2,12.5 8.3,17.9 4.3,23.8 1.8,29.3 1.4,35.6 1.6,42.1 4.7,48.3 7.9,52.5 10.8,56.9 13.1,64.3 14.3,73.2 12.8,81.0 16.2,93.6 20.9,101.5 28.2,107.5 35.3,112.7 42.2,117.0 50.8,119.3 57.9,119.3 67.1,118.0 73.9,114.1 79.0,110.4 91.1,102.7 96.3,94.2 96.3,85.3 94.0,81.4 95.4,74.8 96.6,68.3 97.5,64.7 100.9,59.7 103.8,52.5 105.4,46.7 106.1,38.8 105.4,32.4 103.1,26.4 98.9,21.0 94.1,16.3 88.3,11.1 82.0,6.5 74.8,3.3 67.8,3.1 61.7,5.1 56.8,9.6 53.4,15.2 52.2,19.7 52.3,25.3 51.4,24.1 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="46.6,34.0 45.5,36.1 43.2,38.6 41.1,43.3 39.7,48.7 39.7,51.0 42.6,55.2 51.4,59.5 54.9,60.9 60.8,60.8 62.9,58.2 62.9,52.6 60.3,47.6 57.7,43.9 56.1,40.2 55.1,35.9 55.1,34.4 51.8,33.6 49.1,33.5 46.6,34.0 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'
@@ -4678,7 +4736,8 @@ class ExportAllToSVG(Operator, ExportHelper):
             if re.search('#.*',bpy.context.active_object.name) and bpy.context.active_object.type == 'CURVE':                
                 to_process.append(bpy.context.active_object)
             else:
-                print('Error: Active Object is Not a Neuron')                
+                print('ERROR: Active Object is not a Neuron')
+                self.report({'ERROR'},'Active Object not a Neuron!')                
                 return
         elif self.which_neurons == 'Selected':
             for obj in bpy.context.selected_objects:
@@ -4749,7 +4808,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                                              int(mesh_color[2]*255)
                                            ))   
                     except:
-                        print('Unable to retrieve color for ', neuron.name)
+                        print('WARNING: Unable to retrieve color for ', neuron.name , '- using black!')
                         color = 'rgb' + str((0, 0, 0)) 
                 else:
                     ### Standard color
@@ -5465,6 +5524,7 @@ class ExportAllToSVG(Operator, ExportHelper):
         f.write(self.svg_end)
         f.close()        
         print('Export finished')
+        self.report({'INFO'},'Export finished. See console for details')
         
         #Write back line_width in case it has been changed due to bevel_depth
         if self.use_bevel is True:
@@ -5528,7 +5588,7 @@ class ExportAllToSVG(Operator, ExportHelper):
         variances = {}   
         stderror = {}
         for d in ['x','y']:
-            print('!!!!',d)
+            #print('!!!!',d)
             means[d] = []
             stdevs[d] = []
             variances[d] = []
@@ -5543,7 +5603,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                     stdevs[d].append( statistics.stdev ( v ) )  
                     variances[d].append( statistics.pvariance ( v ) )
                     stderror[d].append( math.sqrt( statistics.pvariance ( v ) ) )
-                    print(v, sum ( v ) / len ( v ), math.sqrt( statistics.pvariance ( v ) ))
+                    #print(v, sum ( v ) / len ( v ), math.sqrt( statistics.pvariance ( v ) ))
 
         #!!!!!
         #This defines which statistical value to use:
@@ -5888,7 +5948,8 @@ class Create_Mesh (Operator):
             number_of_childs = len(child_list[active_node])
 
         if nodes_created >= 10000:
-            print('Creation aborted prematurely!')
+            print('ERROR: Creation aborted - possible infinite loop detected!')
+            self.report({'ERROR'},'Error(s) occurred: see console')
             
             ### If active node is branch point, start new splines for each child    
         if number_of_childs  > 1:
@@ -6204,11 +6265,11 @@ class ColorByPairs (Operator):
                         
                         #Filter for errors in annotation:
                         if neuron == paired_skid:
-                            print('Warning - Neuron %s paired with itself' % str(neuron))
+                            print('WARNING: Neuron %s paired with itself' % str(neuron))
                             continue
                             
                         if paired_skid != None:
-                            print('Warning - Multiple paired Annotations found for neuron %s!' % str(neuron))
+                            print('WARNING: Multiple paired Annotations found for neuron %s!' % str(neuron))
                             paired_skid = None
                             continue
                             
@@ -6282,17 +6343,36 @@ class ColorByPairs (Operator):
 class SetupMaterialsForRender (Operator):
     """Prepares all Neuron's materials for Render: Emit Value and Transparency"""  
     bl_idname = "for_render.all_materials"  
-    bl_label = "Assign Properties to all Neurons Materials"  
+    bl_label = "Prepare neurons' materials"  
     bl_options = {'UNDO'}
+
+    emit_value = FloatProperty(     name="Emit Value",                                   
+                                    default =  1,
+                                    description = "Makes neurons emit light."
+                                 )
+    use_trans = BoolProperty(     name="Use Transparency",                                   
+                                    default =  True,
+                                    description = "Makes neurons use Transparency."
+                                 )
+    trans_value = FloatProperty(     name="Transparency Value",                                   
+                                    default =  1,
+                                    min = 0,
+                                    max = 1,
+                                    description = "Set transparency (0-1)"
+                                 )
 
     def execute(self, context):
         for material in bpy.data.materials:
             if re.findall('#',material.name):
-                print(material)
-                material.emit = 1
-                material.use_transparency = True
+                #print(material)
+                material.emit = self.emit_value
+                material.use_transparency = self.use_trans
+                material.alpha = self.trans_value
                 
         return {'FINISHED'}           
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self) 
 
 
 class RenderAllNeurons(Operator):
@@ -6550,7 +6630,7 @@ class ColorBySynapseCount(Operator):
                 try:                
                     skid = re.search('#(.*?) -',object.name).group(1)
                     mat = object.active_material
-                    print(object.name,synapse_count[skid])
+                    #print(object.name,synapse_count[skid])
                     if synapse_count[skid] > 0:                        
                         #Reduce # of synapses by 1 such that the lowest value is actually 0 to (max_count-1)
                         hsv = calc_color((synapse_count[skid]-1),(max_count-1),self.start_color,self.end_color,self.take_longest_route)
@@ -6577,7 +6657,8 @@ class ColorBySynapseCount(Operator):
                     elif self.only_if_connected is False:
                         mat.diffuse_color = (0.5,0.5,0.5)              
                 except:
-                    print('Unable to process object: ', object.name)
+                    print('ERROR: Unable to process object: ', object.name)
+                    self.report({'ERROR'},'Error(s) occurred: see console')
 
         return{'FINISHED'}
 
@@ -6665,6 +6746,10 @@ class ColorByAnnotation(Operator):
         
         include_annotations = self.annotation.split(',')
         exclude_annotations = self.exclude_annotation.split(',')
+
+        included_skids = []
+        excluded_skids = []
+        color_changed = []
         
         for object in bpy.data.objects:
             if object.name.startswith('#'):                
@@ -6677,17 +6762,25 @@ class ColorByAnnotation(Operator):
                     for tag in annotations[skid]:
                         if tag in include_annotations:
                             include = True
+                            included_skids.append(skid)
                         if tag in exclude_annotations:
                             exclude = True
+                            excluded_skids.append(skid)
                             
                     if include is True and exclude is False:
                         object.active_material.diffuse_color = self.color
+                        color_changed.append(skid)
                     elif self.make_non_matched_grey is True:
                         object.active_material.diffuse_color = (0.4,0.4,0.4)
                 except:
                     pass
-        
-        
+
+        print('Include annotations:',include_annotations)
+        print('Exclude annotations:',exclude_annotations)
+
+        print('Included based on annotation:', included_skids)
+        print('Excluded based on annotation:', excluded_skids)
+        print('Color changed for neurons ',color_changed)
         
         return{'FINISHED'}
     
@@ -6702,6 +6795,10 @@ class ColorByAnnotation(Operator):
             return False
 
 def availableOptions(self, context):
+    """
+    This function sets available options for calculating the matching score.
+    If 
+    """
     available_options = [('Morphology','Morphology','Morphology')]
     if connected:
         available_options.append(('Synapse-Distr.','Synapse-Distr.','Synapse-Distr.'))
@@ -6734,10 +6831,16 @@ class ColorBySimilarity(Operator):
                                 default = True,
                                 description = 'If true, will try to use previous data from this session. Uncheck to compute from scratch!'
                                 )
+    save_dendrogram = BoolProperty (
+                                name='Save Dendrogram',
+                                default = True,
+                                description = 'Will save dendrogram of similarity to dendrogram.svg'
+                                )
 
     def execute (self, context):
         #Get neurons first
         neurons = []
+        neuron_names = {}
         skids = []   
         for obj in bpy.data.objects:
             if obj.name.startswith('#'):
@@ -6746,6 +6849,7 @@ class ColorBySimilarity(Operator):
                     neurons.append(obj)                
                     skids.append(skid)
                     obj['skid'] = skid
+                    neuron_names[skid] = obj.name
                 except:
                     pass
 
@@ -6773,17 +6877,18 @@ class ColorBySimilarity(Operator):
                         
         print('Done!')
 
+        global matching_scores
+
         if self.use_saved is True:
             try:
                 matching_scores
             except:
                 print('Creating matching scores from scratch!')
-                matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
-                global matching_scores
+                matching_scores = {'Synapse-Distr.':{},'Morphology':{}}                
         else:
             print('Creating matching scores from scratch!')
             matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
-            global matching_scores
+            
         
         for i,neuronA in enumerate(neurons):                
             print('Comparing neuron', neuronA.name, '[',i,'of',len(neurons),']')
@@ -6836,12 +6941,27 @@ class ColorBySimilarity(Operator):
             n.active_material.diffuse_color[2] = colormap[skid][2]/255
         #for entry in matching_scores:
         #    print(entry,'\t',matching_scores[entry])
+
+        if self.save_dendrogram is True and bpy.data.filepath != '':
+            try:
+                self.plot_dendrogram(skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', neuron_names , self.cluster_at)
+                print('Dendrogram.svg created in ', os.path.dirname( bpy.data.filepath ))
+                self.report({'INFO'},'dendrogram at ' + os.path.dirname( bpy.data.filepath  + '\\' + filename) )
+            except:
+                self.report({'ERROR'},'Could not create dendrogram. See Console!') 
+                self.report({'INFO'},'ERROR. See Console!') 
+                print('ERROR: Could not create dendrogram')
+                if not os.access( os.path.dirname( bpy.data.filepath ) , os.W_OK ):
+                    print('Do not have permission to write in', os.path.dirname( bpy.data.filepath ))
+                    print('Try saving the .blend file elsewhere!')
+        elif bpy.data.filepath == '':
+            print('ERROR: Need to first save the .blend file before creating dendrogram!')
+            self.report({'ERROR'},'ERROR creating Dendrogram: see console')
                 
         return{'FINISHED'}
 
     def calc_synapse_matching_score(self,synapsesA,synapsesB,sigma=50,omega=500):
         all_values = []
-
         coordsA = {}
         coordsB = {}
 
@@ -6886,8 +7006,7 @@ class ColorBySimilarity(Operator):
             return 0
 
 
-    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB,sigma=50): 
-
+    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB,sigma=50):
         #nodes_list = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
 
         #Sigma defines how close two points have to be to be considered similar (in nanometers)
@@ -6956,6 +7075,9 @@ class ColorBySimilarity(Operator):
         return round(sum(distances)/len(distances),3)
 
     def create_clusters(self,skids,matching_scores,method):
+        """
+        Sort skids into clusters based on similarity in matching score
+        """
         similarity = 1
         step_size = 0.01
 
@@ -7057,13 +7179,171 @@ class ColorBySimilarity(Operator):
 
         return all_clusters,merges_at
 
+    def plot_dendrogram(self, skids, all_clusters, merges_at, remote_instance, filename, names, cluster_at=0): 
+        """
+        Creates dendrogram based on previously calculated similarity scores
+        """
+        if cluster_at != 0:
+            for i in range(len(merges_at)):
+                try:
+                    if merges_at[i+1] < cluster_at:
+                        clusters_to_plot = all_clusters[i]
+                        break
+                except:
+                    print('Morphology - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (cluster_at,merges_at[i]))
+                    print( all_clusters[i])
+                    clusters_to_plot = all_clusters[i]
+            
+            colors = ColorCreator.random_colors(len(clusters_to_plot))
+            colormap = {}   
+            for c in clusters_to_plot:                      
+                for neuron in c:                              
+                    colormap[neuron] = colors[0]
+                colors.pop(0)
+        
+        svg_header =    '<svg xmlns="http://www.w3.org/2000/svg" version="1.1" style="background:white">\n'
+        text_color = (0,0,0)
 
+        #Now create svg
+        with open( os.path.dirname( bpy.data.filepath ) + '\\' + filename, 'w', encoding='utf-8') as f:  
+            f.write(svg_header)   
+
+            #Write neurons first as they are sorted in the last cluster
+            y_offset = 0
+            neuron_offsets = {}
+            clusters_by_neurons = {}
+            for neuron in [item for sublist in all_clusters[-1] for item in sublist]:
+                f.write('<text x="%i" y="%i" fill="rgb%s" style="font-size:14px;"> %s </text> \n'
+                            % (
+                                500 + 10,
+                                y_offset,
+                                str((0,0,0)),
+                                names[neuron] 
+                                )
+                            )
+
+
+                neuron_offsets[neuron] = y_offset - 5
+                clusters_by_neurons[neuron] = (y_offset,500)
+                y_offset += 30
+
+            if cluster_at != 0:
+                f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1;stroke-dasharray:5,5" /> \n' 
+                        % (
+                            cluster_at * 500,                       
+                            -10,
+                            cluster_at * 500,
+                            y_offset
+                           )
+                        )
+                f.write('<text text-anchor="middle" x="%i" y="%i" fill="rgb(0,0,0)" style="font-size:10px;"> Cluster Threshold </text> \n' 
+                        % (
+                            cluster_at * 500,
+                            -30                     
+                          )
+                        )
+
+
+
+            #Write x axis:
+            f.write('<line x1="0" y1="%i" x2="500" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset,y_offset))
+            
+            f.write('<line x1="100" y1="%i" x2="100" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="100" y="%i" fill="rgb%s" style="font-size:12px;"> 0.2 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="200" y1="%i" x2="200" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="200" y="%i" fill="rgb%s" style="font-size:12px;"> 0.4 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="300" y1="%i" x2="300" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="300" y="%i" fill="rgb%s" style="font-size:12px;"> 0.6 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="400" y1="%i" x2="400" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="400" y="%i" fill="rgb%s" style="font-size:12px;"> 0.8 </text> \n' % (y_offset+20,str(text_color)))
+
+            f.write('<text text-anchor="middle" x="250" y="%i" fill="rgb%s" style="font-size:14px;"> Similarity Score </text> \n' % (y_offset+50,str(text_color)))
+
+            previous_clusters = all_clusters[0]
+            neurons_connected = []
+            last_cluster_by_neuron = {}
+
+            previous_merges = {}        
+            for skid in skids:
+                previous_merges[skid]=1 
+                last_cluster_by_neuron[skid] = [skid]
+
+            i = 0
+            for step in all_clusters[1:]:
+                #print(step)
+                i += 1
+                for c in step:
+                    #If cluster has not changed, do nothing
+                    if c in previous_clusters:                  
+                        continue
+
+                    try:
+                        cluster_color = top_line_color = bot_line_color = colormap[c[0]]                     
+                    except:
+                        cluster_color = top_line_color = bot_line_color = (0,0,0)
+                    
+                    #Prepare clusters, colors and line width                
+                    mid_line_width = top_line_width = bot_line_width = 1                
+
+                    this_cluster_total = 0
+                    for neuron in c:
+                        try:                    
+                            if colormap[neuron] != cluster_color:                       
+                                cluster_color = (0,0,0)
+                                #Check if either top or bot cluster is a single neuron (not in neurons_connected)
+                                #-> if not, make sure that it still receives it's cluster color even if similarity to next cluster is < threshold
+                                if c[0] not in neurons_connected:
+                                    top_line_color = colormap[c[0]]
+                                else:
+                                    top_line_color = (0,0,0)
+                                if c[-1] not in neurons_connected:
+                                    bot_line_color = colormap[c[-1]]
+                                else:
+                                    bot_line_color = (0,0,0)
+                        except:
+                            cluster_color = top_line_color = bot_line_color = (0,0,0)                        
+
+                    top_boundary = clusters_by_neurons[c[0]]
+                    bottom_boundary = clusters_by_neurons[c[-1]]
+                    center = top_boundary[0] + (bottom_boundary[0] - top_boundary[0])/2             
+
+                    neurons_connected.append(c[0])
+                    neurons_connected.append(c[-1])         
+
+                    similarity = merges_at[i]
+
+                    #Vertical Line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,top_boundary[0],500*similarity,bottom_boundary[0],str(cluster_color),round(mid_line_width,1)))
+                    #Top horizontal line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,top_boundary[0],top_boundary[1],top_boundary[0],str(top_line_color),round(top_line_width,1)))
+                    #Bot horizontal line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,bottom_boundary[0],bottom_boundary[1],bottom_boundary[0],str(bot_line_color),round(bot_line_width,1)))
+
+
+                    #This is for disconnected SINGLE neurons (need to fix this proper at some point)
+                    for neuron in c:
+                        if neuron not in neurons_connected:
+                            y_coord = neuron_offsets[neuron]                            
+                            this_line_width = mid_line_width
+                            f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,y_coord,500,y_coord,str(cluster_color),round(this_line_width,1)))
+                            neurons_connected.append(neuron)
+                    
+                        previous_merges[neuron] = similarity
+                        last_cluster_by_neuron[neuron] = c
+                        clusters_by_neurons[neuron] = (center,500*similarity)
+
+                previous_clusters = step
+
+            f.write('</svg>')
+            f.close()
+
+        return 
     
 
 class ColorBySpatialDistribution(Operator):
     """Color neurons by spatial Distribution of their Somas"""  
     bl_idname = "color.by_spatial"  
-    bl_label = "Color Neurons by Spatial Distribution of their Somas!" 
+    bl_label = "Color Neurons by Spatial Distribution of their Somas (k-Means algorithm)" 
     bl_options = {'UNDO'}
     
     ### 'radius' is used for determination of the #of neighbors for each soma
@@ -7074,7 +7354,9 @@ class ColorBySpatialDistribution(Operator):
     ### Number of clusters the algorithm tries to create
     n_clusters = IntProperty(name="# of Clusters", default = 4)
     ### If 'show_center' is True, a sphere will be created with a r of 'radius'
-    show_centers = BoolProperty(name="Show Cluster Centers", default = True)
+    show_centers = BoolProperty(    name="Show Cluster Centers", 
+                                    default = True,
+                                    description = 'If true, a sphere is used to indicate each cluster.' )
     
     
     def execute (self, context):
@@ -7175,7 +7457,8 @@ class ColorBySpatialDistribution(Operator):
 
         for i in range(self.n_clusters):
             if len(clusters) < i:
-                print('Cannnot form any more clusters!')
+                print('WARNING: Cannot form any more clusters!')
+
                 continue
             
             print('Searching for Cluster no. %i ...' % i)
@@ -7212,7 +7495,7 @@ class ColorBySpatialDistribution(Operator):
             center[2] += vector_to_move[2]/n_vectors        
             bounding_box_centers.append(center)
         
-            ### For Debugging:
+            ### For Debugging only:
             #center_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, size=0.4, view_align=False, enter_editmode=False, location=center, rotation=(0, 0, 0), layers=(True, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False, False))                           
         
         return(bounding_box_centers)
@@ -7228,17 +7511,17 @@ class ColorBySpatialDistribution(Operator):
     
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)  
+        return context.window_manager.invoke_props_dialog(self)
     
 def calc_color (value, max_value, start_rgb, end_rgb,take_longest_route):
     """
-    Calculates color 
+    Calculates color along gradient based on value
     """      
     
     #Make sure value is capped at max_value
     if value > max_value:
         value = max_value
-        print('Attention! Value > Max_Value!')
+        print('WARNING! Value > Max_Value!')
         
     #Convert RGBs to HSVs
     start_hsv = colorsys.rgb_to_hsv(start_rgb[0],start_rgb[1],start_rgb[2])
@@ -7270,6 +7553,9 @@ def calc_color (value, max_value, start_rgb, end_rgb,take_longest_route):
         
 
 def calc_hue (value, max_value, lut):
+    """
+    Tagged for removal
+    """
     
     #Make sure value is capped at max_value
     if value > max_value:
@@ -7313,64 +7599,109 @@ def calc_hue (value, max_value, lut):
     #print('N_Intervals: %i; Interval: %i; Min/Max Hue: %i/%i; Value: %f;max_value: %f; Hue: %f/%f' % (n_intervals,interval,min_hue,max_hue,value,this_interval_max_value,hue_test,hue))
 
     return hue/360
+
+class CATMAIDAddonPreferences(AddonPreferences):
+    """
+    Sets Addon preferences -> can be accessed via context.user_preferences.addons['CATMAIDImport'].preferences
+    """
+    # this must match the addon name, use '__package__'
+    # when defining this in a submodule of a python package.
+    #bl_idname = __name__
+    bl_idname = 'CATMAIDImport'
+
+    server_url = StringProperty(
+            name="CATMAID Server URL",
+            default =  'https://neurocean.janelia.org/catmaidL1')
+    project_id = IntProperty(
+            name="Project ID",
+            default=1,
+            )
+    http_user = StringProperty(
+            name="HTTP User",
+            default=''
+            )
+    http_pw = StringProperty(
+            name="HTTP PW",
+            default='',
+            subtype='PASSWORD'
+            )
+    token = StringProperty(
+            name="API Token",
+            default='',
+            subtype='PASSWORD',
+            description = 'Retrieve your API token by logging into CATMAID and hovering over your username (top right) on the project selection screen'
+            )
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="CATMAID Import Preferences. Add your credentials to not have to enter them again after each restart.")
+        layout.prop(self, "server_url")
+        layout.prop(self, "project_id")
+        layout.prop(self, "http_user")
+        layout.prop(self, "http_pw")
+        layout.prop(self, "token")
+
         
 def register():
- bpy.utils.register_module(__name__)
- #bpy.utils.register_class(VariableManager)
- bpy.types.Scene.CONFIG_VariableManager = bpy.props.PointerProperty(type=VariableManager)       
+    bpy.utils.register_class(CATMAIDAddonPreferences)
+    bpy.utils.register_module(__name__)
+    #bpy.utils.register_class(VersionManager)
+    bpy.types.Scene.CONFIG_VersionManager = bpy.props.PointerProperty(type=VersionManager)
 
- """    
- bpy.utils.register_class(CATMAIDimportPanel)
- #bpy.utils.register_class(ImportFromTXT)
- #bpy.utils.register_class(ImportFromNeuroML)
- bpy.utils.register_class(Create_Mesh)
- bpy.utils.register_class(RandomMaterial)
- bpy.utils.register_class(RenderAllNeurons)
- bpy.utils.register_class(ExportAllToSVG)
- bpy.utils.register_class(ConnectToCATMAID)
- bpy.utils.register_class(RetrieveNeuron) 
- bpy.utils.register_class(RetrievePartners) 
- bpy.utils.register_class(RetrieveConnectors) 
- bpy.utils.register_class(ConnectorsToSVG) 
- bpy.utils.register_class(SetupMaterialsForRender) 
- bpy.utils.register_class(RetrieveByAnnotation)
- bpy.utils.register_class(UpdateNeurons)
- bpy.utils.register_class(ColorBySpatialDistribution)
- bpy.utils.register_class(ColorBySynapseCount)
- bpy.utils.register_class(TestHttpRequest)
- """
+
+    """    
+    bpy.utils.register_class(CATMAIDimportPanel)
+    #bpy.utils.register_class(ImportFromTXT)
+    #bpy.utils.register_class(ImportFromNeuroML)
+    bpy.utils.register_class(Create_Mesh)
+    bpy.utils.register_class(RandomMaterial)
+    bpy.utils.register_class(RenderAllNeurons)
+    bpy.utils.register_class(ExportAllToSVG)
+    bpy.utils.register_class(ConnectToCATMAID)
+    bpy.utils.register_class(RetrieveNeuron) 
+    bpy.utils.register_class(RetrievePartners) 
+    bpy.utils.register_class(RetrieveConnectors) 
+    bpy.utils.register_class(ConnectorsToSVG) 
+    bpy.utils.register_class(SetupMaterialsForRender) 
+    bpy.utils.register_class(RetrieveByAnnotation)
+    bpy.utils.register_class(UpdateNeurons)
+    bpy.utils.register_class(ColorBySpatialDistribution)
+    bpy.utils.register_class(ColorBySynapseCount)
+    bpy.utils.register_class(TestHttpRequest)
+    """
  
  
 def unregister():
- bpy.utils.unregister_module(__name__)    
- """
- bpy.utils.unregister_class(CATMAIDimportPanel) 
- #bpy.utils.unregister_class(ImportFromTXT)
- bpy.utils.unregister_class(Create_Mesh)
- #bpy.utils.unregister_class(ImportFromNeuroML)
- bpy.utils.unregister_class(RandomMaterial)
- bpy.utils.unregister_class(RenderAllNeurons)
- bpy.utils.unregister_class(ExportAllToSVG)
- bpy.utils.unregister_class(ConnectToCATMAID)
- bpy.utils.unregister_class(RetrieveNeuron)
- bpy.utils.unregister_class(RetrievePartners)
- bpy.utils.unregister_class(RetrieveConnectors)  
- bpy.utils.unregister_class(ConnectorsToSVG)
- bpy.utils.unregister_class(SetupMaterialsForRender)
- bpy.utils.unregister_class(RetrieveByAnnotation)
- bpy.utils.unregister_class(UpdateNeurons)
- bpy.utils.unregister_class(ColorBySpatialDistribution) 
- bpy.utils.unregister_class(ColorBySynapseCount)
- bpy.utils.unregister_class(TestHttpRequest)
- """
- if bpy.context.scene.get('CONFIG_VariableManager') != None:     
-    del bpy.context.scene['CONFIG_VariableManager']
- try:
-    del bpy.types.Scene.CONFIG_VariableManager
- except:
-    pass
+    bpy.utils.unregister_module(__name__)    
+    bpy.utils.unregister_class(ExampleAddonPreferences) 
+    """
+    bpy.utils.unregister_class(CATMAIDimportPanel) 
+    #bpy.utils.unregister_class(ImportFromTXT)
+    bpy.utils.unregister_class(Create_Mesh)
+    #bpy.utils.unregister_class(ImportFromNeuroML)
+    bpy.utils.unregister_class(RandomMaterial)
+    bpy.utils.unregister_class(RenderAllNeurons)
+    bpy.utils.unregister_class(ExportAllToSVG)
+    bpy.utils.unregister_class(ConnectToCATMAID)
+    bpy.utils.unregister_class(RetrieveNeuron)
+    bpy.utils.unregister_class(RetrievePartners)
+    bpy.utils.unregister_class(RetrieveConnectors)  
+    bpy.utils.unregister_class(ConnectorsToSVG)
+    bpy.utils.unregister_class(SetupMaterialsForRender)
+    bpy.utils.unregister_class(RetrieveByAnnotation)
+    bpy.utils.unregister_class(UpdateNeurons)
+    bpy.utils.unregister_class(ColorBySpatialDistribution) 
+    bpy.utils.unregister_class(ColorBySynapseCount)
+    bpy.utils.unregister_class(TestHttpRequest)
+    """
+    if bpy.context.scene.get('CONFIG_VersionManager') != None:     
+        del bpy.context.scene['CONFIG_VersionManager']
+    try:
+        del bpy.types.Scene.CONFIG_VersionManager
+    except:
+        pass
 
 
 if __name__ == "__main__":
- register()
+    register()
  
