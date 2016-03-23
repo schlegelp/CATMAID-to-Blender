@@ -4,10 +4,12 @@ CATMAID-to-Blender
 Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATMAID](https://github.com/acardona/CATMAID "CATMAID Repo") servers and request data. Tested with Blender 2.77
 
 ## Installation:
-Option A:
+
+######Option A:
 1. Download CATMAIDImport.py and place in \Blender\...\scripts\addons
 2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
-Option B:
+
+######Option B:
 1. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> 'Install from File'
 2. Activate by checkbox and 'Save User Setting'
 
