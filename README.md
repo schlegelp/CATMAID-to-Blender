@@ -36,9 +36,15 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 
 ![export_options](https://cloud.githubusercontent.com/assets/7161148/5356716/bf994da4-7f9f-11e4-8e10-c5c628baab47.PNG)
 
-## Pro Tip of the Day:
-Open Blender's console to e.g. see error messages or follow the progress while importing.
-'Window' -> 'Toggle System Console'
+## Examples:
+
+###Color neurons by similarity and export to vector graphic (SVG)
+![cluster neurons](https://cloud.githubusercontent.com/assets/7161148/14019741/8533722c-f1d4-11e5-9a1b-046ed025fff4.png)
+
+###Group postsynaptic sites based on what presynaptic neuron they connect to
+![color by input](https://cloud.githubusercontent.com/assets/7161148/14019784/b20bbca0-f1d4-11e5-8d3d-8c241f3f8794.png)
+
+###For more example check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990.article-metrics) on bioRxiv.
 
 ## License:
 This code is under GNU GPL V3
