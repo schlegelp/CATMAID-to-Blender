@@ -295,35 +295,35 @@ class CATMAIDimportPanel(bpy.types.Panel):
                
         layout.label('Materials')        
 
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("random.all_materials", text = "Randomize Color", icon ='COLOR')
 
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_similarity", text = "By Similarity", icon ='PARTICLE_PATH')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
 
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_spatial", text = "By Spatial Distr.", icon ='ROTATECENTER')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_spatial'
         
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_annotation", text = "By Annotation", icon ='SORTALPHA')
         
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
         
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'       
 
         
-        row = layout.row(align=False)
+        row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='SCENE')
         
@@ -1734,8 +1734,12 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                             ),
                                     default =  "Circles",
                                     description = "Choose symbol that connectors will be exported as.")    
-    export_ring_gland = BoolProperty(name="Export Ring Gland", default = False,
-                                    description = "Export Outlines of the ring gland in addition to outlines of CNS")
+    export_brain_outlines = BoolProperty(name="Export Brain Outlines", 
+                                     default = True,
+                                     description = "Adds Outlines of Brain to SVG (Drosophila L1 dataset)")
+    export_ring_gland = BoolProperty(name="Export Ring Gland", 
+                                     default = True,
+                                     description = "Adds Outlines of Ring Gland to SVG (Drosophila L1 dataset)")
     export_neuron = BoolProperty(name="Include Neuron", default = True,
                                     description = "Export neurons skeletons as well")
     barplot = BoolProperty(name="Add Barplot", default = False,
@@ -2599,7 +2603,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
                 ### Add front brain shape
                 if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_front_string + '\n') 
+                    if self.export_brain_outlines is True:
+                        f.write('\n' + brain_shape_front_string + '\n') 
                 
                     if self.export_ring_gland is True:
                         f.write('\n' + ring_gland_front + '\n') 
@@ -2715,7 +2720,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
                 ### Add lateral brain shape
                 if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_lateral_string + '\n') 
+                    if self.export_brain_outlines is True:
+                        f.write('\n' + brain_shape_lateral_string + '\n') 
                 
                     if self.export_ring_gland is True:
                         f.write('\n' + ring_gland_lateral + '\n')             
@@ -2955,7 +2961,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 
                 ### Add top brain shape
                 if self.merge is False or first_neuron is True:
-                    f.write('\n' + brain_shape_top_string + '\n') 
+                    if self.export_brain_outlines is True:
+                        f.write('\n' + brain_shape_top_string + '\n') 
                 
                     if self.export_ring_gland is True:
                         f.write('\n' + ring_gland_top + '\n')             
@@ -3373,7 +3380,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 source_color = source_neurons_list[source]
                 source_shape = input_shape_map[source]
                 
-                if self.merge is True or self.all_neurons is True:
+                if self.merge is True or self.which_neurons == 'All' or self.which_neurons == 'Selected':
                     ### Retrieve # of Synapses of Source Neuron Onto every Target Neuron
                     weights_string = '  '
                     for neuron in connector_data:
@@ -4637,9 +4644,12 @@ class ExportAllToSVG(Operator, ExportHelper):
                                     description ="Exports neurons as point cloud rather than edges (e.g. for dense core vesicles)")
     barplot = BoolProperty(name="Add Barplot", default = False,
                                     description = "Export Barplot along X/Y axis to show node distribution")
+    export_brain_outlines = BoolProperty(name="Export Brain Outlines", 
+                                     default = True,
+                                     description = "Adds Outlines of Brain to SVG (Drosophila L1 dataset)")
     export_ring_gland = BoolProperty(name="Export Ring Gland", 
                                      default = True,
-                                     description = "Adds Outlines of Ring Gland to SVG")
+                                     description = "Adds Outlines of Ring Gland to SVG (Drosophila L1 dataset)")
     views_to_export = EnumProperty(name="Views to export",
                                    items = (("Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal","Front/Top/Lateral/Perspective-Dorsal"),
                                             ("Front/Top/Lateral","Front/Top/Lateral","Front/Top/Lateral"),
@@ -5263,7 +5273,9 @@ class ExportAllToSVG(Operator, ExportHelper):
 
                     ### Add front brain shape
                     if self.merge is False or first_neuron is True:
-                        f.write('\n' + brain_shape_front_string + '\n') 
+
+                        if self.export_brain_outlines is True:
+                            f.write('\n' + brain_shape_front_string + '\n') 
 
                         if self.export_ring_gland is True:
                             f.write('\n' + ring_gland_front + '\n') 
@@ -5340,7 +5352,8 @@ class ExportAllToSVG(Operator, ExportHelper):
                 
                     ### Add top brain shape
                     if self.merge is False or first_neuron is True:
-                        f.write('\n' + brain_shape_top_string + '\n') 
+                        if self.export_brain_outlines is True:
+                            f.write('\n' + brain_shape_top_string + '\n') 
                     
                         if self.export_ring_gland is True:
                             f.write('\n' + ring_gland_top + '\n')                
@@ -5358,13 +5371,15 @@ class ExportAllToSVG(Operator, ExportHelper):
                     if self.merge is False or first_neuron is True:
                         if 'Perspective-Dorsal' in self.views_to_export:                            
                             if round(self.x_persp_offset,2) == 0.5:
-                                f.write('\n' + brain_shape_dorsal_perspective_05_string + '\n')
+                                if self.export_brain_outlines is True:
+                                    f.write('\n' + brain_shape_dorsal_perspective_05_string + '\n')
                                 
                                 if self.export_ring_gland is True:
                                     f.write('\n' + ring_gland_dorsal_perspective_05 + '\n')
                             
                             elif round(self.x_persp_offset,2) == 0.9:                                
-                                f.write('\n' + brain_shape_dorsal_perspective_09_string + '\n')
+                                if self.export_brain_outlines is True:
+                                    f.write('\n' + brain_shape_dorsal_perspective_09_string + '\n')
                                 
                                 if self.export_ring_gland is True:
                                     f.write('\n' + ring_gland_dorsal_perspective_09 + '\n')
@@ -5510,7 +5525,8 @@ class ExportAllToSVG(Operator, ExportHelper):
                 
                     ### Add lateral brain shape
                     if self.merge is False or first_neuron is True:
-                        f.write('\n' + brain_shape_lateral_string + '\n')                          
+                        if self.export_brain_outlines is True:
+                            f.write('\n' + brain_shape_lateral_string + '\n')                          
                     
                         if self.export_ring_gland is True:                    
                             f.write('\n' + ring_gland_lateral + '\n')                  
@@ -6760,7 +6776,7 @@ class ColorByAnnotation(Operator):
                                 )
     make_non_matched_grey = BoolProperty(name="Color others grey",
                                          description="If unchecked, color of neurons without given annotation(s) will not be changed",
-                                         default=True)
+                                         default=False)
     
     
     def execute (self, context):        
@@ -6972,6 +6988,9 @@ class ColorBySimilarity(Operator):
                 print( all_clusters[i])
                 clusters_to_plot = all_clusters[i]                   
 
+        print('Create %i clusters at threshold %f' % ( len ( clusters_to_plot ) , merges_at ) )
+        self.report ( {'INFO'} , 'Create %i clusters at threshold %f' % ( len ( clusters_to_plot ) , merges_at ) )
+
         colors = ColorCreator.random_colors(len(clusters_to_plot),'RGB')
 
         colormap = {}
@@ -7172,7 +7191,7 @@ class ColorBySimilarity(Operator):
 
             if len(merge) != 0:
                 #Check if multiple clusters need to be merged:
-                print('Merge:',merge)
+                #print('Merge:',merge)
                 temp_to_be_merged = []
                 for c1 in merge:
                     #print('C1:',c1)
@@ -7220,7 +7239,7 @@ class ColorBySimilarity(Operator):
                 merges_at.append(similarity)
                 
 
-                print(temp_clusters,'\n')
+                #print(temp_clusters,'\n')
 
             similarity -= step_size
 
