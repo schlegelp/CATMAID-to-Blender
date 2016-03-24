@@ -45,7 +45,7 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 ####2. Group postsynaptic sites based on what presynaptic neuron they connect to
 <img src="https://cloud.githubusercontent.com/assets/7161148/14020676/7df96468-f1d8-11e5-9f04-aba115112890.png" width="650">
 
-####3. For more example check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990.article-metrics) on bioRxiv.
+####3. For more example check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990) on bioRxiv.
 
 ## License:
 This code is under GNU GPL V3
