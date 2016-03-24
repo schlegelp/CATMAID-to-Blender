@@ -38,13 +38,14 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 
 ## Examples:
 
-###1. Color neurons by similarity and export to vector graphic (SVG)
-![cluster neurons](https://cloud.githubusercontent.com/assets/7161148/14019741/8533722c-f1d4-11e5-9a1b-046ed025fff4.png)
+####1. Color neurons by similarity and export to vector graphic (SVG)
+<img src="https://cloud.githubusercontent.com/assets/7161148/14020628/465496f4-f1d8-11e5-899b-5bb1f6baf8b0.png" width="650">
 
-###2. Group postsynaptic sites based on what presynaptic neuron they connect to
-![color by input](https://cloud.githubusercontent.com/assets/7161148/14019784/b20bbca0-f1d4-11e5-8d3d-8c241f3f8794.png)
 
-###3. For more example check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990.article-metrics) on bioRxiv.
+####2. Group postsynaptic sites based on what presynaptic neuron they connect to
+<img src="https://cloud.githubusercontent.com/assets/7161148/14020676/7df96468-f1d8-11e5-9f04-aba115112890.png" width="650">
+
+####3. For more example check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990.article-metrics) on bioRxiv.
 
 ## License:
 This code is under GNU GPL V3
