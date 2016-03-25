@@ -576,7 +576,7 @@ def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
     #If list of skids is provided
     if type(skids) == type(list()):
         sk_data = []
-        print('Retrieved %i skeletons' % len(skids))
+        print('Retrieving %i skeletons' % len(skids))
         for i, skeleton_id in enumerate(skids):
             #Create URL for retrieving example skeleton from server
             remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id, connector_flag, tag_flag )
@@ -6952,12 +6952,22 @@ class ColorBySimilarity(Operator):
                         neuron_data[n['skid']].append(point.co)
                         neuron_parent_vectors[n['skid']].append(normal_parent_vector)
         elif self.compare == 'Synapse-Distr.':
+            global synapse_data
+
+            if self.use_saved is True:
+                try:
+                    synapse_data
+                except:
+                    print('No saved synapse data found. Loading neurons from scratch.')
+                    synapse_data = {}
+            else:
+                synapse_data = {}
+
             missing_skids = []
             for n in skids:
-                if not n in synapse_data:
+                if n not in synapse_data:
                     missing_skids.append(n)                    
 
-            synapse_data = {}
             skeleton_data = get_3D_skeleton (missing_skids, remote_instance, 1 , 0 )
             for i,n in enumerate(missing_skids):
                 synapse_data[n] = skeleton_data[i][1]          
@@ -7052,7 +7062,7 @@ class ColorBySimilarity(Operator):
                 if not os.access( os.path.dirname( bpy.data.filepath ) , os.W_OK ):
                     print('Do not have permission to write in', os.path.dirname( bpy.data.filepath ))
                     print('Try saving the .blend file elsewhere!')
-        elif bpy.data.filepath == '':
+        elif self.save_dendrogram is True and bpy.data.filepath == '':
             print('ERROR: Need to first save the .blend file before creating dendrogram!')
             self.report({'ERROR'},'ERROR creating Dendrogram: see console')
                 
@@ -7474,15 +7484,22 @@ class SelectAnnotation(Operator):
                 try:
                     skid = re.search('#(.*?) -',object.name).group(1)        
                     
-                    include = False
-                    exclude = False
-                    
                     for tag in annotations[skid]:
                         if tag in include_annotations:
                             object.select = True
                             included.append(object)                            
                 except:
                     pass
+            if object.name.startswith('Soma of'):
+                try:
+                    skid = re.search('Soma of (.*?) -',object.name).group(1)
+                    
+                    for tag in annotations[skid]:
+                        if tag in include_annotations:
+                            object.select = True                            
+                except:
+                    pass
+
 
         print('%i objects selected' % len(included))
         self.report({'INFO'},'%i objects selected' % len(included))
@@ -7817,7 +7834,7 @@ class CATMAIDAddonPreferences(AddonPreferences):
             default=''
             )
     http_pw = StringProperty(
-            name="HTTP PW",
+            name="HTTP Password",
             default='',
             subtype='PASSWORD'
             )
