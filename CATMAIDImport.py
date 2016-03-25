@@ -19,6 +19,10 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.31 25/03/2015:
+    - added select by annotation feature
+    - fixed bug in dendrogram export
+
 ### V4.3 23/03/2015:
     - changed addon name to CATMAIDImport - needs to be the same as bl_label of Addon preference class
     - added Addon Settings for credentials and server url
@@ -28,7 +32,6 @@
     - added advanced tooltip to some functions
     - added 'Active/Selected/All neurons' option to remaining functions
     - optimized function icons
-
 
 ### V4.21 15/03/2015:
     - added option to export dendrogram svg of similarity clustering
@@ -247,7 +250,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (4, 3, 0),
+ "version": (4, 3, 1),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
