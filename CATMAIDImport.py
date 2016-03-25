@@ -293,7 +293,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("check.version", text = "Check Version", icon ='VISIBLE_IPO_ON')
                
-        layout.label('Materials')        
+        layout.label('Materials:')        
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -328,7 +328,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='SCENE')
         
 
-        layout.label('CATMAID Import')
+        layout.label('CATMAID Import:')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -372,7 +372,13 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("connectors.to_svg", text = 'Export Connectors', icon = 'EXPORT')        
+        row.operator("connectors.to_svg", text = 'Export Connectors', icon = 'EXPORT')       
+
+        layout.label('Select:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("select.by_annotation", text = 'By Annotation', icon = 'BORDER_RECT')
         
         
 class VersionManager(bpy.types.PropertyGroup):    
@@ -562,12 +568,13 @@ class CatmaidInstance:
     def get_edges_url(self, pid):
         return self.djangourl("/" + str(pid) + "/skeletongroup/skeletonlist_confidence_compartment_subgraph" )
 
-def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1 ):
+def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
 
     #If list of skids is provided
     if type(skids) == type(list()):
         sk_data = []
-        for skeleton_id in skids:
+        print('Retrieved %i skeletons' % len(skids))
+        for i, skeleton_id in enumerate(skids):
             #Create URL for retrieving example skeleton from server
             remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id, connector_flag, tag_flag )
 
@@ -576,7 +583,7 @@ def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1 )
 
             sk_data.append(skeleton_data)
 
-            print('%s retrieved' % str(skeleton_id))
+            print('Skeleton #%s retrieved [%i of %i]' % ( str(skeleton_id) , i+1 , len(skids) ) )            
     #if only a single skids is provided
     else:
         remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skids, connector_flag, tag_flag )
@@ -1164,7 +1171,7 @@ class RetrievePairs(Operator):
     which_neurons = EnumProperty(       name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
                                       default = 'All',
-                                      description = "Choose for which neurons to connectors.")
+                                      description = "Choose for which neurons to load paired partners.")
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = True,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
@@ -1480,7 +1487,7 @@ class RetrieveConnectors(Operator):
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
-                                      description = "Choose for which neurons to connectors.")
+                                      description = "Choose for which neurons to retrieve connectors.")
     color_prop = EnumProperty(name = "Colors", 
                                       items = [('Black','Black','Black'),('Mesh-color','Mesh-color','Mesh-color'),('Random','Random','Random')],
                                       description = "How to color the connectors.")    
@@ -1701,7 +1708,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
     which_neurons = EnumProperty(name = "Which Neurons?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
-                                      description = "Choose which neurons to reload.")    
+                                      description = "Choose for which neurons to export connectors.")    
     random_colors = BoolProperty(name="Use Random Colors", default = False)
     mesh_colors = BoolProperty(name="Use Mesh Colors", default = False,
                                 description = "Neurons are exported with their Blender material diffuse color")
@@ -3704,7 +3711,7 @@ class RetrievePartners(Operator):
     which_neurons = EnumProperty(       name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
                                       default = 'All',
-                                      description = "Choose for which neurons to connectors.")
+                                      description = "Choose for which neurons to retrieve connected partners.")
     #selected = BoolProperty(name="From Selected Neurons?", default = False)   
     inputs = BoolProperty(name="Upstream Partners", default = True)          
     outputs = BoolProperty(name="Downstream Partners", default = True)
@@ -4611,7 +4618,7 @@ class ExportAllToSVG(Operator, ExportHelper):
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
-                                      description = "Choose for which neurons to connectors.")
+                                      description = "Choose which neurons to export.")
     merge = BoolProperty(name="Merge into One", default = False,
                         description = "If exporting more than one neuron, render them all on top of each other, not in separate panels.")
     random_colors = BoolProperty(name="Use Random Colors", 
@@ -6232,7 +6239,11 @@ class RandomMaterial (Operator):
     bl_idname = "random.all_materials"  
     bl_label = "Assign Random Materials"  
     bl_options = {'UNDO'}
-    
+
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose which neurons to give random color.",
+                                      default = 'All')    
     color_range = EnumProperty(name="Range",
                                    items = (('RGB','RGB','RGB'),
                                             ("Grayscale","Grayscale","Grayscale"),                                            
@@ -6249,8 +6260,13 @@ class RandomMaterial (Operator):
         
         colormap = ColorCreator.random_colors(neuron_count,self.color_range)    
         #print(colormap)
+
+        if self.which_neurons == 'All':
+            to_process = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_process = bpy.context.selected_objects
         
-        for neuron in bpy.data.objects:    
+        for neuron in to_process:    
             if neuron.name.startswith('#'):
                 neuron.active_material.diffuse_color[0] = colormap[0][0]/255
                 neuron.active_material.diffuse_color[1] = colormap[0][1]/255
@@ -6860,7 +6876,7 @@ class ColorBySimilarity(Operator):
 
     which_neurons = EnumProperty(name = "Which Neurons?", 
                                       items = [('Selected','Selected','Selected'),('All','All','All')],
-                                      description = "Choose which neurons to reload.",
+                                      description = "Choose which neurons to color by similarity.",
                                       default = 'All')
     compare = EnumProperty( name='Compare',
                             items=availableOptions
@@ -6916,6 +6932,7 @@ class ColorBySimilarity(Operator):
                         pass
 
         print('Collecting data of %i neurons' % len(neurons))
+        self.report ( {'INFO'} , 'Collecting neuron data. Please wait...' )
         if self.compare == 'Morphology':
             neuron_data = {}
             neuron_parent_vectors = {}
@@ -6932,9 +6949,14 @@ class ColorBySimilarity(Operator):
                         neuron_data[n['skid']].append(point.co)
                         neuron_parent_vectors[n['skid']].append(normal_parent_vector)
         elif self.compare == 'Synapse-Distr.':
+            missing_skids = []
+            for n in skids:
+                if not n in synapse_data:
+                    missing_skids.append(n)                    
+
             synapse_data = {}
-            skeleton_data = get_3D_skeleton (skids, remote_instance, 1 , 0)
-            for i,n in enumerate(skids):
+            skeleton_data = get_3D_skeleton (missing_skids, remote_instance, 1 , 0 )
+            for i,n in enumerate(missing_skids):
                 synapse_data[n] = skeleton_data[i][1]          
                         
         print('Done!')
@@ -6950,10 +6972,12 @@ class ColorBySimilarity(Operator):
         else:
             print('Creating matching scores from scratch!')
             matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
-            
-        
+
+
+        #self.report ( {'INFO'} , 'Comparing neurons. Please wait...' )    
         for i,neuronA in enumerate(neurons):                
-            print('Comparing neuron', neuronA.name, '[',i,'of',len(neurons),']')
+            print('Processing neuron', neuronA.name, '[', i+1 ,'of',len(neurons),']')
+            #self.report ( {'INFO'} , 'Processing neurons [%i of %i]' % ( i+1 , len ( neurons ) ) )
             #print('Resolution:', self.check_resolution(neuronA))  
             for neuronB in neurons:
                 if self.compare == 'Morphology' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
@@ -6974,9 +6998,9 @@ class ColorBySimilarity(Operator):
                                                                                                                                   )
                                                                                                 ,5)
 
-        print('Matchin scores:,',matching_scores[self.compare])
+        #print('Matchin scores:,',matching_scores[self.compare])
 
-        all_clusters,merges_at = self.create_clusters(skids,matching_scores[self.compare],self.method)    
+        all_clusters,merges_at = self.create_clusters(skids,matching_scores[self.compare],self.method) 
 
         for i in range(len(merges_at)):
             try:
@@ -6985,11 +7009,13 @@ class ColorBySimilarity(Operator):
                     break
             except:
                 print('%s - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.compare,self.cluster_at,merges_at[i]))
-                print( all_clusters[i])
+                #print( all_clusters[i])
                 clusters_to_plot = all_clusters[i]                   
 
-        print('Create %i clusters at threshold %f' % ( len ( clusters_to_plot ) , merges_at ) )
-        self.report ( {'INFO'} , 'Create %i clusters at threshold %f' % ( len ( clusters_to_plot ) , merges_at ) )
+        print('Created %i clusters at threshold %f' % ( len ( clusters_to_plot ) , self.cluster_at ) )
+        #self.report ( {'INFO'} , 'Created %i clusters at threshold %f' % ( len ( clusters_to_plot ) , self.cluster_at ) )
+
+        #print('Clusters:', clusters_to_plot)
 
         colors = ColorCreator.random_colors(len(clusters_to_plot),'RGB')
 
@@ -6998,6 +7024,8 @@ class ColorBySimilarity(Operator):
             for skid in c:                                
                 colormap[skid] = colors[0]
             colors.pop(0)
+
+        #print('Colormap:',colormap)
 
         for n in neurons:
             skid = re.search('#(.*?) -',n.name).group(1)
@@ -7008,6 +7036,7 @@ class ColorBySimilarity(Operator):
         #    print(entry,'\t',matching_scores[entry])
 
         if self.save_dendrogram is True and bpy.data.filepath != '':
+            print('Creating Dendrogram.svg')
             try:
                 svg_file = os.path.join ( os.path.dirname( bpy.data.filepath ) , 'dendrogram.svg' )
                 self.plot_dendrogram(skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', neuron_names , self.cluster_at)
@@ -7151,7 +7180,7 @@ class ColorBySimilarity(Operator):
         all_clusters = [copy.deepcopy(clusters)]
         merges_at = [1] 
 
-        print('Start clusters:',clusters)
+        #print('Start clusters:',clusters)
 
         while similarity >= 0:
             #Find cluster that will be merged in this round
@@ -7261,7 +7290,7 @@ class ColorBySimilarity(Operator):
                     clusters_to_plot = all_clusters[i]
             
             colors = ColorCreator.random_colors(len(clusters_to_plot))
-            colormap = {}   
+            colormap = {}
             for c in clusters_to_plot:                      
                 for neuron in c:                              
                     colormap[neuron] = colors[0]
@@ -7406,6 +7435,67 @@ class ColorBySimilarity(Operator):
             f.close()
 
         return 
+
+class SelectAnnotation(Operator):
+    """Select neurons based on annotation"""  
+    bl_idname = "select.by_annotation"  
+    bl_label = "Select neurons by annotation"
+
+    annotation = StringProperty( name="Annotation(s)", 
+                            default = '',
+                            description ='Multiple annotations comma-separated w/o space. Case sensitive.') 
+
+    def execute (self, context):        
+        skids_to_retrieve = []
+        for object in bpy.data.objects:
+            try:
+                object.select = False  
+            except:
+                pass
+
+            if object.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)                    
+                    skids_to_retrieve.append(skid)
+                except:
+                    pass
+                                
+        annotations = get_annotations_from_list(skids_to_retrieve, remote_instance)
+        
+        include_annotations = self.annotation.split(',')
+
+        included = []
+        
+        for object in bpy.data.objects:
+            if object.name.startswith('#'):                
+                try:
+                    skid = re.search('#(.*?) -',object.name).group(1)        
+                    
+                    include = False
+                    exclude = False
+                    
+                    for tag in annotations[skid]:
+                        if tag in include_annotations:
+                            object.select = True
+                            included.append(object)                            
+                except:
+                    pass
+
+        print('%i objects selected' % len(included))
+        self.report({'INFO'},'%i objects selected' % len(included))
+        
+        return{'FINISHED'}
+
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
 
 class DisplayHelp(Operator):
     """Displays popup with additional help"""  
