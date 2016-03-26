@@ -7480,6 +7480,7 @@ class SelectAnnotation(Operator):
         included = []
         
         for object in bpy.data.objects:
+
             if object.name.startswith('#'):                
                 try:
                     skid = re.search('#(.*?) -',object.name).group(1)        
@@ -7490,6 +7491,7 @@ class SelectAnnotation(Operator):
                             included.append(object)                            
                 except:
                     pass
+
             if object.name.startswith('Soma of'):
                 try:
                     skid = re.search('Soma of (.*?) -',object.name).group(1)
@@ -7500,6 +7502,25 @@ class SelectAnnotation(Operator):
                 except:
                     pass
 
+            if object.name.startswith('Inputs of'):
+                try:
+                    skid = re.search('Inputs of (.*?) -',object.name).group(1)
+                    
+                    for tag in annotations[skid]:
+                        if tag in include_annotations:
+                            object.select = True                            
+                except:
+                    pass
+
+            if object.name.startswith('Outputs of'):
+                try:
+                    skid = re.search('Outputs of (.*?) -',object.name).group(1)
+                    
+                    for tag in annotations[skid]:
+                        if tag in include_annotations:
+                            object.select = True                            
+                except:
+                    pass
 
         print('%i objects selected' % len(included))
         self.report({'INFO'},'%i objects selected' % len(included))
