@@ -7458,7 +7458,20 @@ class SelectAnnotation(Operator):
                             default = '',
                             description ='Multiple annotations comma-separated w/o space. Case sensitive.') 
 
+    select_neurites = BoolProperty( name="Select neurites", 
+                                    default = True,
+                                    description ='If unchecked, no neurites will be selected.') 
+    select_somas = BoolProperty( name="Select somas", 
+                                    default = True,
+                                    description ='If unchecked, no somas will be selected.')
+    select_synapses = BoolProperty( name="Select synapses", 
+                                    default = True,
+                                    description ='If unchecked, no synapses will be selected.')
+    
+
     def execute (self, context):        
+        #First generate list of skids for which to retrieve annotations
+        #and also deselect all objects while we are at it
         skids_to_retrieve = []
         for object in bpy.data.objects:
             try:
@@ -7477,11 +7490,12 @@ class SelectAnnotation(Operator):
         
         include_annotations = self.annotation.split(',')
 
-        included = []
-        
+        included = []       
+
+        #Now iterate over all objects and select those that have a matching annotation
         for object in bpy.data.objects:
 
-            if object.name.startswith('#'):                
+            if object.name.startswith('#') and self.select_neurites is True:                
                 try:
                     skid = re.search('#(.*?) -',object.name).group(1)        
                     
@@ -7492,7 +7506,7 @@ class SelectAnnotation(Operator):
                 except:
                     pass
 
-            if object.name.startswith('Soma of'):
+            if object.name.startswith('Soma of') and self.select_somas is True:
                 try:
                     skid = re.search('Soma of (.*?) -',object.name).group(1)
                     
@@ -7502,7 +7516,7 @@ class SelectAnnotation(Operator):
                 except:
                     pass
 
-            if object.name.startswith('Inputs of'):
+            if object.name.startswith('Inputs of') and self.select_synapses is True:
                 try:
                     skid = re.search('Inputs of (.*?) -',object.name).group(1)
                     
@@ -7512,7 +7526,7 @@ class SelectAnnotation(Operator):
                 except:
                     pass
 
-            if object.name.startswith('Outputs of'):
+            if object.name.startswith('Outputs of') and self.select_synapses is True:
                 try:
                     skid = re.search('Outputs of (.*?) -',object.name).group(1)
                     
