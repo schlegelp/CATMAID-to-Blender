@@ -273,7 +273,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         
         #Version Check
         config = bpy.data.scenes[0].CONFIG_VersionManager               
-        layout.label(text="Script Versions")
+        layout.label(text="Script Versions:")
         layout.label(text="Your System: %s" % str(round(config.current_version,3)))
         if config.latest_version == 0:
             layout.label(text="On Github: Unable to Retrieve")
@@ -325,6 +325,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'       
 
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.unify", text = "Unify Materials", icon ='COLOR_BLUE')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.unify'
         
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -365,6 +369,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'PMARKER_SEL')#.number=1
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
 
         
         layout.label(text="Export to SVG:")
@@ -1302,14 +1307,12 @@ class RetrievePairs(Operator):
         if connected:
             return True
         else:
-            return False    
-
-         
+            return False
 
 class RetrieveInVolume(Operator):      
     """Retrieve Neurons from CATMAID database based on given Volume"""
     bl_idname = "retrieve.in_volume"  
-    bl_label = "Define Bounding Box (CATMAID Coordinates):"    
+    bl_label = "Retrieve Neurons in Volume"    
     
     top = IntProperty(name="Top", default = 21000, min = 1, max = 28128)
     bot = IntProperty(name="Bottom", default = 26000, min = 1, max = 28128)
@@ -1327,7 +1330,7 @@ class RetrieveInVolume(Operator):
     import_connectors = BoolProperty(   name="Import Connectors", 
                                         default = False,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
-    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+    truncate_neuron = EnumProperty(name="Truncate Neuron",
                                    items = (('none','No','Load full neuron'),
                                             ('main_neurite','Main Neurite','Truncate Main Neurite'),
                                             ('strahler_index','Strahler Index','Truncate Based on Strahler index')
@@ -1361,7 +1364,37 @@ class RetrieveInVolume(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self)        
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.label(text="Define Bounding Box (CATMAID Coordinates):")        
+
+        row = layout.row(align=True)
+        row.prop(self, "top")
+        row = layout.row(align=True)
+        row.prop(self, "bot")
+        row = layout.row(align=True)
+        row.prop(self, "left")        
+        row = layout.row(align=True)
+        row.prop(self, "right")
+        row = layout.row(align=True)
+        row.prop(self, "z1")
+        row = layout.row(align=True)
+        row.prop(self, "z2")
+
+        layout.label(text="Import Options:")
+        row = layout.row(align=True)
+        row.prop(self, "resampling")
+        row = layout.row(align=True)
+        row.prop(self, "import_connectors")
+        row = layout.row(align=True)
+        row.prop(self, "truncate_neuron")     
+        row = layout.row(align=True)
+        row.prop(self, "truncate_value")   
+        row = layout.row(align=True)
+        row.prop(self, "interpolate_virtual")
     
 
     @classmethod        
@@ -1486,7 +1519,7 @@ class RetrieveByAnnotation(Operator):
 class RetrieveConnectors(Operator):      
     """Retrieves Connectors of active/selected/all Neuron from CATMAID database"""
     bl_idname = "retrieve.connectors"  
-    bl_label = "Connectors will be created in Layer 3!!!"
+    bl_label = "Retrieve Connectors!!!"
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
@@ -4614,9 +4647,9 @@ class ConnectToCATMAID(Operator):
       
     
 class ExportAllToSVG(Operator, ExportHelper):
-    """Exports all neurons (only curves) to SVG File"""
+    """Exports all neurons to SVG File"""
     bl_idname = "exportall.to_svg"  
-    bl_label = "Export neuron(s) (only curves!) to SVG"
+    bl_label = "Export neuron(s) to SVG"
     bl_options = {'PRESET'}
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
@@ -7552,6 +7585,67 @@ class SelectAnnotation(Operator):
         else:
             return False
 
+class UnifyMaterial(Operator):
+    """Unifies materials of given neurons"""
+    bl_idname = "color.unify"
+    bl_label = "Assign a single, common material"
+    bl_options = {'UNDO'}
+
+    which_neurons = EnumProperty(   name = "Which Objects?", 
+                                      items = [('Selected','Selected','Selected'),('All','All','All')],
+                                      default = 'Selected',
+                                      description = "Assign common material to which neurons")
+    to_neurons = BoolProperty(  name= 'Neurons',
+                                default = True,
+                                description = 'Include neurons'
+                                )
+    to_outputs = BoolProperty(  name = 'Presynapses',
+                                default = False,
+                                description = 'Include presynaptic sites (outgoing)')
+    to_inputs = BoolProperty(   name = 'Postsynapses',
+                                default = False,
+                                description = 'Include postsynaptic sites (incoming)')
+    color = FloatVectorProperty(name="Color", 
+                                description="Color for common material", 
+                                default = (0.0, 1 , 0.0), 
+                                min=0.0,
+                                max=1.0,
+                                subtype='COLOR'
+                                )  
+
+    def execute(self,context):                                    
+        new_mat = bpy.data.materials.new('Unified material')
+        new_mat.diffuse_color = self.color
+
+        if self.which_neurons == 'Selected':
+            ob_list = bpy.context.selected_objects
+        elif self.which_neurons == 'All':
+            ob_list = bpy.data.objects
+
+        filtered_ob_list = []
+
+        for ob in ob_list:
+            if ob.name.startswith('#') and self.to_neurons is True:
+                filtered_ob_list.append(ob)
+            elif ob.name.startswith('Soma of') and self.to_neurons is True:
+                filtered_ob_list.append(ob)
+            elif ob.name.startswith('Inputs of') and self.to_inputs is True:
+                filtered_ob_list.append(ob)
+            elif ob.name.startswith('Outputs of') and self.to_outputs is True:
+                filtered_ob_list.append(ob)
+
+        for ob in filtered_ob_list:
+            ob.active_material = new_mat
+
+        self.report({'INFO'},'%i materials unified' % len(filtered_ob_list) )
+
+        return {'FINISHED'}
+
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+
+
 class DisplayHelp(Operator):
     """Displays popup with additional help"""  
     bl_idname = "display.help"  
@@ -7582,6 +7676,14 @@ class DisplayHelp(Operator):
             layout.label(text='Retrieves neurons paired with already the loaded neurons. Pairing is based')
             layout.label(text='on annotations: neuron needs to have a <paired with #skid> annotation.')
             layout.label(text='For example <paired with #1874652>')
+        elif self.entry == 'retrieve.connectors':
+            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors are')
+            layout.label(text='scaled (weighted) based on the number of postsynaptically connected')
+            layout.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
+        elif self.entry == 'color.unify':
+            layout.label(text='By default, all imported neurons have a unique material. Thus manual changes')
+            layout.label(text='have to be made to each neuron individually. To facilitate, this function')
+            layout.label(text='assigns a single material to given group of neurons. Cannot be reversed!')
 
 
     def invoke(self, context, event):
