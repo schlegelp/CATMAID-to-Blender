@@ -14,6 +14,10 @@ First download CATMAIDImport.py, then:
 2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> 'Install from File' and select CATMAIDImport.py
 3. Activate by checking box and 'Save User Setting'
 
+######Required Python packages:
+Blender for Windows comes with all necessary Python packages.
+On other systems make sure numpy is installed.
+
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
 You may also set credentials to be saved for convenience.
