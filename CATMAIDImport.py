@@ -19,6 +19,16 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V4.33 02/04/2015:
+    - made sure Addon doesnt crash if numpy is not installed
+      -> will instead throw error when not found 
+
+### V4.32 01/04/2015:
+    - added option to unify materials
+    - changed 'Retrieve Weighted Connectors' to also retrieve non-weighted connectors
+    - fixed bug that caused layer to be ignored
+    - cleaned up connector retrieval
+
 ### V4.31 25/03/2015:
     - added select by annotation feature
     - fixed bug in dendrogram export
@@ -236,7 +246,11 @@ import colorsys
 import copy
 import http.cookiejar as cj
 import mathutils
-import numpy as np
+try:
+    import numpy as np
+except:
+    print('Unable to import Python numpy. Some functions will not work!')
+
 import base64
 import statistics
 
@@ -368,7 +382,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'PMARKER_SEL')#.number=1
+        row.operator("retrieve.connectors", text = "Retrieve Connectors", icon = 'PMARKER_SEL')#.number=1
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
 
         
@@ -1519,7 +1533,7 @@ class RetrieveByAnnotation(Operator):
 class RetrieveConnectors(Operator):      
     """Retrieves Connectors of active/selected/all Neuron from CATMAID database"""
     bl_idname = "retrieve.connectors"  
-    bl_label = "Retrieve Connectors!!!"
+    bl_label = "Retrieve Connectors"
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
@@ -1537,6 +1551,9 @@ class RetrieveConnectors(Operator):
                                     description = "Set layer in which to create connectors")
     get_inputs = BoolProperty(name="Retrieve Inputs", default = True)
     get_outputs = BoolProperty(name="Retrieve Ouputs", default = True)
+    weight_outputs = BoolProperty(  name="Weight Ouputs", 
+                                    description = "If true, presynaptic sites will be scaled relative to the number of postsynaptically connected neurons.",
+                                    default = True)
     filter = StringProperty(name="Filter Connectors",
                             description='Filter neuron names pre/postsynaptic of connectors')
     
@@ -1561,30 +1578,25 @@ class RetrieveConnectors(Operator):
                 self.report({'ERROR'},'Active Object not a Neuron!')
                 print ('Active Object not a Neuron') 
             else:                      
-                active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-                self.get_connectors(active_skeleton, bpy.context.active_object.active_material.diffuse_color[0:3])   
+                to_search = [bpy.context.active_object]               
         
-        if self.which_neurons == 'All':
-            n = 0
-            n_total = len(bpy.data.objects)
-            for neuron in bpy.data.objects:
-                n += 1
-                if '#' in neuron.name:
-                    print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
-                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])
-                    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
-        
-        if self.which_neurons == 'Selected':
-            n = 0
-            n_total = len(bpy.context.selected_objects)
-            for neuron in bpy.context.selected_objects:
-                n += 1
-                if '#' in neuron.name:
-                    print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
-                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])           
-                    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+        elif self.which_neurons == 'All':
+            to_search = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_search = bpy.context.selected_objects
+
+        filtered_ob_list = []
+        for ob in to_search:
+            if ob.name.startswith('#'):
+                filtered_ob_list.append(ob)
+
+        for i,neuron in enumerate(filtered_ob_list):
+            print('Importing Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
+            skid = re.search('#(.*?) -',neuron.name).group(1)                    
+            self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+
+        self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
                 
             
         return {'FINISHED'}   
@@ -1714,7 +1726,7 @@ class RetrieveConnectors(Operator):
             elif self.color_prop == 'Mesh-color':
                 connector_color = mesh_color
 
-            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius)
+            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius, self.layer, self.weight_outputs)
                 
         else:
             print('No connector data for presnypases retrieved')                    
@@ -3060,6 +3072,14 @@ class ConnectorsToSVG(Operator, ExportHelper):
         """
         Creates Barplot for given svg based on distribution of 
         """
+
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Unable to create barplot - check console')
+            print('ERROR: Python Numpy not loaded (not installed?) - unable to create barplot!')
+            return
 
         #Bin width is in 1/1000 nm = um
         bin_width = 2
@@ -5628,6 +5648,14 @@ class ExportAllToSVG(Operator, ExportHelper):
         Creates Barplot for given svg based on distribution of nodes
         """
 
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Unable to create barplot - check console')
+            print('ERROR: Python Numpy not loaded (not installed?) - unable to create barplot!')
+            return
+
         to_plot = []
 
         #First filter neurons_to_plot for non neurons
@@ -5912,24 +5940,26 @@ class Create_Mesh (Operator):
     bl_idname = "create.new_neuron"  
     bl_label = "Create New Neuron"  
 
-    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, unify_materials = True):
+    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, layer = 3, weight_outputs = True, unify_materials = True):
         ### Takes Connector data and create spheres in layer 3!!!
         ### For Downstream targets: sphere radius refers to # of targets
         print('Creating connector meshes')   
         start_creation = time.clock()
+
+        layers = [i == layer for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]]
          
         for connector in connectors_post:
             #print('Creating connector %s' % connectors_post[connector]['id']) 
-            if basic_radius != -1:   
+            if basic_radius != -1 and weight_outputs is True:   
                 co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]    
+            elif basic_radius != -1 and weight_outputs is False:
+                co_size = basic_radius
             else:
                 co_size = 0.01
             co_loc = connectors_post[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=(False, False, True, False, False, False, False, False, \
-                                                                    False, False, False, False, False, False, False, False, False, \
-                                                                    False, False, False))            
+                                                                    layers=layers)            
             bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
             bpy.ops.object.shade_smooth()                        
             
@@ -5947,9 +5977,7 @@ class Create_Mesh (Operator):
             co_loc = connectors_pre[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=(False, False, True, False, False, False, False, False, \
-                                                                    False, False, False, False, False, False, False, False, False, \
-                                                                    False, False, False))            
+                                                                    layers=layers)            
             bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
             bpy.ops.object.shade_smooth()                        
             
@@ -6940,6 +6968,13 @@ class ColorBySimilarity(Operator):
                                 )
 
     def execute (self, context):
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Cancelled: Python Numpy not installed.')
+            return{'FINISHED'}
+
         #Get neurons first
         neurons = []
         neuron_names = {}
@@ -7614,7 +7649,7 @@ class UnifyMaterial(Operator):
                                 )  
 
     def execute(self,context):                                    
-        new_mat = bpy.data.materials.new('Unified material')
+        new_mat = bpy.data.materials.new('#Unified material')
         new_mat.diffuse_color = self.color
 
         if self.which_neurons == 'Selected':
@@ -7677,7 +7712,7 @@ class DisplayHelp(Operator):
             layout.label(text='on annotations: neuron needs to have a <paired with #skid> annotation.')
             layout.label(text='For example <paired with #1874652>')
         elif self.entry == 'retrieve.connectors':
-            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors are')
+            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors can be')
             layout.label(text='scaled (weighted) based on the number of postsynaptically connected')
             layout.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
         elif self.entry == 'color.unify':
@@ -8022,8 +8057,9 @@ def register():
  
  
 def unregister():
+    bpy.utils.unregister_class(CATMAIDAddonPreferences) 
     bpy.utils.unregister_module(__name__)    
-    bpy.utils.unregister_class(ExampleAddonPreferences) 
+    
     """
     bpy.utils.unregister_class(CATMAIDimportPanel) 
     #bpy.utils.unregister_class(ImportFromTXT)
