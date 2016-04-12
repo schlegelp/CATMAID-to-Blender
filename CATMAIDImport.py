@@ -19,14 +19,11 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
-<<<<<<< HEAD
 ### V5 12/04/2015:
     - separated requests to server into multiple threads (not for all operators): results in 6X increased import speed!
     - other improvements
     - bugfixes 
 
-=======
->>>>>>> origin/master
 ### V4.33 02/04/2015:
     - made sure Addon doesnt crash if numpy is not installed
       -> will instead throw error when not found 
@@ -1838,7 +1835,6 @@ class RetrieveConnectors(Operator):
             if ob.name.startswith('#'):
                 filtered_ob_list.append(ob)
 
-<<<<<<< HEAD
         threads = {}
         skdata = {}
         start = time.clock()
@@ -1858,13 +1854,6 @@ class RetrieveConnectors(Operator):
             skid = re.search('#(.*?) -',neuron.name).group(1)                    
             self.get_connectors(skid,skdata[skid], neuron.active_material.diffuse_color[0:3])
             bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
-=======
-        for i,neuron in enumerate(filtered_ob_list):
-            print('Importing Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
-            skid = re.search('#(.*?) -',neuron.name).group(1)                    
-            self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])
-            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
->>>>>>> origin/master
 
         self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
                 
