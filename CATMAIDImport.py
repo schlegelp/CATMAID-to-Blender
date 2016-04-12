@@ -19,6 +19,21 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5 12/04/2015:
+    - separated requests to server into multiple threads (not for all operators): results in 6X increased import speed!
+    - other improvements
+    - bugfixes 
+
+### V4.33 02/04/2015:
+    - made sure Addon doesnt crash if numpy is not installed
+      -> will instead throw error when not found 
+
+### V4.32 01/04/2015:
+    - added option to unify materials
+    - changed 'Retrieve Weighted Connectors' to also retrieve non-weighted connectors
+    - fixed bug that caused layer to be ignored
+    - cleaned up connector retrieval
+
 ### V4.31 25/03/2015:
     - added select by annotation feature
     - fixed bug in dendrogram export
@@ -235,8 +250,13 @@ import math
 import colorsys
 import copy
 import http.cookiejar as cj
+import threading
 import mathutils
-import numpy as np
+try:
+    import numpy as np
+except:
+    print('Unable to import Python numpy. Some functions will not work!')
+
 import base64
 import statistics
 
@@ -250,7 +270,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (4, 3, 1),
+ "version": (5, 0, 0),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -368,7 +388,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.connectors", text = "Retrieve Weighted Connectors", icon = 'PMARKER_SEL')#.number=1
+        row.operator("retrieve.connectors", text = "Retrieve Connectors", icon = 'PMARKER_SEL')#.number=1
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
 
         
@@ -389,7 +409,9 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("select.by_annotation", text = 'By Annotation', icon = 'BORDER_RECT')
         
         
-class VersionManager(bpy.types.PropertyGroup):    
+class VersionManager(bpy.types.PropertyGroup):
+    """Class to hold version related properties
+    """
     current_version = bpy.props.FloatProperty(name="Your Script Version", default=0,min=0, description="Current Version of the Script you are using")
     latest_version = bpy.props.FloatProperty(name="Latest Version", default=0,min=0, description="Latest Version on Github")
     last_stable_version = bpy.props.FloatProperty(name="Last Stable Version", default=0,min=0, description="Last Stable Version of the Script")
@@ -577,11 +599,15 @@ class CatmaidInstance:
         return self.djangourl("/" + str(pid) + "/skeletongroup/skeletonlist_confidence_compartment_subgraph" )
 
 def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
+    """
+    Retrieve 3D skeletons for a list of skeleton_ids.
+    Returns a list in the same order of skeleton_ids.
+    """
 
     #If list of skids is provided
     if type(skids) == type(list()):
         sk_data = []
-        print('Retrieving %i skeletons' % len(skids))
+        #print('Retrieving %i skeletons' % len(skids))
         for i, skeleton_id in enumerate(skids):
             #Create URL for retrieving example skeleton from server
             remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id, connector_flag, tag_flag )
@@ -591,7 +617,7 @@ def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
 
             sk_data.append(skeleton_data)
 
-            print('Skeleton #%s retrieved [%i of %i]' % ( str(skeleton_id) , i+1 , len(skids) ) )            
+            #print('Skeleton #%s retrieved [%i of %i]' % ( str(skeleton_id) , i+1 , len(skids) ) )            
     #if only a single skids is provided
     else:
         remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skids, connector_flag, tag_flag )
@@ -665,6 +691,9 @@ def retrieve_connectivity (skids, remote_instance, threshold = 1):
     return(connectivity_data)
 
 def get_partners (skid_list, remote_instance, hops, upstream=True,downstream=True):
+    """
+    Retrieves partners of given skids over several hops.
+    """
 
     #By seperating up and downstream retrieval we make sure that we don't go back in the second hop
     #E.g. we only want inputs of inputs and NOT inputs+outputs of inputs
@@ -976,6 +1005,7 @@ class UpdateNeurons(Operator):
     def execute(self,context):
         neurons_to_reload = {}
         resampling = 1
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
         
         ### Gather skeleton IDs
         if self.which_neurons == 'All':
@@ -998,7 +1028,8 @@ class UpdateNeurons(Operator):
                 except:
                     print('Unable to process neuron', neuron.name)                    
     
-        print(len(neurons_to_reload),'neurons to reload:',neurons_to_reload)
+        print(len(neurons_to_reload),'neurons to reload')
+        print('Reloading %i neurons' % len(neurons_to_reload))
 
         ### Deselect all objects, then select objects to update (Skeletons, Inputs/Outputs)                         
         for object in bpy.data.objects:
@@ -1016,18 +1047,38 @@ class UpdateNeurons(Operator):
         skids_to_retrieve = []
         for neuron in neurons_to_reload:
             skids_to_retrieve.append(neurons_to_reload[neuron]['skid'])
-        neuron_names = get_neuronnames(skids_to_retrieve)
+        neuron_names = get_neuronnames(skids_to_retrieve)        
 
-        ### Reload neurons
-        for neuron in neurons_to_reload:
-            skid = neurons_to_reload[neuron]['skid']            
-            print('Updating Neuron %s' % neuron)
+        print("Collection updated skeleton data for %i neurons" % len(neurons_to_reload) )
+        threads = {}
+        skdata = {}
+        start = time.clock()
+        resampling_factors = {}
+
+        for n in neurons_to_reload:    
+            skid = neurons_to_reload[n]['skid']
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                print(neuron_names[skid],'already exists - skipping.')
+                continue
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
             if self.keep_resampling is True:       
-                resampling = neurons_to_reload[neuron]['resampling']     
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual) 
+                resampling_factors[skid] = neurons_to_reload[n]['resampling']
             else:
-                RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.new_resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual) 
-        
+                resampling_factors[skid] = self.new_resampling
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()        
+
+        print("Creating new meshes for %i neurons" % len(skdata))
+        for skid in skdata:            
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], resampling_factors[skid], self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+
+        print('Finished Import in', time.clock()-start, 's') 
+        msg = 'Success! %i neurons imported' % len(skdata)
+        self.report({'INFO'}, msg)      
         return{'FINISHED'} 
     
     def invoke(self, context, event):        
@@ -1058,7 +1109,7 @@ class RetrieveNeuron(Operator):
                              default = 2, 
                              min = 1, 
                              max = 20,
-                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+                             description = "Will reduce number of nodes by given factor. Root, ends and forks are preserved!")
     truncate_neuron = EnumProperty(name="Truncate Neuron?",
                                    items = (('none','No','Load full neuron'),
                                             ('main_neurite','Main Neurite','Truncate Main Neurite'),
@@ -1082,6 +1133,8 @@ class RetrieveNeuron(Operator):
         global remote_instance
         
         errors = []
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor  
         
         ### Extract skeleton IDs from skeleton_id string
         skeletons_to_retrieve = re.findall('[0-9]+',self.skeleton_id)
@@ -1093,30 +1146,34 @@ class RetrieveNeuron(Operator):
         print(neuron_names)
 
         self.count = 1
-        
-        for skid in skeletons_to_retrieve:
-            ### Check if skeleton id has only numbers
+
+        print("Collection skeleton data for:",skeletons_to_retrieve)
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        for skid in skeletons_to_retrieve:      
             if re.search('[a-zA-Z]', self.skeleton_id):
-                print ('Invalid Skeleton ID')                     
-        
-            else:
-                print( "Retrieving Treenodes for %s [%i of %i]" % (skid,self.count,len(skeletons_to_retrieve)))
-                error_temp = self.add_skeleton(skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
-                self.count += 1
-                
-                if error_temp != '':
-                    errors.append(error_temp)
-                
-        if len(errors) == 0:
-            msg = 'Success! %i neurons imported' % len(skeletons_to_retrieve)
-            self.report({'INFO'}, msg)
+                print ('Invalid Skeleton ID')
+                continue
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                print(neuron_names[skid],'already exists - skipping.')
+                continue        
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
 
-        else:
-            print('%i Error(s) while Importing:' % len(errors))
-            self.report({'ERROR'},'Error(s) while importing (see console)')
+        for skid in threads:
+            skdata[skid] = threads[skid].join()        
 
-            for entry in errors:
-                print(entry)
+        print("Creating meshes for %i neurons" % len(skdata))
+        for skid in skdata:
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+
+        print('Finished Import in', time.clock()-start, 's')
+        msg = 'Success! %i neurons imported' % len(skdata)
+        self.report({'INFO'}, msg)
+
                         
         return {'FINISHED'}
 
@@ -1133,22 +1190,21 @@ class RetrieveNeuron(Operator):
         #truncated neuron name down to 63 letters if necessary
         if len(cellname) >= 60:
             cellname = cellname[:56] +'...'
-            print('Object name too long - truncated: ', cellname)
+            #print('Object name too long - truncated: ', cellname)
         
         object_name = '#' + cellname
             
         if object_name in bpy.data.objects:
             print('Neuron already exists! Skipping.')
             return error        
-        
 
         node_data = get_3D_skeleton ( [skeleton_id], remote_instance, int(import_connectors), 1 )[0]
 
-        print("%i entries for neuron %s retrieved" % (len(node_data),skeleton_id) )
+        #print("%i entries for neuron %s retrieved" % (len(node_data),skeleton_id) )
                 
         ### Continue only of data retrieved contains 5 entries (if less there was an error while importing)
         if len(node_data) == 3 or len(node_data) == 2:             
-            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, truncate_value, interpolate_virtual)
+            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, truncate_value, interpolate_virtual, self.conversion_factor)
         else:
             print('No/bad data retrieved')
             print('Data:')
@@ -1211,6 +1267,7 @@ class RetrievePairs(Operator):
         global remote_instance
         
         neurons = []
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
         
         if self.which_neurons == 'Active':
             if bpy.context.active_object != None:
@@ -1281,22 +1338,39 @@ class RetrievePairs(Operator):
               
 
     def retrieve_paired(self, paired):
-        
-        count = 0        
         neuron_names = get_neuronnames(paired)           
         
         if len(neuron_names) < len(paired):
-            print('Warning! Wrong paired skid(s) in annotations found!')
+            print('Warning! Incorrect annotated skid(s) among pairs found!')
             self.report({'ERROR'},'Error(s) occurred: see console')
-                
-        for skid in paired:            
-            print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(paired)))
+
+        print("Collection skeleton data for:",paired)
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        for skid in paired:
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                print(neuron_names[skid],'already exists - skipping.')
+                continue            
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()      
+
+        print("Creating meshes for %i neurons" % len(skdata))
+        for skid in skdata:
             try:
-                RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)            
-                count += 1         
+                CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
             except:
                 print('Error importing skid %s - wrong annotated skid?' %skid)
                 self.report({'ERROR'},'Error(s) occurred: see console')
+
+        print('Finished Import in', time.clock()-start, 's')
+        msg = 'Success! %i neurons imported' % len(skdata)
+        self.report({'INFO'}, msg)
         
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
@@ -1350,15 +1424,37 @@ class RetrieveInVolume(Operator):
 
     def execute(self, context):  
         global remote_instance
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
         
         #Get Neurons in Volume:
         skid_list = get_neurons_in_volume ( self.left, self.right, self.top, self.bot, self.z1, self.z2, remote_instance )
 
-        neuron_names = get_neuronnames(skid_list)        
+        neuron_names = get_neuronnames(skid_list)
 
-        for i,skid in enumerate(skid_list):            
-            print('Retrieving skeleton %s [%i of %i]' % (skid,i,len(skid_list)))
-            RetrieveNeuron.add_skeleton(self,str(skid),neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.interpolate_virtual)
+        print("Collection skeleton data for %i neurons" % len(skid_list))
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        for skid in skid_list:
+            if checkIfNeuronExists(str(skid),neuron_names[str(skid)]):
+                print(neuron_names[str(skid)],'already exists - skipping.')
+                continue            
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()        
+
+        print("Creating meshes for %i neurons" % len(skdata))
+        for skid in skdata:
+            CATMAIDtoBlender.extract_nodes(skdata[skid], str(skid), neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+
+        print('Finished Import in', time.clock()-start, 's')
+        msg = 'Success! %i neurons imported' % len(skdata)
+        self.report({'INFO'}, msg)    
         
         return{'FINISHED'}                                  
 
@@ -1402,10 +1498,47 @@ class RetrieveInVolume(Operator):
         if connected:
             return True
         else:
-            return False                             
-    
+            return False  
 
-class RetrieveByAnnotation(Operator):      
+class retrieveSkidsThreaded(threading.Thread):
+    def __init__(self,skids):
+        self.skidlist = skids    
+        threading.Thread.__init__(self)
+
+    def run(self):
+        #print(self.skidlist)        
+        for count,skid in enumerate( self.skidlist ): 
+            #print('Retrieving skeleton %s [%i of %i]' % (skid,count+1,len(self.skidlist)))
+            self.sk_data = get_3D_skeleton ( skid, remote_instance, connector_flag = 1, tag_flag = 1)           
+        return 
+
+    def get_3D_skeleton ( skid, remote_instance, connector_flag = 1, tag_flag = 1):
+        """
+        Retrieve 3D skeletons for a single skeleton_ids
+        """        
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skid, connector_flag, tag_flag )
+        data = remote_instance.fetch( remote_compact_skeleton_url )
+        return data
+
+    def join(self):
+        threading.Thread.join(self)
+        return self.sk_data
+
+def checkIfNeuronExists(skid,neuron_name):
+    cellname = skid + ' - ' + neuron_name  
+    #truncated neuron name down to 63 letters if necessary
+    if len(cellname) >= 60:
+        cellname = cellname[:56] +'...'
+        #print('Object name too long - truncated: ', cellname)   
+
+    object_name = '#' + cellname
+        
+    if object_name in bpy.data.objects:        
+        return True
+    else:
+        return False
+
+class RetrievebyAnnotation(Operator):       
     """Retrieve Neurons from CATMAID database based on Annotation"""
     bl_idname = "retrieve.by_annotation"  
     bl_label = "Enter Annotation:"    
@@ -1442,10 +1575,11 @@ class RetrieveByAnnotation(Operator):
     
     
     def execute(self, context):  
-        global remote_instance
-        
+        global remote_instance        
         ### Get annotation ID of self.annotation
         annotation_id = self.retrieve_annotation_list()
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
         
         if annotation_id != 'not found':
             self.retrieve_annotated(self.annotation, annotation_id)
@@ -1479,12 +1613,136 @@ class RetrieveByAnnotation(Operator):
         #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
         annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
         remote_annotated_url = remote_instance.get_annotated_url( project_id )
-        neuron_list = remote_instance.fetch( remote_annotated_url, annotation_post )
-        count = 0        
+        neuron_list = remote_instance.fetch( remote_annotated_url, annotation_post )        
+        
+        print('Retrieving names of annotated neurons...')        
+        annotated_skids = []
+        for entry in neuron_list['entities']:
+            if entry['type'] == 'neuron':
+                annotated_skids.append(str(entry['skeleton_ids'][0]))
+        neuron_names = get_neuronnames(annotated_skids)
+
+        print("Collection skeleton data for:",annotated_skids)
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        for skid in annotated_skids: 
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                print(neuron_names[skid],'already exists - skipping.')
+                continue
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()        
+
+        print("Creating meshes for %i neurons" % len(skdata))
+        for skid in skdata:
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+
+        print('Finished Import in', time.clock()-start, 's')
+        msg = 'Success! %i neurons imported' % len(skdata)
+        self.report({'INFO'}, msg)
+
+        return{'FINISHED'}
+        
+        
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+    
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
+    
+
+class OLDRetrieveByAnnotation(Operator):      
+    """Retrieve Neurons from CATMAID database based on Annotation"""
+    bl_idname = "retrieve.old_by_annotation"  
+    bl_label = "Enter Annotation:"    
+    
+    annotation = StringProperty(    name="Annotation",
+                                    description = "Enter single annotation. Case-SENSITIVE!"
+                                    )    
+    resampling = IntProperty(name="Resampling Factor", 
+                             default = 2, 
+                             min = 1, 
+                             max = 20,
+                             description = "Will reduce number of nodes by given factor n. Root, ends and forks are preserved!")
+    import_connectors = BoolProperty(   name="Import Connectors", 
+                                        default = True,
+                                        description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+    truncate_neuron = EnumProperty(name="Truncate Neuron?",
+                                   items = (('none','No','Load full neuron'),
+                                            ('main_neurite','Main Neurite','Truncate Main Neurite'),
+                                            ('strahler_index','Strahler Index','Truncate Based on Strahler index')
+                                            ),
+                                    default =  "none",
+                                    description = "Choose if neuron should be truncated.")
+    
+    truncate_value = IntProperty(   name="Truncate by Value", 
+                                        min=-10,
+                                        max=10,
+                                        default = 1,
+                                        description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
+                                    ) 
+    
+    interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
+                                        default = False,
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+    
+    
+    def execute(self, context):  
+        global remote_instance        
+        ### Get annotation ID of self.annotation
+        annotation_id = self.retrieve_annotation_list()
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
+        
+        if annotation_id != 'not found':
+            self.retrieve_annotated(self.annotation, annotation_id)
+        else:
+            print('Annotation not found in List! Import stopped!')
+            self.report({'ERROR'},'Annotation not found!')
+        
+        return{'FINISHED'}
+    
+    
+    def retrieve_annotation_list(self):
+        print('Retrieving list of Annotations...')
+        
+        remote_annotation_list_url = remote_instance.get_annotation_list( project_id )
+        list = remote_instance.fetch( remote_annotation_list_url )
+        
+        for dict in list['annotations']:
+            #print(dict['name'])
+            if dict['name'] == self.annotation:
+                annotation_id = dict['id']
+                print('Found Matching Annotation!')
+                break
+            else:
+                annotation_id = 'not found'
+        
+        return annotation_id            
+
+    
+    def retrieve_annotated(self, annotation, annotation_id):
+        print('Looking for Annotation | %s | (id: %s)' % (annotation,annotation_id))
+        #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
+        annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
+        remote_annotated_url = remote_instance.get_annotated_url( project_id )
+        neuron_list = remote_instance.fetch( remote_annotated_url, annotation_post )        
         
         wm = bpy.context.window_manager
         ### Start progress bar at cursor (currently doesn't seem to work b/c window is not properly updated)
         wm.progress_begin(0, len(neuron_list['entities']))
+
+        start = time.clock()
         
         print('Retrieving names of annotated neurons...')
         annotated_skids = []
@@ -1493,20 +1751,19 @@ class RetrieveByAnnotation(Operator):
                 annotated_skids.append(str(entry['skeleton_ids'][0]))
         neuron_names = get_neuronnames(annotated_skids)
         
-        for entry in neuron_list['entities']:
+        for count,entry in enumerate( neuron_list['entities'] ): 
             if entry['type'] == 'neuron':
                 skid = str(entry['skeleton_ids'][0])
-                print('Retrieving skeleton %s [%i of %i]' % (skid,count,len(neuron_list['entities'])))
+                print('Retrieving skeleton %s [%i of %i]' % (skid,count+1,len(neuron_list['entities'])))
                 RetrieveNeuron.add_skeleton(self,skid,neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
-                wm.progress_update(count)
-                count += 1
+                wm.progress_update(count)                             
             
-        wm.progress_end()          
-         
+        wm.progress_end() 
+
+        print('Finished Import in', time.clock()-start, 's')        
         
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
-    
+        return context.window_manager.invoke_props_dialog(self)    
 
     @classmethod        
     def poll(cls, context):
@@ -1519,7 +1776,7 @@ class RetrieveByAnnotation(Operator):
 class RetrieveConnectors(Operator):      
     """Retrieves Connectors of active/selected/all Neuron from CATMAID database"""
     bl_idname = "retrieve.connectors"  
-    bl_label = "Retrieve Connectors!!!"
+    bl_label = "Retrieve Connectors"
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
@@ -1537,6 +1794,9 @@ class RetrieveConnectors(Operator):
                                     description = "Set layer in which to create connectors")
     get_inputs = BoolProperty(name="Retrieve Inputs", default = True)
     get_outputs = BoolProperty(name="Retrieve Ouputs", default = True)
+    weight_outputs = BoolProperty(  name="Weight Ouputs", 
+                                    description = "If true, presynaptic sites will be scaled relative to the number of postsynaptically connected neurons.",
+                                    default = True)
     filter = StringProperty(name="Filter Connectors",
                             description='Filter neuron names pre/postsynaptic of connectors')
     
@@ -1552,6 +1812,8 @@ class RetrieveConnectors(Operator):
         global remote_instance
         
         bpy.context.scene.layers[self.layer] = True
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
         
         if self.which_neurons == 'Active':
             if bpy.context.active_object is None:
@@ -1561,46 +1823,56 @@ class RetrieveConnectors(Operator):
                 self.report({'ERROR'},'Active Object not a Neuron!')
                 print ('Active Object not a Neuron') 
             else:                      
-                active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-                self.get_connectors(active_skeleton, bpy.context.active_object.active_material.diffuse_color[0:3])   
+                to_search = [bpy.context.active_object]               
         
-        if self.which_neurons == 'All':
-            n = 0
-            n_total = len(bpy.data.objects)
-            for neuron in bpy.data.objects:
-                n += 1
-                if '#' in neuron.name:
-                    print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
-                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])
-                    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
-        
-        if self.which_neurons == 'Selected':
-            n = 0
-            n_total = len(bpy.context.selected_objects)
-            for neuron in bpy.context.selected_objects:
-                n += 1
-                if '#' in neuron.name:
-                    print('Importing Connectors for Neuron %i [of %i]' % (n,n_total))
-                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    self.get_connectors(skid, neuron.active_material.diffuse_color[0:3])           
-                    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+        elif self.which_neurons == 'All':
+            to_search = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_search = bpy.context.selected_objects
+
+        filtered_ob_list = []
+        for ob in to_search:
+            if ob.name.startswith('#'):
+                filtered_ob_list.append(ob)
+
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
+        for neuron in filtered_ob_list:
+            skid = re.search('#(.*?) -',neuron.name).group(1)                        
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()
+
+        for i,neuron in enumerate(filtered_ob_list):
+            print('Creating Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
+            skid = re.search('#(.*?) -',neuron.name).group(1)                    
+            self.get_connectors(skid,skdata[skid], neuron.active_material.diffuse_color[0:3])
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
+
+        self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
                 
             
         return {'FINISHED'}   
     
         
-    def get_connectors(self, active_skeleton, mesh_color = None):
-        node_data = []
-        connector_ids = []
-                        
+    def get_connectors(self, active_skeleton, node_data ,mesh_color = None):        
+        """             
         ### Retrieve compact json data and filter connector ids
+        node_data = []
         print('Retrieving connector data for skid %s...' % active_skeleton)
-        node_data = get_3D_skeleton ( active_skeleton, remote_instance, connector_flag = 1, tag_flag = 0 )
+        node_data = get_3D_skeleton ( active_skeleton, remote_instance, connector_flag = 1, tag_flag = 0 )        
 
         if node_data:
-            print('Success!')            
+            print('Success!')
+        """
 
+        connector_ids = []
         i_pre = 0
         i_post = 0
         connector_post_postdata = {}
@@ -1608,7 +1880,7 @@ class RetrieveConnectors(Operator):
         connector_post_coords = {}
         connector_pre_coords = {}
             
-        print('Extracting coordinates..')
+        print('Extracting coordinates..')        
         
         ### Get coordinates, divide into pre-/postsynapses and bring them into Blender space: switch y and z, divide by 10.000/10.000/-10.000
         for connection in node_data[1]:
@@ -1616,7 +1888,7 @@ class RetrieveConnectors(Operator):
             if connection[2] == 1 and self.get_inputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
-                connector_pre_coords[connection[1]]['coords'] = (connection[3]/10000,connection[5]/10000,connection[4]/-10000)   
+                connector_pre_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)   
 
                 connector_tag = 'connector_ids[%i]' % i_pre
                 connector_pre_postdata[connector_tag] = connection[1]         
@@ -1626,7 +1898,7 @@ class RetrieveConnectors(Operator):
             if connection[2] == 0 and self.get_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
-                connector_post_coords[connection[1]]['coords'] = (connection[3]/10000,connection[5]/10000,connection[4]/-10000)            
+                connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)            
 
                 connector_ids.append(connection[1])
                 connector_tag = 'connector_ids[%i]' % i_post
@@ -1714,7 +1986,7 @@ class RetrieveConnectors(Operator):
             elif self.color_prop == 'Mesh-color':
                 connector_color = mesh_color
 
-            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius)
+            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius, self.layer, self.weight_outputs)
                 
         else:
             print('No connector data for presnypases retrieved')                    
@@ -1831,15 +2103,17 @@ class ConnectorsToSVG(Operator, ExportHelper):
         neurons_to_export = []  
         skids_to_export = []  
 
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+
         if self.which_neurons == 'Active':
             if bpy.context.active_object is None and self.which_neurons == 'Active':
                 print ('No Object Active')
                 self.report({'ERROR'},'No Active Object!')       
-                return
+                return{'CANCELLED'}
             elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.which_neurons == 'Active':
                 print ('Active Object not a Neuron') 
                 self.report({'ERROR'},'Active Object not a Neuron!')
-                return
+                return{'CANCELLED'}
             active_skid = re.search('#(.*?) -',bpy.context.active_object.name).group(1)                
             skids_to_export.append(active_skid)
             neurons_to_export.append(bpy.context.active_object)
@@ -1865,8 +2139,19 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     if self.mesh_colors:
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
-        for n in skids_to_export:
-            connector_data[n] = self.get_connectors(n)
+        threads = {}
+        skdata = {}
+        print("Retrieving connector data for %i neurons" % len(skids_to_export))
+        for skid in skids_to_export:            
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()
+
+        for skid in skids_to_export:
+            connector_data[skid] = self.get_connectors(skid,skdata[skid])
 
         if self.color_by_connections:
             #If outputs are exported then count only upstream connections (upstream sources of these outputs)
@@ -1933,9 +2218,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         return {'FINISHED'} 
       
         
-    def get_connectors(self, active_skeleton):
-        
-        node_data = []
+    def get_connectors(self, active_skeleton,node_data):
         connector_ids = []
         
         if self.filter_connectors:
@@ -1948,14 +2231,6 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     filter_exclusion = True
                 else:
                     filter_inclusion = True
-                
-                        
-        ### Retrieve compact json data and filter connector ids
-        print('Retrieving connector data for skid %s...' % active_skeleton)
-        node_data = get_3D_skeleton ( [active_skeleton], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
-
-        if node_data:
-            print('Success!')
 
         i = 0
         connector_postdata_postsynapses = {}
@@ -1964,14 +2239,14 @@ class ConnectorsToSVG(Operator, ExportHelper):
         connector_pre_coords = {}
         nodes_list = {}
             
-        print('Extracting coordinates..')
+        print('Extracting coordinates..')        
         
         ### Convert coordinates to Blender
         for node in node_data[0]:
             
-            X = float(node[3])/10000
-            Y = float(node[4])/-10000
-            Z = float(node[5])/10000            
+            X = float(node[3])/self.conversion_factor
+            Y = float(node[4])/-self.conversion_factor
+            Z = float(node[5])/self.conversion_factor            
             
             nodes_list[node[0]] = (X,Z,Y)
 
@@ -2003,7 +2278,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             if connection[2] == 0 and self.export_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
-                connector_post_coords[connection[1]]['coords'] = (connection[3]/10000,connection[5]/10000,connection[4]/-10000)            
+                connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)            
 
                 connector_ids.append(connection[1])
                 connector_tag = 'connector_ids[%i]' % i
@@ -3061,6 +3336,14 @@ class ConnectorsToSVG(Operator, ExportHelper):
         Creates Barplot for given svg based on distribution of 
         """
 
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Unable to create barplot - check console')
+            print('ERROR: Python Numpy not loaded (not installed?) - unable to create barplot!')
+            return
+
         #Bin width is in 1/1000 nm = um
         bin_width = 2
         scale_factor = 1
@@ -3791,6 +4074,7 @@ class RetrievePartners(Operator):
         global remote_instance
 
         to_process = []
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
 
         if self.which_neurons == 'Active':
             if bpy.context.active_object.name.startswith('#'):
@@ -3872,13 +4156,14 @@ class RetrievePartners(Operator):
         ### Cycle over partner's skeleton ids and load neurons
         total_number = len(list(set(partners)))
         i = 0
+
+        filtered_partners = []
         
         if self.filter_by_annotation:
             annotations = get_annotations_from_list(partners,remote_instance)          
             tags = self.filter_by_annotation.split(',')
-                            
-        for skid in list(set(partners)):            
-            if self.filter_by_annotation:
+
+            for skid in list(set(partners)):                            
                 tag_found = False
                 try:
                     for entry in annotations[skid]:
@@ -3888,18 +4173,37 @@ class RetrievePartners(Operator):
                 except:
                     print('WARNING: %s has no annotations - not imported' % skid)
                     annotations[skid] = 'no annotations found'
-            else:
-                tag_found = True
-            
-            i += 1
-            
-            if tag_found == False:
-                print('WARNING: Tag not found for %s: %s' % (neuron_names[skid],str(annotations[skid])))
-                continue           
-                       
-            print('Loading above-threshold partner: %s  [%i of %i]' % (neuron_names[skid],i,total_number))           
-            
-            RetrieveNeuron.add_skeleton(self, skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual)
+
+                if tag_found == True:
+                    filtered_partners.append(skid)
+        else:
+            filtered_partners = list(set(partners))
+
+
+        print('Retrieving skeletons for %i above-threshold partners' % len(filtered_partners))
+
+        threads = {}
+        skdata = {}
+        start = time.clock()
+
+        for skid in filtered_partners:
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                print(neuron_names[skid],'already exists - skipping.')
+                continue            
+            t = retrieveSkidsThreaded([skid])
+            t.start()
+            threads[skid] = t
+
+        for skid in threads:
+            skdata[skid] = threads[skid].join()        
+
+        print("Creating meshes for %i neurons" % len(skdata))
+        for skid in skdata:
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+
+        print('Finished in', time.clock()-start)
+
+
             
 class ColorCreator():
     """Class used to create distinctive colors"""  
@@ -3976,7 +4280,7 @@ class ShapeCreator:
 class CATMAIDtoBlender:
     """Extracts Blender relevant data from data retrieved from CATMAID"""
     
-    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1 , interpolate_virtual = False):
+    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1 , interpolate_virtual = False, conversion_factor=10000):
         
         index = 1            
         cellname = skid + ' - ' + neuron_name                
@@ -3996,7 +4300,7 @@ class CATMAIDtoBlender:
         #Truncate object name is necessary 
         if len(cellname) >= 60:
             cellname = cellname[:56] +'...'
-            print('WARNING: Object name too long - truncated: ', cellname)
+            #print('WARNING: Object name too long - truncated: ', cellname)
         
         object_name = '#' + cellname     
         
@@ -4004,15 +4308,15 @@ class CATMAIDtoBlender:
             print('WARNING: Neuron %s already exists!' % cellname)
             return{'FINISHED'}
         
-        print('Reading node data..')    
-        #print(node_data[0])           
+        #print('Reading node data..')    
+        #print(node_data[0])
         
         for entry in node_data[0]:
             ### entry = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
             ### Find and convert CATMAID coordinates to Blender
-            X = float(entry[3])/10000
-            Y = float(entry[4])/-10000
-            Z = float(entry[5])/10000
+            X = float(entry[3])/conversion_factor
+            Y = float(entry[4])/-conversion_factor
+            Z = float(entry[5])/conversion_factor
             ### Z-axis in Blender is Y-axis in CATMAID!
             XYZcoords.append((X,Z,Y))
             
@@ -4030,9 +4334,9 @@ class CATMAIDtoBlender:
             
             ### Search for soma
             if entry[6] > 100:
-                soma = (X,Z,Y,round(entry[6]/10000,2))
+                soma = (X,Z,Y,round(entry[6]/conversion_factor,2))
                 soma_node = entry[0]
-                print('Soma found')
+                #print('Soma found')
 
         #if no soma is found, then search for nerve ending (for sensory neurons)
         #print(node_data[2])       
@@ -4085,16 +4389,16 @@ class CATMAIDtoBlender:
         Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep)            
 
         ### Search through connectors and create a list with coordinates
-        if import_connectors is True:
+        if import_connectors is True:            
             connector_pre = {}
             connector_post = {}
             for connector in node_data[1]:
                 connector_id = connector[1]                           
                         
                 ### Get connector coordinates
-                X_cn = float(connector[3])/10000
-                Y_cn = float(connector[4])/-10000
-                Z_cn = float(connector[5])/10000 
+                X_cn = float(connector[3])/conversion_factor
+                Y_cn = float(connector[4])/-conversion_factor
+                Z_cn = float(connector[5])/conversion_factor 
                 
                 connector_coords = (X_cn, Z_cn, Y_cn)
     
@@ -4108,7 +4412,7 @@ class CATMAIDtoBlender:
                     connector_post[connector_id] = (nodes_list[connector[0]], connector_coords)                          
                     #print(connector_post[connector_id])          
     
-            print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))
+            #print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))
         
             Create_Mesh.make_connectors(cellname, connector_pre, connector_post)
         
@@ -4168,7 +4472,7 @@ class CATMAIDtoBlender:
     
     def resample_child_list( list_of_childs, root_node ,soma_node, resampling_factor ):
         
-        print('Resampling Child List (Factor: %i)' % resampling_factor)        
+        #print('Resampling Child List (Factor: %i)' % resampling_factor)        
         new_child_list = {}
         new_child_list[None] = [root_node]
         
@@ -4197,7 +4501,7 @@ class CATMAIDtoBlender:
                     new_child_list[old_child] = []
                     new_child_list[old_child].append(new_child)
                     
-        print('Done Resampling. Node Count: %i/%i (new/old)' % (len(new_child_list),len(list_of_childs)))
+        #print('Resampled child list. Node Count: %i/%i (new/old)' % (len(new_child_list),len(list_of_childs)))
                     
         return new_child_list  
         
@@ -4734,6 +5038,8 @@ class ExportAllToSVG(Operator, ExportHelper):
         offsetY_for_persp = 150
         offsetX_for_persp = 0       
         first_neuron = True
+
+        conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor 
         
         if "Perspective-Dorsal" in self.views_to_export:
             #For dorsal perspective change offsets:
@@ -4857,7 +5163,20 @@ class ExportAllToSVG(Operator, ExportHelper):
         print ( str ( neuron_count) + ' colors created')
         
         if self.use_bevel is True:
-            base_line_width = self.line_width        
+            base_line_width = self.line_width
+
+        skdata = {}
+        threads = {}
+        if self.color_by_density is True and self.object_for_density == 'Synapses' or self.color_by_inputs_outputs is True:
+            print('Retrieving skeleton data for %i neurons' % len(to_process_sorted))
+            for neuron in to_process_sorted:
+                skid = re.search('#(.*?) ',neuron.name).group(1)                  
+                t = retrieveSkidsThreaded([skid])
+                t.start()
+                threads[skid] = t
+
+            for skid in threads:
+                skdata[skid] = threads[skid].join()
 
         for neuron in to_process_sorted:            
             ### Create List of Lines
@@ -4899,13 +5218,13 @@ class ExportAllToSVG(Operator, ExportHelper):
                     color = 'rgb' + str((0, 0, 0)) 
                     
                 if self.use_bevel is True:
-                    self.line_width = neuron.data.bevel_depth/0.007 * base_line_width
-                
+                    self.line_width = neuron.data.bevel_depth/0.007 * base_line_width                
                     
                 if self.color_by_density is True and self.object_for_density == 'Synapses':   
-                    print('Retrieving Connectors for Color by Density..')
+                    #print('Retrieving Connectors for Color by Density..')
                     skid = re.search('#(.*?) ',neuron.name).group(1)
-                    node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
+                    #node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
+                    node_data = skdata[skid]
                     
                     #Reset density_data for every neuron!
                     density_data = []
@@ -4917,7 +5236,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                             apply_filter = True
                             
                     #Filter no filter is set, just add all connectors to density data
-                    if apply_filter is False:                    
+                    if apply_filter is False:                                            
                         for connection in node_data[1]:
                             if 'outgoing' in filter_for_synapses or 'incoming' in filter_for_synapses:
                                 if connection[2] == 0 and 'outgoing' not in filter_for_synapses:
@@ -4927,9 +5246,9 @@ class ExportAllToSVG(Operator, ExportHelper):
                                 
 
                             density_data.append((
-                                               round(connection[3]/10000,3),
-                                               round(connection[5]/10000,3),
-                                               round(connection[4]/-10000,3)
+                                               round(connection[3]/conversion_factor,3),
+                                               round(connection[5]/conversion_factor,3),
+                                               round(connection[4]/-conversion_factor,3)
                                                ))
                     else:
                         connector_postdata = {}
@@ -5004,11 +5323,11 @@ class ExportAllToSVG(Operator, ExportHelper):
                                                 include_connector = True
                                                 matches.append(neuron_name)
                             
-                            if include_connector is True and exclude_connector is False:
+                            if include_connector is True and exclude_connector is False:                                
                                 density_data.append((
-                                               round(connection[3]/10000,3),
-                                               round(connection[5]/10000,3),
-                                               round(connection[4]/-10000,3)
+                                               round(connection[3]/conversion_factor,3),
+                                               round(connection[5]/conversion_factor,3),
+                                               round(connection[4]/-conversion_factor,3)
                                                ))
                         print('Found match(es) in connected neuron(s): ', set(matches))
                         print('Found exlucsion match(es) in connected neuron(s): ', set(exclude_matches))                        
@@ -5017,10 +5336,11 @@ class ExportAllToSVG(Operator, ExportHelper):
                 if self.color_by_inputs_outputs is True:
                     #Retrieve list of connectors for this neuron           
                     skid = re.search('#(.*?) ',neuron.name).group(1)
-                    print('Retrieving connector data for skid %s...' % skid)                    
-                    node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
+                    #print('Retrieving connector data for skid %s...' % skid)                    
+                    #node_data = get_3D_skeleton ( [skid], remote_instance, connector_flag = 1, tag_flag = 0 )[0]
+                    node_data = skdata[skid]
                     
-                    list_of_synapses = {}
+                    list_of_synapses = {}                    
                     
                     for connection in node_data[1]:
                         treenode_id = connection[0]
@@ -5035,12 +5355,12 @@ class ExportAllToSVG(Operator, ExportHelper):
                             list_of_synapses[treenode_id]['inputs'] += 1
                             
                     for node in node_data[0]:
-                        treenode_id = node[0]
+                        treenode_id = node[0]                        
                         if treenode_id in list_of_synapses:
                             list_of_synapses[treenode_id]['coords'] = (
-                                                                       round(node[3]/10000,2),
-                                                                       round(node[5]/10000,2),
-                                                                       round(node[4]/-10000,2)
+                                                                       round(node[3]/conversion_factor,2),
+                                                                       round(node[5]/conversion_factor,2),
+                                                                       round(node[4]/-conversion_factor,2)
                                                                        )
                                                                        
                     print('Treenodes with synapses found: ', len(list_of_synapses))
@@ -5628,6 +5948,14 @@ class ExportAllToSVG(Operator, ExportHelper):
         Creates Barplot for given svg based on distribution of nodes
         """
 
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Unable to create barplot - check console')
+            print('ERROR: Python Numpy not loaded (not installed?) - unable to create barplot!')
+            return
+
         to_plot = []
 
         #First filter neurons_to_plot for non neurons
@@ -5912,24 +6240,26 @@ class Create_Mesh (Operator):
     bl_idname = "create.new_neuron"  
     bl_label = "Create New Neuron"  
 
-    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, unify_materials = True):
+    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, layer = 3, weight_outputs = True, unify_materials = True):
         ### Takes Connector data and create spheres in layer 3!!!
         ### For Downstream targets: sphere radius refers to # of targets
         print('Creating connector meshes')   
         start_creation = time.clock()
+
+        layers = [i == layer for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]]
          
         for connector in connectors_post:
             #print('Creating connector %s' % connectors_post[connector]['id']) 
-            if basic_radius != -1:   
+            if basic_radius != -1 and weight_outputs is True:   
                 co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]    
+            elif basic_radius != -1 and weight_outputs is False:
+                co_size = basic_radius
             else:
                 co_size = 0.01
             co_loc = connectors_post[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=(False, False, True, False, False, False, False, False, \
-                                                                    False, False, False, False, False, False, False, False, False, \
-                                                                    False, False, False))            
+                                                                    layers=layers)            
             bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
             bpy.ops.object.shade_smooth()                        
             
@@ -5947,9 +6277,7 @@ class Create_Mesh (Operator):
             co_loc = connectors_pre[connector]['coords']                
             connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
                                                                     enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=(False, False, True, False, False, False, False, False, \
-                                                                    False, False, False, False, False, False, False, False, False, \
-                                                                    False, False, False))            
+                                                                    layers=layers)            
             bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
             bpy.ops.object.shade_smooth()                        
             
@@ -5959,7 +6287,7 @@ class Create_Mesh (Operator):
                 Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])       
 
         print('Done in ' + str(time.clock()-start_creation)+'s')
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
 
     def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = []):
@@ -6006,7 +6334,7 @@ class Create_Mesh (Operator):
             Create_Mesh.assign_material (bpy.context.active_object, neuron_material_name, random.randrange(0,100)/100 , \
                                         random.randrange(0,100)/100 , random.randrange(0,100)/100)
  
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
         
 
     def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep):
@@ -6095,7 +6423,7 @@ class Create_Mesh (Operator):
 
         time_elapsed = time.clock() - start_creation 
         print('Done in ' + str(time_elapsed) + 's')
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 10)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
         
     
     def create_hull(XYZcoords, edges): 
@@ -6221,7 +6549,7 @@ class Create_Mesh (Operator):
 
         Create_Mesh.assign_material (ob_pre, 'PreSynapses_Mat', 1 , 0 , 0)
         Create_Mesh.assign_material (ob_post, 'PostSynapses_Mat', 0 , 0.8 , 0.8)
-        print('Creating connectors done in ' + str(time.clock()-start_creation)+'s')
+        #print('Creating connectors done in ' + str(time.clock()-start_creation)+'s')
             
             
     def curve_convert (ob, bevel=0.007):
@@ -6723,7 +7051,7 @@ class ColorBySynapseCount(Operator):
             max_count = self.manual_max_value
             print('Using manually set max value for coloring of synaptic connections (may be capped!): ',max_count)
 
-        print('Synapse count:')
+        #print('Synapse count:')
         for object in bpy.data.objects:
             if object.name.startswith('#'):
                 try:                
@@ -6826,6 +7154,9 @@ class ColorByAnnotation(Operator):
                                 max=1.0,
                                 subtype='COLOR'
                                 )
+    variation = BoolProperty(name="Add variation",
+                                         description="Add small variation in color to each individual neuron",
+                                         default=False)
     make_non_matched_grey = BoolProperty(name="Color others grey",
                                          description="If unchecked, color of neurons without given annotation(s) will not be changed",
                                          default=False)
@@ -6867,7 +7198,11 @@ class ColorByAnnotation(Operator):
                             excluded_skids.append(skid)
                             
                     if include is True and exclude is False:
-                        object.active_material.diffuse_color = self.color
+                        if self.variation is False:
+                            to_color = self.color
+                        elif self.variation is True:
+                            to_color = [ e + ( random.randint(-10,10)/100 ) for e in self.color]
+                        object.active_material.diffuse_color = to_color
                         color_changed.append(skid)
                     elif self.make_non_matched_grey is True:
                         object.active_material.diffuse_color = (0.4,0.4,0.4)
@@ -6915,7 +7250,8 @@ class ColorBySimilarity(Operator):
                                       description = "Choose which neurons to color by similarity.",
                                       default = 'All')
     compare = EnumProperty( name='Compare',
-                            items=availableOptions
+                            items=availableOptions,
+                            description = 'Choose the method for comparing neurons.'
                             )
     method = EnumProperty( name='Cluster Method (Distance)',
                             items=[('avg','avg','avg'),('min','min','min'),('max','max','max')],
@@ -6928,6 +7264,18 @@ class ColorBySimilarity(Operator):
                                 default = 0.2,
                                 description = 'Sets similarity threshold for picking clusters that will have the same color. 1 = perfect match; 0 = not similar at all.'
                                 )
+    sigma   =    IntProperty (
+                                name='Sigma',
+                                min = 1,
+                                default = 2000,
+                                description = 'Sigma defines the distance between nodes or synapses that is considered close. In CATMAID units!'
+                                )
+    omega   =    IntProperty (
+                                name='Omega',
+                                min = 1,
+                                default = 2000,
+                                description = 'For synapse comparison only. Omega defines the radius in which adjacent synapses are counted. In CATMAID units!'
+                                )
     use_saved = BoolProperty (
                                 name='Try using saved data',
                                 default = True,
@@ -6939,7 +7287,17 @@ class ColorBySimilarity(Operator):
                                 description = 'Will save dendrogram of similarity to dendrogram.svg'
                                 )
 
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+
     def execute (self, context):
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Cancelled: Python Numpy not installed.')
+            return{'FINISHED'}
+
         #Get neurons first
         neurons = []
         neuron_names = {}
@@ -6991,7 +7349,7 @@ class ColorBySimilarity(Operator):
                 try:
                     synapse_data
                 except:
-                    print('No saved synapse data found. Loading neurons from scratch.')
+                    print('No saved synapse data found - loading neurons from scratch. Please wait...')
                     synapse_data = {}
             else:
                 synapse_data = {}
@@ -6999,11 +7357,26 @@ class ColorBySimilarity(Operator):
             missing_skids = []
             for n in skids:
                 if n not in synapse_data:
-                    missing_skids.append(n)                    
+                    missing_skids.append(n)
 
+            threads = {}
+            for skid in missing_skids:                                
+                t = retrieveSkidsThreaded([skid])
+                t.start()
+                threads[skid] = t
+
+            for skid in threads:
+                synapse_data[skid] = threads[skid].join()[1]                 
+
+            """
             skeleton_data = get_3D_skeleton (missing_skids, remote_instance, 1 , 0 )
             for i,n in enumerate(missing_skids):
-                synapse_data[n] = skeleton_data[i][1]          
+                synapse_data[n] = skeleton_data[i][1]    
+            """
+
+        elif self.compare == 'Connect For More Options':
+            self.report({'ERROR'},'Please pick valid method.')
+            return{'FINISHED'}            
                         
         print('Done!')
 
@@ -7038,9 +7411,7 @@ class ColorBySimilarity(Operator):
                 elif self.compare == 'Synapse-Distr.' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
                      matching_scores[self.compare][str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_synapse_matching_score(
                                                                                                                                     synapse_data[neuronA['skid']],
-                                                                                                                                    synapse_data[neuronB['skid']],
-                                                                                                                                    2000,
-                                                                                                                                    2000
+                                                                                                                                    synapse_data[neuronB['skid']]
                                                                                                                                   )
                                                                                                 ,5)
 
@@ -7101,7 +7472,7 @@ class ColorBySimilarity(Operator):
                 
         return{'FINISHED'}
 
-    def calc_synapse_matching_score(self,synapsesA,synapsesB,sigma=50,omega=500):
+    def calc_synapse_matching_score(self,synapsesA,synapsesB):
         all_values = []
         coordsA = {}
         coordsB = {}
@@ -7126,13 +7497,13 @@ class ColorBySimilarity(Operator):
 
                     #Distances of synA to all synapses of the same neuron
                     dA = np.sum((coordsA[direction]-synA)**2,axis=1)
-                    around_synA = len([e for e in dA if math.sqrt(e) < omega])
+                    around_synA = len([e for e in dA if math.sqrt(e) < self.omega])
 
                     #Distances of closest synapses in B to all synapses of the same neuron
                     dB = np.sum((coordsB[direction]-closest_syn)**2,axis=1)
-                    around_synB = len([e for e in dB if math.sqrt(e) < omega])
+                    around_synB = len([e for e in dB if math.sqrt(e) < self.omega])
 
-                    this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * sigma**2))
+                    this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * self.sigma**2))
 
                 except:
                     #will fail if no pre-/postsynapses in coordsB
@@ -7147,13 +7518,17 @@ class ColorBySimilarity(Operator):
             return 0
 
 
-    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB,sigma=50):
+    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB):
         #nodes_list = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
 
         #Sigma defines how close two points have to be to be considered similar (in nanometers)
         #Kohl et al. -> 3000nm (light microscopy + registration)    
 
         all_values = []
+
+        #Sigma is defined as CATMAID units - have to convert to Blender units
+        blender_sigma = self.sigma / context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        
 
         nA = np.array(nodeDataA)     
         nB = np.array(nodeDataB)
@@ -7170,7 +7545,7 @@ class ColorBySimilarity(Operator):
 
             dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
 
-            this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * sigma**2))            
+            this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
 
             all_values.append(this_treenode_value)  
 
@@ -7614,7 +7989,7 @@ class UnifyMaterial(Operator):
                                 )  
 
     def execute(self,context):                                    
-        new_mat = bpy.data.materials.new('Unified material')
+        new_mat = bpy.data.materials.new('#Unified material')
         new_mat.diffuse_color = self.color
 
         if self.which_neurons == 'Selected':
@@ -7677,7 +8052,7 @@ class DisplayHelp(Operator):
             layout.label(text='on annotations: neuron needs to have a <paired with #skid> annotation.')
             layout.label(text='For example <paired with #1874652>')
         elif self.entry == 'retrieve.connectors':
-            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors are')
+            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors can be')
             layout.label(text='scaled (weighted) based on the number of postsynaptically connected')
             layout.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
         elif self.entry == 'color.unify':
@@ -7981,6 +8356,11 @@ class CATMAIDAddonPreferences(AddonPreferences):
             subtype='PASSWORD',
             description = 'Retrieve your API token by logging into CATMAID and hovering over your username (top right) on the project selection screen'
             )
+    conversion_factor = IntProperty(
+            name="CATMAID to Blender Unit Conversion Factor",
+            default=10000,
+            description = 'CATMAID units will be divided by this factor when imported into Blender.'
+            )
 
     def draw(self, context):
         layout = self.layout
@@ -7990,6 +8370,7 @@ class CATMAIDAddonPreferences(AddonPreferences):
         layout.prop(self, "http_user")
         layout.prop(self, "http_pw")
         layout.prop(self, "token")
+        layout.prop(self, "conversion_factor")
 
         
 def register():
@@ -8022,8 +8403,9 @@ def register():
  
  
 def unregister():
+    bpy.utils.unregister_class(CATMAIDAddonPreferences) 
     bpy.utils.unregister_module(__name__)    
-    bpy.utils.unregister_class(ExampleAddonPreferences) 
+    
     """
     bpy.utils.unregister_class(CATMAIDimportPanel) 
     #bpy.utils.unregister_class(ImportFromTXT)
