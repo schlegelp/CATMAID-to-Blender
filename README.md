@@ -15,7 +15,7 @@ First download CATMAIDImport.py, then:
 3. Activate by checking box and 'Save User Setting'
 
 ######Required Python packages:
-Blender for Windows comes with all necessary Python packages. On other systems make sure numpy is installed. The addon will work without numpy but some functions are limited.
+Blender for Windows comes with all necessary Python packages. On other systems make sure numpy and threading is installed. The addon will work without numpy but some functions are limited.
 
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
