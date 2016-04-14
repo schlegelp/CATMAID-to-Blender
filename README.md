@@ -15,7 +15,7 @@ First download CATMAIDImport.py, then:
 3. Activate by checking box and 'Save User Setting'
 
 ######Required Python packages:
-Blender for Windows comes with all necessary Python packages. On other systems make sure **numpy** and **threading** are installed. The addon will work without numpy but some functions are limited.
+[Blender](www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) and [threading](https://docs.python.org/3/library/threading.html) are installed. [Threading](https://docs.python.org/3/library/threading.html) is required, without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
 
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
@@ -48,7 +48,7 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 ####2. Group postsynaptic sites based on what presynaptic neuron they connect to
 <img src="https://cloud.githubusercontent.com/assets/7161148/14020676/7df96468-f1d8-11e5-9f04-aba115112890.png" width="650">
 
-####3. Check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/03/21/044990) for more examples.
+####3. Check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/04/07/044990) for more examples.
 
 ## License:
 This code is under GNU GPL V3
