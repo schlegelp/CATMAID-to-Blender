@@ -19,6 +19,12 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.1 13/04/2015:
+    - added coloring by similarity in connectivity and paired connectivity    
+    - added relative synapse count to color by synapse count
+    - improved tooltips
+    - bugfixes
+
 ### V5 12/04/2015:
     - separated requests to server into multiple threads (not for all operators): results in 6X increased import speed!
     - other improvements
@@ -262,7 +268,7 @@ import statistics
 
 from bpy.types import Operator, AddonPreferences
 from bpy_extras.io_utils import ImportHelper, ExportHelper 
-from bpy.props import FloatVectorProperty, FloatProperty, StringProperty, BoolProperty, EnumProperty, IntProperty
+from bpy.props import FloatVectorProperty, FloatProperty, StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty
 
 remote_instance = None
 connected = False
@@ -270,7 +276,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 0, 0),
+ "version": (5, 1, 0),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -417,6 +423,13 @@ class VersionManager(bpy.types.PropertyGroup):
     last_stable_version = bpy.props.FloatProperty(name="Last Stable Version", default=0,min=0, description="Last Stable Version of the Script")
     message = bpy.props.StringProperty(name="Message", default="", description="Message from Github") 
     new_features = bpy.props.StringProperty(name="New Features", default="", description="New features in latest Version of the Script on Github")     
+
+class AnnotationManager(bpy.types.PropertyGroup):
+    """Class to hold annotations
+    """
+    annotations = bpy.props.EnumProperty(name = "Annotation", 
+                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      description = "Choose which neurons to reload.")
 
 class get_version_info(Operator):
     """
@@ -673,8 +686,8 @@ def retrieve_connectivity (skids, remote_instance, threshold = 1):
         tag = 'source_skeleton_ids[%i]' %i
         connectivity_post[tag] = skid
         i +=1
-    print('Retrieving... Postdata:')
-    print(connectivity_post)
+    #print('Retrieving... Postdata:')
+    #print(connectivity_post)
 
     connectivity_data = remote_instance.fetch( remote_connectivity_url , connectivity_post )
 
@@ -1049,28 +1062,34 @@ class UpdateNeurons(Operator):
             skids_to_retrieve.append(neurons_to_reload[neuron]['skid'])
         neuron_names = get_neuronnames(skids_to_retrieve)        
 
-        print("Collection updated skeleton data for %i neurons" % len(neurons_to_reload) )
+        print("Collecting updated skeleton data for %i neurons" % len(neurons_to_reload) )
         threads = {}
         skdata = {}
         start = time.clock()
         resampling_factors = {}
 
-        for n in neurons_to_reload:    
+        print('Creating threads to retrieve data:')
+        for i,n in enumerate(neurons_to_reload):    
             skid = neurons_to_reload[n]['skid']
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 print(neuron_names[skid],'already exists - skipping.')
                 continue
             t = retrieveSkidsThreaded([skid])
             t.start()
-            threads[skid] = t
+            threads[skid] = t            
+            print('\r Threads: '+str(i),end='')
 
             if self.keep_resampling is True:       
                 resampling_factors[skid] = neurons_to_reload[n]['resampling']
             else:
                 resampling_factors[skid] = self.new_resampling
 
+        print('Threads to retrieve data created.')
+
         for skid in threads:
-            skdata[skid] = threads[skid].join()        
+            skdata[skid] = threads[skid].join()      
+
+        print('Threads successfully joined.')  
 
         print("Creating new meshes for %i neurons" % len(skdata))
         for skid in skdata:            
@@ -1152,7 +1171,8 @@ class RetrieveNeuron(Operator):
         skdata = {}
         start = time.clock()
 
-        for skid in skeletons_to_retrieve:      
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(skeletons_to_retrieve):      
             if re.search('[a-zA-Z]', self.skeleton_id):
                 print ('Invalid Skeleton ID')
                 continue
@@ -1162,6 +1182,7 @@ class RetrieveNeuron(Operator):
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()        
@@ -1349,13 +1370,15 @@ class RetrievePairs(Operator):
         skdata = {}
         start = time.clock()
 
-        for skid in paired:
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(paired):
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 print(neuron_names[skid],'already exists - skipping.')
                 continue            
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()      
@@ -1437,13 +1460,15 @@ class RetrieveInVolume(Operator):
         skdata = {}
         start = time.clock()
 
-        for skid in skid_list:
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(skid_list):
             if checkIfNeuronExists(str(skid),neuron_names[str(skid)]):
                 print(neuron_names[str(skid)],'already exists - skipping.')
                 continue            
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()        
@@ -1627,13 +1652,15 @@ class RetrievebyAnnotation(Operator):
         skdata = {}
         start = time.clock()
 
-        for skid in annotated_skids: 
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(annotated_skids): 
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 print(neuron_names[skid],'already exists - skipping.')
                 continue
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()        
@@ -1840,11 +1867,13 @@ class RetrieveConnectors(Operator):
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
-        for neuron in filtered_ob_list:
+        print('Creating threads to retrieve data:')
+        for i,neuron in enumerate(filtered_ob_list):
             skid = re.search('#(.*?) -',neuron.name).group(1)                        
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()
@@ -2142,10 +2171,12 @@ class ConnectorsToSVG(Operator, ExportHelper):
         threads = {}
         skdata = {}
         print("Retrieving connector data for %i neurons" % len(skids_to_export))
-        for skid in skids_to_export:            
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(skids_to_export):            
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()
@@ -4186,13 +4217,15 @@ class RetrievePartners(Operator):
         skdata = {}
         start = time.clock()
 
-        for skid in filtered_partners:
+        print('Creating threads to retrieve data:')
+        for i,skid in enumerate(filtered_partners):
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 print(neuron_names[skid],'already exists - skipping.')
                 continue            
             t = retrieveSkidsThreaded([skid])
             t.start()
             threads[skid] = t
+            print('\r Threads: '+str(i),end='')
 
         for skid in threads:
             skdata[skid] = threads[skid].join()        
@@ -5166,14 +5199,16 @@ class ExportAllToSVG(Operator, ExportHelper):
             base_line_width = self.line_width
 
         skdata = {}
-        threads = {}
+        threads = {}        
         if self.color_by_density is True and self.object_for_density == 'Synapses' or self.color_by_inputs_outputs is True:
             print('Retrieving skeleton data for %i neurons' % len(to_process_sorted))
-            for neuron in to_process_sorted:
+            print('Creating threads to retrieve data:')
+            for i,neuron in enumerate(to_process_sorted):
                 skid = re.search('#(.*?) ',neuron.name).group(1)                  
                 t = retrieveSkidsThreaded([skid])
                 t.start()
                 threads[skid] = t
+                print('\r Threads: '+str(i),end='')
 
             for skid in threads:
                 skdata[skid] = threads[skid].join()
@@ -6860,47 +6895,51 @@ class ColorBySynapseCount(Operator):
     filter_exclude = StringProperty(name="Exclude Annotation (comma separated)", 
                                     default = "",
                                     description="Filter based on Annotations(!). Case-insensitive. Separate by Comma if multiple tags")
-    use_upstream = BoolProperty(name="Consider Upstream", default = True)
-    use_downstream = BoolProperty(name="Consider Downstream", default = True)
-    change_bevel = BoolProperty(name="Also change bevel?", default = True)
-    hops = IntProperty(name="Hops", 
-                            description="Hops (Synapses) to Search Over. 1 = only direct connections",
-                            default = 1, min = 1, max = 4)  
-    synapse_decay = FloatProperty(name="Synapse Decay", 
-                            description="Factor to Lower Synapse Weight at each Hop (after the first)",
-                            default = 1, min = 0.01, max = 2)                              
-    manual_max_value = IntProperty(name="Manual Max Synapse Count", 
-                                    description="Leave at 0 for dynamic calculation. Use if you want to e.g. compare among different sets of neurons/partners.",
-                                    default = 0, min = 0, max = 99)  
+    use_upstream = BoolProperty(    name="Consider Upstream", default = True)
+    use_downstream = BoolProperty(  name="Consider Downstream", default = True)    
+    hops = IntProperty(             name="Hops", 
+                                    description="Hops (Synapses) to Search Over. 1 = only direct connections",
+                                    default = 1, min = 1, max = 4)  
+    synapse_decay = FloatProperty(  name="Synapse Decay", 
+                                    description="Factor to Lower Synapse Weight at each Hop (after the first)",
+                                    default = 1, min = 0.01, max = 2)                              
+    manual_max_value = IntProperty( name="Manual Max Synapse Count", 
+                                    description="Leave at 0 for dynamic calculation. Use to e.g. to keep color coding constant over different sets of neurons/partners.",
+                                    default = 0, min = 0)
+    use_relative = BoolProperty(    name="Use relative count", 
+                                    description="Use percentage of synapses instead of absolute numbers.",
+                                    default = False)    
     shift_color = BoolProperty(     name="Shift Color",
                                     description = "If set, color will only be changed by given value RELATIVE to current color",
-                                    default = False )                                    
-    only_if_connected = BoolProperty( name="Only if Synapses", 
+                                    default = False )
+    change_bevel = BoolProperty(    name="Change bevel?", default = False)                                    
+    only_if_connected = BoolProperty(   name="Only if Synapses", 
                                         description="Change Color only if neuron is synaptically connected. Otherwise preserve current color",
                                         default = False)
-    start_color = FloatVectorProperty(name="Start Color", 
-                                description="Low Value Color", 
-                                default = (0.0, 1 , 0.0), 
-                                min=0.0,
-                                max=1.0,
-                                subtype='COLOR'
+    start_color = FloatVectorProperty(  name="Start Color", 
+                                        description="Low Value Color", 
+                                        default = (0.0, 1 , 0.0), 
+                                        min=0.0,
+                                        max=1.0,
+                                        subtype='COLOR'
                                 )  
-    end_color = FloatVectorProperty(name="End Color", 
-                                description="Hig Value Color", 
-                                default = (1, 0.0, 0.0), 
-                                min=0.0,
-                                max=1.0,
-                                subtype='COLOR'
-                                )   
-    take_longest_route = BoolProperty( name="LUT takes longest route", 
+    end_color = FloatVectorProperty(    name="End Color", 
+                                        description="Hig Value Color", 
+                                        default = (1, 0.0, 0.0), 
+                                        min=0.0,
+                                        max=1.0,
+                                        subtype='COLOR'
+                                )
+    take_longest_route = BoolProperty(  name="LUT takes longest route", 
                                         description="If checked, LUT will cover longest connection between start and end color",
                                         default = True)                               
-    emit_max =          IntProperty(name="Emit", 
-                                    description="Max Emit Value - set to 0 for no emit",
-                                    default = 1, min = 0, max = 5)
+    emit_max =          IntProperty(    name="Emit", 
+                                        description="Max Emit Value - set to 0 for no emit",
+                                        default = 1, min = 0, max = 5)
     
     def execute (self, context):       
-        synapse_count = {}    
+        synapse_count = {}   
+        total_synapse_count = {} 
         connectivity_post = {} 
         connectivity_post['threshold'] = 0
         connectivity_post['boolean_op'] = 'OR'         
@@ -6925,6 +6964,7 @@ class ColorBySynapseCount(Operator):
                 try:
                     skid = re.search('#(.*?) -',object.name).group(1)
                     synapse_count[skid] = 0        
+                    total_synapse_count[skid] = 0
                     skids_to_retrieve.append(skid)
                     tag = 'source[%i]' % i
                     connectivity_post[tag] = skid
@@ -6951,8 +6991,8 @@ class ColorBySynapseCount(Operator):
                 for entry in connectivity_data['incoming'][hop]:                
                     #Filter Neurons by Annotations
                     include_flag = False
-                    exclude_flag = False 
-                    
+                    exclude_flag = False
+
                     try:
                         for annotation in annotations[entry]:
                             for tag in filter_include_list: 
@@ -6964,36 +7004,40 @@ class ColorBySynapseCount(Operator):
                     except:
                         pass     
                          
-                    if include_flag is True and exclude_flag is False:
-                        #Go back each hop until at first hop (=0) to find/calculate connection to initial neurons                                    
-                        if hop > 0:                            
-                            backtraced = {}
-                            connections = []
-                            branch_points = []
-                            #backtraced = self.backtrace_connectivity(backtraced,connectivity_data['incoming'],hop-1,skid)
-                            backtraced = self.backtrace_connectivity(backtraced,connectivity_data['incoming'],hop,connections,branch_points,entry)[0]
-                            #print('Upstream: ',hop,entry,backtraced)
-                            for origin_skid in backtraced:
-                                #synapse_count[origin_skid] += connectivity_data['incoming'][hop][entry]['skids'][skid] * (self.synapse_decay/hop)                       
-                                for trace in backtraced[origin_skid]:
-                                    weight = 1
-                                    if len(trace) == 2:
-                                        factors = [2/3,1/3]
-                                    elif len(trace) > 2:
-                                        factors = [4/7,2/7,1/7,1/7,1/7,1/7]                                    
-                                    for i in range(len(trace)):                                            
-                                        #Start with first synaptic connection 
-                                        weight *= trace[len(trace)-1-i] ** factors[i]
+                    
+                    #Go back each hop until at first hop (=0) to find/calculate connection to initial neurons                                    
+                    if hop > 0:                            
+                        backtraced = {}
+                        connections = []
+                        branch_points = []
+                        #backtraced = self.backtrace_connectivity(backtraced,connectivity_data['incoming'],hop-1,skid)
+                        backtraced = self.backtrace_connectivity(backtraced,connectivity_data['incoming'],hop,connections,branch_points,entry)[0]
+                        #print('Upstream: ',hop,entry,backtraced)
+                        for origin_skid in backtraced:
+                            #synapse_count[origin_skid] += connectivity_data['incoming'][hop][entry]['skids'][skid] * (self.synapse_decay/hop)                       
+                            for trace in backtraced[origin_skid]:
+                                weight = 1
+                                if len(trace) == 2:
+                                    factors = [2/3,1/3]
+                                elif len(trace) > 2:
+                                    factors = [4/7,2/7,1/7,1/7,1/7,1/7]                                    
+                                for i in range(len(trace)):                                            
+                                    #Start with first synaptic connection 
+                                    weight *= trace[len(trace)-1-i] ** factors[i]
+                                total_synapse_count[origin_skid] += weight            
+                                if include_flag is True and exclude_flag is False:
                                     synapse_count[origin_skid] += weight            
-                        else:
-                            #print('Upstream 1-Synapse: ',hop,entry,connectivity_data['incoming'][hop][entry]['skids'])
-                            for skid in connectivity_data['incoming'][hop][entry]['skids']:
+                    else:
+                        #print('Upstream 1-Synapse: ',hop,entry,connectivity_data['incoming'][hop][entry]['skids'])
+                        for skid in connectivity_data['incoming'][hop][entry]['skids']:
+                            total_synapse_count[skid] += sum(connectivity_data['incoming'][hop][entry]['skids'][skid])
+                            if include_flag is True and exclude_flag is False:                            
                                 synapse_count[skid] += sum(connectivity_data['incoming'][hop][entry]['skids'][skid])
 
                         
         if self.use_downstream is True:    
             for hop in range(len(connectivity_data['outgoing'])):
-                
+
                 annotations = get_annotations_from_list(list(set(connectivity_data['outgoing'][hop])),remote_instance)
                 
                 for entry in connectivity_data['outgoing'][hop]:                  
@@ -7012,41 +7056,62 @@ class ColorBySynapseCount(Operator):
                     except:
                         pass   
                                         
-                    if include_flag is True and exclude_flag is False:
-                        #Go back each hop until at first hop (=0) to find/calculate connection to initial neurons                                    
-                        if hop > 0:                        
-                            backtraced = {}
-                            connections = []
-                            branch_points = []
-                            #backtraced = self.backtrace_connectivity(backtraced,connectivity_data['outgoing'],hop-1,skid)
-                            backtraced = self.backtrace_connectivity(backtraced,connectivity_data['outgoing'],hop,connections,branch_points,entry)[0]
-                            #print('Downstream: ',hop,entry,skid,backtraced)
-                            for origin_skid in backtraced:
-                                #synapse_count[origin_skid] += connectivity_data['outgoing'][hop][entry]['skids'][skid] * (self.synapse_decay/hop)                       
-                                for trace in backtraced[origin_skid]:
-                                    weight = 1
-                                    if len(trace) == 2:
-                                        factors = [2/3,1/3]
-                                    elif len(trace) > 2:
-                                        factors = [4/7,2/7,1/7,1/7,1/7,1/7]
-                                    for i in range(len(trace)):
-                                        #Start with first synaptic connection 
-                                        weight *= trace[len(trace)-1-i] * factors[i]
+                    
+                    #Go back each hop until at first hop (=0) to find/calculate connection to initial neurons                                    
+                    if hop > 0:                        
+                        backtraced = {}
+                        connections = []
+                        branch_points = []
+                        #backtraced = self.backtrace_connectivity(backtraced,connectivity_data['outgoing'],hop-1,skid)
+                        backtraced = self.backtrace_connectivity(backtraced,connectivity_data['outgoing'],hop,connections,branch_points,entry)[0]
+                        #print('Downstream: ',hop,entry,skid,backtraced)
+                        for origin_skid in backtraced:
+                            #synapse_count[origin_skid] += connectivity_data['outgoing'][hop][entry]['skids'][skid] * (self.synapse_decay/hop)                       
+                            for trace in backtraced[origin_skid]:
+                                weight = 1
+                                if len(trace) == 2:
+                                    factors = [2/3,1/3]
+                                elif len(trace) > 2:
+                                    factors = [4/7,2/7,1/7,1/7,1/7,1/7]
+                                for i in range(len(trace)):
+                                    #Start with first synaptic connection 
+                                    weight *= trace[len(trace)-1-i] * factors[i]
+                                total_synapse_count[origin_skid] += weight  
+                                if include_flag is True and exclude_flag is False:
                                     synapse_count[origin_skid] += weight                                     
-                        else:
-                            #print('Downstream 1-Synapse: ', hop,entry,connectivity_data['outgoing'][hop][entry]['skids'])
-                            for skid in connectivity_data['outgoing'][hop][entry]['skids']:
-                                #print(connectivity_data['outgoing'][hop][entry]['skids'][skid])
+                    else:
+                        #print('Downstream 1-Synapse: ', hop,entry,connectivity_data['outgoing'][hop][entry]['skids'])
+                        for skid in connectivity_data['outgoing'][hop][entry]['skids']:
+                            #print(connectivity_data['outgoing'][hop][entry]['skids'][skid])
+                            total_synapse_count[skid] += sum(connectivity_data['outgoing'][hop][entry]['skids'][skid])
+                            if include_flag is True and exclude_flag is False:
                                 synapse_count[skid] += sum(connectivity_data['outgoing'][hop][entry]['skids'][skid])
 
 
         #get max value in synapse count for gradient calculation if self.manual_max_value is not set
         if self.manual_max_value == 0:
             max_count = 0
+            max_abs = 0            
             for entry in synapse_count:
-                if synapse_count[entry] > max_count:
-                    max_count = synapse_count[entry]
-            print('Maximum # of synaptic connections found: ', max_count)
+                try:
+                    percentage = (synapse_count[entry]/total_synapse_count[entry]) * 100
+                except:
+                    percentate = 0
+                print('Neuron #%s: %i absolute synapses = %f percent of total (%i)' % (entry,synapse_count[entry],percentage,total_synapse_count[entry]))
+                
+                if self.use_relative is False:
+                    if synapse_count[entry] > max_count:
+                        max_count = synapse_count[entry]
+
+                elif self.use_relative is True:                    
+                    if percentage > max_count:
+                        max_count = percentage
+                        max_abs = synapse_count[entry]
+
+            if self.use_relative is False:            
+                print('Maximum # of synaptic connections found:', max_count)
+            else:
+                print('Maximum [%] of synaptic connections found:', max_count, '(' , max_abs , 'absolut synapses)')
         else:
             max_count = self.manual_max_value
             print('Using manually set max value for coloring of synaptic connections (may be capped!): ',max_count)
@@ -7060,7 +7125,16 @@ class ColorBySynapseCount(Operator):
                     #print(object.name,synapse_count[skid])
                     if synapse_count[skid] > 0:                        
                         #Reduce # of synapses by 1 such that the lowest value is actually 0 to (max_count-1)
-                        hsv = calc_color((synapse_count[skid]-1),(max_count-1),self.start_color,self.end_color,self.take_longest_route)
+                        if self.use_relative is False:
+                            hsv = calc_color((synapse_count[skid]-1),(max_count-1),self.start_color,self.end_color,self.take_longest_route)
+                            mat.emit = synapse_count[skid]/max_count * self.emit_max
+                        else:
+                            try:
+                                percentage = (synapse_count[skid]/total_synapse_count[skid]) * 100
+                            except:
+                                percentage = 0
+                            hsv = calc_color(percentage,max_count,self.start_color,self.end_color,self.take_longest_route)
+                            mat.emit = percentage/max_count * self.emit_max
                         
                         if self.shift_color is False:
                             mat.diffuse_color[0] = hsv[0]
@@ -7075,8 +7149,7 @@ class ColorBySynapseCount(Operator):
                             mat.diffuse_color = (0.5,0.5,0.5)
                             #mat.diffuse_color[0] = math.fabs((mat.diffuse_color[0] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[0])/2)
                             #mat.diffuse_color[1] = math.fabs((mat.diffuse_color[1] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[1])/2)
-                            #mat.diffuse_color[2] = math.fabs((mat.diffuse_color[2] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[2])/2)
-                        mat.emit = synapse_count[skid]/max_count * self.emit_max
+                            #mat.diffuse_color[2] = math.fabs((mat.diffuse_color[2] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[2])/2)                        
                         
                         if self.change_bevel is True:
                             object.data.bevel_depth = 0.007 + synapse_count[skid]/max_count * 0.014
@@ -7234,7 +7307,9 @@ def availableOptions(self, context):
     """
     available_options = [('Morphology','Morphology','Morphology')]
     if connected:
-        available_options.append(('Synapse-Distr.','Synapse-Distr.','Synapse-Distr.'))
+        available_options.append(('Synapses','Synapses','Synapses'))
+        available_options.append(('Connectivity','Connectivity','Connectivity'))
+        available_options.append(('Paired-Connectivity','Paired-Connectivity','Paired-Connectivity'))
     else:
         available_options.append(('Connect For More Options','Connect For More Options','Connect For More Options'))
     return available_options            
@@ -7242,11 +7317,11 @@ def availableOptions(self, context):
 class ColorBySimilarity(Operator):
     """Color neurons by similarity"""  
     bl_idname = "color.by_similarity"  
-    bl_label = "Color neurons by similarity of morphology or synapse distribution" 
+    bl_label = "Color neurons by similarity (see Advanced Tooltip)" 
     bl_options = {'UNDO'}
 
     which_neurons = EnumProperty(name = "Which Neurons?", 
-                                      items = [('Selected','Selected','Selected'),('All','All','All')],
+                                      items = [('All','All','All'),('Selected','Selected','Selected')],
                                       description = "Choose which neurons to color by similarity.",
                                       default = 'All')
     compare = EnumProperty( name='Compare',
@@ -7279,13 +7354,95 @@ class ColorBySimilarity(Operator):
     use_saved = BoolProperty (
                                 name='Try using saved data',
                                 default = True,
-                                description = 'If true, will try to use previous data from this session. Uncheck to compute from scratch!'
+                                description = 'Use previously generated matching scores from this session. Check if e.g. you just want to change clustering threshold. Uncheck to compute from scratch!'
                                 )
     save_dendrogram = BoolProperty (
                                 name='Save Dendrogram',
                                 default = True,
                                 description = 'Will save dendrogram of similarity to dendrogram.svg'
                                 )
+    path_dendrogram = StringProperty (
+                                name='Save to',
+                                default = '',
+                                description = 'Set file for saving dendrogram.'
+                                )
+
+    use_inputs = BoolProperty (
+                                name='Use inputs',
+                                default = True,
+                                description = 'Use inputs for calculation of connectivity matching/pairing'
+                                )
+    use_outputs = BoolProperty (
+                                name='Use outputs',
+                                default = True,
+                                description = 'Use outputs for calculation of connectivity matching/pairing'
+                                )
+    calc_thresh = IntProperty (
+                                name='Calculation Threshold',
+                                default = 0,
+                                min=0,
+                                max=100,
+                                subtype='PERCENTAGE',
+                                description = 'Ignore neurons that have less than [%] usable synapses.'
+                                )
+   
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.label(text="Method:") 
+        box = layout.box()
+        row = box.row(align=False)        
+        row.prop(self, "compare")
+
+        layout.label(text="General:") 
+        box = layout.box()
+        row = box.row(align=False)
+        row.prop(self, "which_neurons")        
+        row = box.row(align=False)        
+        row.prop(self, "cluster_at")
+        row = box.row(align=False)
+        col = row.column()
+        col.label(text='Cluster Method (distance)')
+        col = row.column()
+        col.prop(self, "method", text="")
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "use_saved")
+        col = row.column()
+        col.prop(self, "save_dendrogram")
+        row = box.row(align=False)
+        if getattr(self,'path_dendrogram') == '':
+            try:
+                if os.path.dirname ( bpy.data.filepath ) != '':
+                    self.path_dendrogram = os.path.dirname( bpy.data.filepath ) 
+                else:
+                    self.path_dendrogram = 'Enter valid path'
+                    row.alert = True
+            except:
+                self.path_dendrogram = 'Enter valid path'
+                row.alert = True
+        row.prop(self, "path_dendrogram")
+
+        layout.label(text="For Morphology and Synapse Distribution only") 
+        box = layout.box()
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "sigma")        
+        col = row.column()
+        col.prop(self, "omega")
+
+        layout.label(text="For Connectivity and Paired-Connectivity only") 
+        box = layout.box()
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "use_inputs")
+        col = row.column()
+        col.prop(self, "use_outputs") 
+        row = box.row(align=False)
+        row.prop(self, "calc_thresh")       
+        
 
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
@@ -7298,10 +7455,14 @@ class ColorBySimilarity(Operator):
             self.report({'ERROR'},'Cancelled: Python Numpy not installed.')
             return{'FINISHED'}
 
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor    
+
         #Get neurons first
         neurons = []
         neuron_names = {}
         skids = []
+        to_exclude = []
+        to_exclude_skids = []
         if self.which_neurons == 'All':   
             for obj in bpy.data.objects:
                 if obj.name.startswith('#'):
@@ -7327,6 +7488,7 @@ class ColorBySimilarity(Operator):
 
         print('Collecting data of %i neurons' % len(neurons))
         self.report ( {'INFO'} , 'Collecting neuron data. Please wait...' )
+        
         if self.compare == 'Morphology':
             neuron_data = {}
             neuron_parent_vectors = {}
@@ -7342,7 +7504,8 @@ class ColorBySimilarity(Operator):
                         normal_parent_vector = list(map(lambda x: x/self.length(parent_vector), parent_vector))
                         neuron_data[n['skid']].append(point.co)
                         neuron_parent_vectors[n['skid']].append(normal_parent_vector)
-        elif self.compare == 'Synapse-Distr.':
+        
+        elif self.compare == 'Synapses':
             global synapse_data
 
             if self.use_saved is True:
@@ -7360,19 +7523,73 @@ class ColorBySimilarity(Operator):
                     missing_skids.append(n)
 
             threads = {}
-            for skid in missing_skids:                                
+            print('Creating threads to retrieve data:')
+            for i,skid in enumerate(missing_skids):                                
                 t = retrieveSkidsThreaded([skid])
                 t.start()
                 threads[skid] = t
+                print('\r Threads: '+str(i),end='')
 
             for skid in threads:
                 synapse_data[skid] = threads[skid].join()[1]                 
+            
+        elif self.compare == 'Connectivity' or self.compare == 'Paired-Connectivity':
+            if self.use_inputs is False and self.use_outputs is False:
+                self.report({'ERROR'},'Need at least either <Use Inputs> or <Use Outputs> to be true!')
+                return{'CANCELLED'}
 
-            """
-            skeleton_data = get_3D_skeleton (missing_skids, remote_instance, 1 , 0 )
-            for i,n in enumerate(missing_skids):
-                synapse_data[n] = skeleton_data[i][1]    
-            """
+            connectivity = retrieve_connectivity(skids,remote_instance)
+
+            if self.compare == 'Paired-Connectivity':
+                all_partners = list( set( list(connectivity['incoming']) + list(connectivity['outgoing']) ) )
+
+                temp = self.retrieve_pairs( all_partners, return_as_pairs=True)
+                list_of_pairs = temp['paired']
+                for e in temp['unpaired_medial']:                    
+                    list_of_pairs.append((e,e))
+
+            number_of_partners = dict([(e,{'incoming':0,'outgoing':0}) for e in skids])            
+            synapses_used = dict([(e,0) for e in skids])
+            total_synapses = dict([(e,0) for e in skids])
+
+            partner_skids = []
+
+            directions = []
+            if self.use_inputs is True:
+                directions.append('incoming')
+            if self.use_outputs is True:
+                directions.append('outgoing')
+
+            for d in directions:
+                for e in connectivity[d]:
+                    partner_skids.append(e)  
+                    
+            partner_names = get_neuronnames(list(set(partner_skids)))   
+
+            for d in directions:
+                for e in connectivity[d]:                    
+                    for skid in connectivity[d][e]['skids']:               
+                        total_synapses[skid] += connectivity[d][e]['skids'][skid]                       
+
+                        if self.compare == 'Connectivity':
+                            number_of_partners[skid][d] += 1
+                            if connectivity[d][e]['num_nodes'] > 200 and 'ambiguous' not in partner_names[e].lower():
+                                synapses_used[skid] += connectivity[d][e]['skids'][skid]
+
+                        if self.compare == 'Paired-Connectivity':
+                            if e in [n for sublist in list_of_pairs for n in sublist]:
+                                synapses_used[skid] += connectivity[d][e]['skids'][skid]
+                                number_of_partners[skid][d] += 1
+
+            for n in neurons:
+                try:
+                    percentages = round(synapses_used[ n['skid'] ] / total_synapses[ n['skid'] ] * 100,1)
+                except:
+                    percentages = 0
+
+                if percentages < self.calc_thresh:
+                    to_exclude.append(n)
+                    to_exclude_skids.append(n['skid'])
 
         elif self.compare == 'Connect For More Options':
             self.report({'ERROR'},'Please pick valid method.')
@@ -7387,33 +7604,116 @@ class ColorBySimilarity(Operator):
                 matching_scores
             except:
                 print('Creating matching scores from scratch!')
-                matching_scores = {'Synapse-Distr.':{},'Morphology':{}}                
+                matching_scores = {'Synapses':{},'Morphology':{},'Connectivity':{},'Paired-Connectivity':{}}                
         else:
             print('Creating matching scores from scratch!')
-            matching_scores = {'Synapse-Distr.':{},'Morphology':{}}
+            matching_scores = {'Synapses':{},'Morphology':{},'Connectivity':{},'Paired-Connectivity':{}}
 
 
         #self.report ( {'INFO'} , 'Comparing neurons. Please wait...' )    
-        for i,neuronA in enumerate(neurons):                
+        for i,neuronA in enumerate(neurons):
             print('Processing neuron', neuronA.name, '[', i+1 ,'of',len(neurons),']')
             #self.report ( {'INFO'} , 'Processing neurons [%i of %i]' % ( i+1 , len ( neurons ) ) )
             #print('Resolution:', self.check_resolution(neuronA))  
             for neuronB in neurons:
-                if self.compare == 'Morphology' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
-                    matching_scores[self.compare][str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_morphology_matching_score(
-                                                                                                                                    neuron_data[neuronA['skid']],
-                                                                                                                                    neuron_parent_vectors[neuronA['skid']],
-                                                                                                                                    neuron_data[neuronB['skid']],
-                                                                                                                                    neuron_parent_vectors[neuronB['skid']],
-                                                                                                                                    0.2
-                                                                                                                                   )
+                tag = str(neuronA['skid'])+'-'+str(neuronB['skid'])
+                if self.compare == 'Morphology' and tag not in matching_scores[self.compare]:
+                    matching_scores[self.compare][tag] = round(     self.calc_morphology_matching_score(
+                                                                                                        neuron_data[neuronA['skid']],
+                                                                                                        neuron_parent_vectors[neuronA['skid']],
+                                                                                                        neuron_data[neuronB['skid']],
+                                                                                                        neuron_parent_vectors[neuronB['skid']]                                                                                                        
+                                                                                                       )
                                                                                                 ,5)
-                elif self.compare == 'Synapse-Distr.' and str(neuronA['skid'])+'-'+str(neuronB['skid']) not in matching_scores[self.compare]:
-                     matching_scores[self.compare][str(neuronA['skid'])+'-'+str(neuronB['skid'])] = round(     self.calc_synapse_matching_score(
-                                                                                                                                    synapse_data[neuronA['skid']],
-                                                                                                                                    synapse_data[neuronB['skid']]
-                                                                                                                                  )
-                                                                                                ,5)
+                elif self.compare == 'Synapses' and tag not in matching_scores[self.compare]:
+                    matching_scores[self.compare][tag] = round(     self.calc_synapse_matching_score(
+                                                                                                        synapse_data[neuronA['skid']],
+                                                                                                        synapse_data[neuronB['skid']]
+                                                                                                      )
+                                                                                                ,5)                
+                elif self.compare == 'Connectivity' and tag not in matching_scores[self.compare]:
+                    if self.use_inputs:
+                        incoming_score = self.calc_connectivity_matching_score( 
+                                                                            neuronA['skid'],
+                                                                            neuronB['skid'],
+                                                                            connectivity['incoming'],
+                                                                            partner_names,
+                                                                            threshold = 1
+                                                                            )
+                    if self.use_outputs:
+                        outgoing_score = self.calc_connectivity_matching_score(
+                                                                            neuronA['skid'],
+                                                                            neuronB['skid'],
+                                                                            connectivity['outgoing'],
+                                                                            partner_names,
+                                                                            threshold = 1
+                                                                            )                    
+
+                elif self.compare == 'Paired-Connectivity' and tag not in matching_scores[self.compare]:
+                    if self.use_inputs:
+                        incoming_score = self.calc_pairing_matching_score(  
+                                                                            neuronA['skid'],
+                                                                            neuronB['skid'],
+                                                                            connectivity['incoming'],
+                                                                            partner_names,
+                                                                            list_of_pairs
+                                                                            )
+                    if self.use_outputs:
+                        outgoing_score = self.calc_pairing_matching_score(
+                                                                            neuronA['skid'],
+                                                                            neuronB['skid'],
+                                                                            connectivity['outgoing'],
+                                                                            partner_names,
+                                                                            list_of_pairs
+                                                                            )
+
+                if self.compare == 'Connectivity' or self.compare == 'Paired-Connectivity' and tag not in matching_scores[self.compare]:
+                    if neuronA in to_exclude or neuronB in to_exclude:                        
+                        matching_scores[self.compare][tag] = 0                        
+
+                    elif self.use_inputs is True and self.use_outputs is True:
+                        #Calculated combined score
+                        #Attention! Averaging over incoming and outgoing pairing scores will give weird results with - for example -  sensory/motor neurons
+                        #that have predominantly either only up- or downstream partners!
+                        #To compensate, ratio of upstream to downstream partners (after applying filters and removing all unpaired!) is considered!
+                        #Ratio is applied to neuronA of A-B comparison -> will of course be reversed at B-A comparison
+                        try:
+                            r_inputs = number_of_partners[neuronA['skid']]['incoming']/(number_of_partners[neuronA['skid']]['incoming']+number_of_partners[neuronA['skid']]['outgoing'])
+                            r_outputs = 1 - r_inputs
+                        except:
+                            print('Error calculating input/output ratio for' , neuronA , '- assuming 50/50 (probably division by 0 error)')
+                            r_inputs = 0.5
+                            r_outputs = 0.5
+
+                        avg_matching_score = incoming_score * r_inputs + outgoing_score * r_outputs
+
+                        #print(neuronA,neuronB,incoming_score,outgoing_score,avg_matching_score)
+                                                                                                                                      
+                        matching_scores[self.compare][tag] = round( avg_matching_score , 5 )
+                    elif self.use_inputs is True:
+                        matching_scores[self.compare][tag] = round( incoming_score , 5 )
+                    elif self.use_outputs is True:
+                        matching_scores[self.compare][tag] = round( outgoing_score , 5 )
+
+
+        annotations = {}
+        if self.compare == 'Paired-Connectivity' or self.compare == 'Connectivity':
+            print('Percentage of synapses usable for calculation (',directions,')')
+            percentages = {}            
+            for n in neurons:
+                skid = n['skid']
+
+                try:
+                    percentages[skid] = round(synapses_used[skid]/total_synapses[skid] * 100,1)
+                except:
+                    percentages[skid] = 0
+
+                if n in to_exclude:
+                    annotations[skid] = 'OMITTED: %f percent of synapses TOO LOW for calculation!' % percentages[skid]
+                    print(neuron_names[skid],'#',skid,':',percentages[skid],'% - OMITTED FOR CALCULATION!') 
+                else:
+                    annotations[skid] = '%f percent of synapses usable for calculation (%s)' % (percentages[skid],str(directions))                
+                    print(neuron_names[skid],'#',skid,':',percentages[skid],'%') 
 
         #print('Matchin scores:,',matching_scores[self.compare])
 
@@ -7434,13 +7734,16 @@ class ColorBySimilarity(Operator):
 
         #print('Clusters:', clusters_to_plot)
 
-        colors = ColorCreator.random_colors(len(clusters_to_plot),'RGB')
+        colors = ColorCreator.random_colors(len(clusters_to_plot)-len(to_exclude),'RGB')
 
         colormap = {}
-        for c in clusters_to_plot:                      
-            for skid in c:                                
-                colormap[skid] = colors[0]
-            colors.pop(0)
+        for c in clusters_to_plot:
+            if len(c) == 1 and c[0] in to_exclude_skids:
+                colormap[c[0]] = (0,0,0)
+            else:
+                for skid in c:                              
+                    colormap[skid] = colors[0]
+                colors.pop(0)
 
         #print('Colormap:',colormap)
 
@@ -7452,23 +7755,25 @@ class ColorBySimilarity(Operator):
         #for entry in matching_scores:
         #    print(entry,'\t',matching_scores[entry])
 
+        self.report({'INFO'},'Success!' )
+
         if self.save_dendrogram is True and bpy.data.filepath != '':
             print('Creating Dendrogram.svg')
             try:
-                svg_file = os.path.join ( os.path.dirname( bpy.data.filepath ) , 'dendrogram.svg' )
-                self.plot_dendrogram(skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', neuron_names , self.cluster_at)
-                print('Dendrogram.svg created in ', os.path.dirname( bpy.data.filepath ))
-                self.report({'INFO'},'dendrogram at ' + svg_file )
+                svg_file = os.path.join ( os.path.normpath( self.path_dendrogram ) , 'dendrogram.svg' )
+                self.plot_dendrogram(skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', neuron_names , self.cluster_at, annotations)
+                print('Dendrogram.svg created in ', os.path.normpath( self.path_dendrogram ) )
+                self.report({'INFO'},'Dendrogram created:' + svg_file )
             except:
                 self.report({'ERROR'},'Could not create dendrogram. See Console!') 
                 self.report({'INFO'},'ERROR. See Console!') 
                 print('ERROR: Could not create dendrogram')
-                if not os.access( os.path.dirname( bpy.data.filepath ) , os.W_OK ):
-                    print('Do not have permission to write in', os.path.dirname( bpy.data.filepath ))
+                if not os.access( os.path.normpath( self.path_dendrogram ) , os.W_OK ):
+                    print('Do not have permission to write in', os.path.normpath( self.path_dendrogram ) )
                     print('Try saving the .blend file elsewhere!')
-        elif self.save_dendrogram is True and bpy.data.filepath == '':
-            print('ERROR: Need to first save the .blend file before creating dendrogram!')
-            self.report({'ERROR'},'ERROR creating Dendrogram: see console')
+        elif self.save_dendrogram is True and not os.path.exists ( os.path.normpath ( self.path_dendrogram ) ):
+            print('ERROR: Provided path does not exists!')
+            self.report({'ERROR'},'ERROR creating Dendrogram: path does not exists')        
                 
         return{'FINISHED'}
 
@@ -7527,7 +7832,7 @@ class ColorBySimilarity(Operator):
         all_values = []
 
         #Sigma is defined as CATMAID units - have to convert to Blender units
-        blender_sigma = self.sigma / context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        blender_sigma = self.sigma / self.conversion_factor
         
 
         nA = np.array(nodeDataA)     
@@ -7551,6 +7856,155 @@ class ColorBySimilarity(Operator):
 
         
         return (sum(all_values)/len(all_values))  
+
+    def calc_connectivity_matching_score(self,neuronA,neuronB,connectivity,neuron_names,threshold=1):   
+        """
+        Ignores A->B, A->A, B->A and B->B
+        Attention! matching_index_synapses is tricky, because if neuronA has lots of connections and neuronB 
+        only little, they will still get a high matching index. E.g. 100 of 200 / 1 of 50 = 101/250 -> matching index = 0.404
+        matching_index_weighted_synapses somewhat solves that:
+        % of shared synapses A * % of shared synapses B * 2 / (% of shared synapses A + % of shared synapses B)
+        -> value will be between 0 and 1; if one neuronB has only few connections (percentage) to a shared partner, the final value will also be small
+
+        """
+
+        n_total = 0
+        n_shared = 0
+        n_synapses_shared = 0
+        n_synapses_sharedA = 0
+        n_synapses_sharedB = 0
+        n_synapses_total = 0
+        n_synapses_totalA = 0
+        n_synapses_totalB = 0
+
+
+        #Vertex similarity based on Jarrell et al., 2012
+        # f(x,y) = min(x,y) - C1 * max(x,y) * e^(-C2 * min(x,y))
+        # x,y = edge weights to compare
+        # vertex_similarity is the sum of f over all vertices
+        # C1 determines how negatively a case where one edge is much stronger than another is punished
+        # C2 determines the point where the similarity switches from negative to positive
+        C1 = 0.5
+        C2 = 1
+        vertex_similarity = 0
+        max_score = 0   
+
+        for entry in connectivity:      
+            if 'ambiguous' in neuron_names[entry].lower():
+                continue
+            if connectivity[entry]['num_nodes'] < 200:
+                continue
+
+            A_connected = False
+            B_connected = False
+
+            if neuronA in connectivity[entry]['skids'] and entry is not neuronB and entry is not neuronA:
+                if connectivity[entry]['skids'][neuronA] >= threshold:
+                    n_total += 1
+                    n_synapses_total += connectivity[entry]['skids'][neuronA]
+                    n_synapses_totalA += connectivity[entry]['skids'][neuronA]
+                    A_connected = True
+            if neuronB in connectivity[entry]['skids'] and entry is not neuronA and entry is not neuronB:
+                if connectivity[entry]['skids'][neuronB] >= threshold:              
+                    B_connected = True
+                    n_synapses_total += connectivity[entry]['skids'][neuronB]
+                    n_synapses_totalB += connectivity[entry]['skids'][neuronB]
+                    #Make sure to not count this entry again if it is already connected to A
+                    if A_connected is False:
+                        n_total += 1
+
+            if A_connected is True and B_connected is True:
+                n_shared += 1
+                n_synapses_shared += connectivity[entry]['skids'][neuronA] + connectivity[entry]['skids'][neuronB]
+                n_synapses_sharedA += connectivity[entry]['skids'][neuronA]
+                n_synapses_sharedB += connectivity[entry]['skids'][neuronB]
+
+            if A_connected is True:
+                a = connectivity[entry]['skids'][neuronA]
+            else: 
+                a = 0
+            if B_connected is True:
+                b = connectivity[entry]['skids'][neuronB]
+            else: 
+                b = 0
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        try: 
+            similarity_normalized = ( vertex_similarity + C1 * max_score ) / ( ( 1 + C1 ) * max_score) #Reason for (1+C1) is that by increasing vertex_similarity first by C1*max_score, we also increase the maximum reachable value            
+        except:     
+            similarity_normalized = 0
+
+        return similarity_normalized
+
+    def calc_pairing_matching_score(self,neuronA,neuronB,connectivity,neuron_names,list_of_pairs):    
+        """
+        Compares connections of A and B to given pairs of synaptic partners. 
+        Synaptic partners that have not been paired will be ignored.
+
+        Will only calculate similarity_normalized based on Jarrell's vertex similarity!
+
+        Does ignore A->A, B->B (unless A or B are unpaired medial)
+        Does NOT ignore A->B, B->A
+
+        list_of_pairs has to be a list [[A_left,A_right],[B_left,B_right],...]
+        for unpaired medial neurons just have the neuron twice in list [A_unpaired,A_unpaired],[B_unpaired,B_unpaired]
+        """
+
+        #Vertex similarity based on Jarrell et al., 2012
+        # f(x,y) = min(x,y) - C1 * max(x,y) * e^(-C2 * min(x,y))
+        # x,y = edge weights to compare
+        # vertex_similarity is the sum of f over all vertices
+        # C1 determines how negatively a case where one edge is much stronger than another is punished
+        # C2 determines the point where the similarity switches from negative to positive
+        C1 = 0.5
+        C2 = 1
+        vertex_similarity = 0
+        max_score = 0   
+
+
+        for pA,pB in list_of_pairs:
+            try:
+                a = connectivity[pA]['skids'][neuronA]
+            except:
+                a = 0
+            try:
+                b = connectivity[pB]['skids'][neuronB]
+            except:
+                b = 0
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        #Again but the other way around
+        for pB,pA in list_of_pairs:
+            try:
+                a = connectivity[pA]['skids'][neuronA]
+            except:
+                a = 0
+            try:
+                b = connectivity[pB]['skids'][neuronB]
+            except:
+                b = 0       
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        try: 
+            similarity_normalized = ( vertex_similarity + C1 * max_score ) / ( ( 1 + C1 ) * max_score) #Reason for (1+C1) is that by increasing vertex_similarity first by C1*max_score, we also increase the maximum reachable value
+            #print(vertex_similarity,similarity_normalized,max_score)
+        except:     
+            similarity_normalized = 0
+
+
+        return similarity_normalized
 
     def closest_node(node,nodes):
         nodes = numpy.asarray(nodes)
@@ -7695,7 +8149,7 @@ class ColorBySimilarity(Operator):
 
         return all_clusters,merges_at
 
-    def plot_dendrogram(self, skids, all_clusters, merges_at, remote_instance, filename, names, cluster_at=0): 
+    def plot_dendrogram(self, skids, all_clusters, merges_at, remote_instance, filename, names, cluster_at=0, annotations = {}): 
         """
         Creates dendrogram based on previously calculated similarity scores
         """
@@ -7737,6 +8191,16 @@ class ColorBySimilarity(Operator):
                                 y_offset,
                                 str((0,0,0)),
                                 names[neuron] 
+                                )
+                            )
+
+                if annotations:
+                    f.write('<text x="%i" y="%i" fill="rgb%s" style="font-size:10px;"> %s </text> \n'
+                            % (
+                                500 + 10,
+                                y_offset+10,
+                                str((0,0,0)),
+                                annotations[neuron] 
                                 )
                             )
 
@@ -7856,6 +8320,63 @@ class ColorBySimilarity(Operator):
             f.close()
 
         return 
+
+    def retrieve_pairs(self,neurons,return_as_pairs=False):
+        """
+        Checks if [neurons] have annotation "paired with #skid". 
+        Returns dict = {'paired': [paired_neurons,...], 'unpaired_medial': [],'not_paired':[not_paired]} 
+        """
+
+        neuron_annotations = get_annotations_from_list (neurons, remote_instance)
+
+        paired = [] 
+        not_paired = []
+        unpaired_medial = []
+
+        #Search for pairs   
+        for neuron in neurons:      
+            
+            connected_pair = None
+            unpaired_med = False
+
+            #print('checking annotations for ', neuron, neuron_annotations[neuron])
+
+            try:                
+                for annotation in neuron_annotations[neuron]:
+                    if annotation.startswith('paired with #'):
+
+                        if connected_pair != None:
+                            print('Warning! Neuron annotated twice:', neuron)
+
+                        connected_pair = annotation[13:]
+
+                        if connected_pair == neuron:
+                            print('Warning! Neuron paired with itself:', neuron)
+                    
+                    elif annotation == 'unpaired_medial' or annotation == 'unpaired medial':
+
+                        if connected_pair != None:
+                            print('Warning! Neuron annotated as pair AND as not_paired medial!')
+
+                        unpaired_med = True
+            except:
+                #this means neuron is not annotated at all
+                pass
+
+        
+            if connected_pair != None:
+                if return_as_pairs is False:
+                    if neuron not in paired and connected_pair not in paired:
+                        paired += [neuron,connected_pair]                               
+                elif return_as_pairs is True and (connected_pair,neuron) not in paired:             
+                    paired.append((neuron,connected_pair))
+            elif unpaired_med is True:
+                unpaired_medial.append(neuron)
+            else:
+                not_paired.append(neuron)   
+
+        #return {'paired':list(set(paired)),'not_paired':not_paired,'unpaired_medial':unpaired_medial}
+        return {'paired':paired,'not_paired':not_paired,'unpaired_medial':unpaired_medial}
 
 class SelectAnnotation(Operator):
     """Select neurons based on annotation"""  
@@ -8033,35 +8554,77 @@ class DisplayHelp(Operator):
 
     def draw(self, context):
         layout = self.layout 
-        if self.entry == 'color.by_similarity':            
-            layout.label(text='This function colors neurons based on how similar they are in respect ')
-            layout.label(text='to either their morphology or their synapse placement.')
-            layout.label(text='Morphological similarity is based on Kohl et al. (2013, Cell). ')
-            layout.label(text='Synapse similarity is based on Schlegel et al (2016, bioRxiv).')
-            layout.label(text='Dendrogram is created in the same directory as your blend file.')
+        if self.entry == 'color.by_similarity':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Color Neurons by Similarity - Tooltip')
+            box = layout.box()
+            box.label(text='This function colors neurons based on how similar they are in respect ')            
+            box.label(text='to either: morphology, synapse placement, connectivity or paired')
+            box.label(text='connectivity.')            
+            layout.label (text='Morphology:')
+            box = layout.box()
+            box.label(text='Neurons that have close-by projections with similar orientation are')
+            box.label(text='similar. See Kohl et al. (2013, Cell).')
+            layout.label (text='Synapses:')
+            box = layout.box()            
+            box.label(text='Neurons that have similar numbers of synapses in the same area') 
+            box.label(text='are similar. See Schlegel et al (2016, bioRxiv).')
+            layout.label (text='Connectivity:')
+            box = layout.box()
+            box.label(text='Neurons that connects with similar number of synapses to the same')
+            box.label(text='partners are similar. See Schlegel et al (2016, bioRxiv).')
+            layout.label (text='Paired Connectivity:')
+            box = layout.box()
+            box.label(text='Neurons that mirror (left/right comparison) each others connectivity')
+            box.label(text='are similar. This requires synaptic partners to be paired with a')
+            box.label(text='<paired with #skeleton_id> annotation.')            
         elif self.entry == 'color.by_pairs':
-            layout.label(text='Gives paired neurons the same color. Pairing is based on annotations:')
-            layout.label(text='Neuron needs to have a <paired with #skid> annotation. For example')
-            layout.label(text='<paired with #1874652>')
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Color Neurons by Pairs - Tooltip')
+            box = layout.box()
+            box.label(text='Gives paired neurons the same color. Pairing is based on annotations:')
+            box.label(text='Neuron needs to have a <paired with #skeleton_id> annotation.')
+            box.label(text='For example <paired with #1874652>.')
         elif self.entry == 'color.by_spatial':
-            layout.label(text='This function colors neurons based on spatial clustering of their somas.')
-            layout.label(text='Uses the k-Mean algorithm. You need to set the number of clusters you')
-            layout.label(text='expect and the algorithm finds clusters with smallest variance.')
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Color by Spatial Distribution - Tooltip')
+            box = layout.box()
+            box.label(text='This function colors neurons based on spatial clustering of their somas.')
+            box.label(text='Uses the k-Mean algorithm. You need to set the number of clusters you')
+            box.label(text='expect and the algorithm finds clusters with smallest variance.')
         elif self.entry == 'retrieve.by_pairs':
-            layout.label(text='Retrieves neurons paired with already the loaded neurons. Pairing is based')
-            layout.label(text='on annotations: neuron needs to have a <paired with #skid> annotation.')
-            layout.label(text='For example <paired with #1874652>')
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Retrieve Pairs of Neurons - Tooltip')
+            box = layout.box()
+            box.label(text='Retrieves neurons paired with already the loaded neurons. Pairing is')
+            box.label(text='based on annotations: neuron needs to have a <paired with #skeleton_id>')
+            box.label(text='annotation. For example neuron #1234 has annotation')
+            box.label(text='<paired with #5678> and neuron 5678 has annotation')
+            box.label(text='<paired with #1234>.')
         elif self.entry == 'retrieve.connectors':
-            layout.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors can be')
-            layout.label(text='scaled (weighted) based on the number of postsynaptically connected')
-            layout.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Retrieve Connectors - Tooltip')
+            box = layout.box()
+            box.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors can be')
+            box.label(text='scaled (weighted) based on the number of postsynaptically connected')
+            box.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
         elif self.entry == 'color.unify':
-            layout.label(text='By default, all imported neurons have a unique material. Thus manual changes')
-            layout.label(text='have to be made to each neuron individually. To facilitate, this function')
-            layout.label(text='assigns a single material to given group of neurons. Cannot be reversed!')
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Unify Colors - Tooltip')
+            box = layout.box()
+            box.label(text='By default, all imported neurons have a unique material.')
+            box.label(text='Thus manual changes have to be made to each neuron individually.')
+            box.label(text='To facilitate, this function assigns a single material to given')
+            box.label(text='group of neurons. Cannot be reversed!')
 
 
-    def invoke(self, context, event):
+    def invoke(self, context, event):        
         return context.window_manager.invoke_popup(self,width=400)
     
 
@@ -8081,7 +8644,7 @@ class ColorBySpatialDistribution(Operator):
     ### If 'show_center' is True, a sphere will be created with a r of 'radius'
     show_centers = BoolProperty(    name="Show Cluster Centers", 
                                     default = True,
-                                    description = 'If true, a sphere is used to indicate each cluster.' )
+                                    description = 'If true, a sphere is used to indicate each cluster.')
     
     
     def execute (self, context):
@@ -8378,7 +8941,6 @@ def register():
     bpy.utils.register_module(__name__)
     #bpy.utils.register_class(VersionManager)
     bpy.types.Scene.CONFIG_VersionManager = bpy.props.PointerProperty(type=VersionManager)
-
 
     """    
     bpy.utils.register_class(CATMAIDimportPanel)

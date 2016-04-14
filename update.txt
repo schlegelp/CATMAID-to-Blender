@@ -1,7 +1,7 @@
 #Provides current version, last stable version, 
 #recently added features and a message if need be
 
-current_version = {5.0}
+current_version = {5.1}
 last_stable = {4.1}
-new_features = {5X faster import}
+new_features = {Compare Connectivity}
 message = {}
