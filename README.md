@@ -15,7 +15,7 @@ First download CATMAIDImport.py, then:
 3. Activate by checking box and 'Save User Setting'
 
 ######Required Python packages:
-[Blender](www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) and [threading](https://docs.python.org/3/library/threading.html) are installed. [Threading](https://docs.python.org/3/library/threading.html) is required, without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
+[Blender](www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
 
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
