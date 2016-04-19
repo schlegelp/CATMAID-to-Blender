@@ -61,7 +61,7 @@ This code is under GNU GPL V3
 Please cite [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/04/07/044990) if you use the plugin in your publication.
 
 #### Specific Methods:
-Some functions available within the plugin are based on previously published methods. Please cite the original papers if you make use of these specific methods.
+Some functions available within the plugin are based on/derived from previously published methods. Please cite the original papers if you make use of these specific methods.
 
 1. **Comparison of neurons based on morphology**: Cell. 2013 Dec 19;155(7):1610-23. doi: 10.1016/j.cell.2013.11.025.
 *A bidirectional circuit switch reroutes pheromone signals in male and female brains.*
