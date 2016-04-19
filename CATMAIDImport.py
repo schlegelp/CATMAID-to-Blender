@@ -19,6 +19,9 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.2 19/04/2015:
+    - combined all threaded skeleton data retrieval into one function and added a timeout variable
+
 ### V5.1 13/04/2015:
     - added coloring by similarity in connectivity and paired connectivity    
     - added relative synapse count to color by synapse count
@@ -1068,36 +1071,29 @@ class UpdateNeurons(Operator):
         start = time.clock()
         resampling_factors = {}
 
-        print('Creating threads to retrieve data:')
+        skids_to_reload = []
+        
         for i,n in enumerate(neurons_to_reload):    
             skid = neurons_to_reload[n]['skid']
-            if checkIfNeuronExists(skid,neuron_names[skid]):
-                print(neuron_names[skid],'already exists - skipping.')
-                continue
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t            
-            print('\r Threads: '+str(i),end='')
+            skids_to_reload.append(skid)           
 
             if self.keep_resampling is True:       
                 resampling_factors[skid] = neurons_to_reload[n]['resampling']
             else:
                 resampling_factors[skid] = self.new_resampling
 
-        print('Threads to retrieve data created.')
-
-        for skid in threads:
-            skdata[skid] = threads[skid].join()      
-
-        print('Threads successfully joined.')  
+        skdata, errors = retrieveSkeletonData( skids_to_reload , neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
 
         print("Creating new meshes for %i neurons" % len(skdata))
         for skid in skdata:            
             CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], resampling_factors[skid], self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
 
         print('Finished Import in', time.clock()-start, 's') 
-        msg = 'Success! %i neurons imported' % len(skdata)
-        self.report({'INFO'}, msg)      
+        if errors is None:
+            msg = 'Success! %i neurons imported' % len(skdata)
+            self.report({'INFO'}, msg)     
+        else:
+            self.report({'ERROR'}, errors)    
         return{'FINISHED'} 
     
     def invoke(self, context, event):        
@@ -1167,33 +1163,28 @@ class RetrieveNeuron(Operator):
         self.count = 1
 
         print("Collection skeleton data for:",skeletons_to_retrieve)
-        threads = {}
-        skdata = {}
         start = time.clock()
 
-        print('Creating threads to retrieve data:')
+        skids_to_retrieve = []
         for i,skid in enumerate(skeletons_to_retrieve):      
             if re.search('[a-zA-Z]', self.skeleton_id):
                 print ('Invalid Skeleton ID')
-                continue
-            if checkIfNeuronExists(skid,neuron_names[skid]):
-                print(neuron_names[skid],'already exists - skipping.')
-                continue        
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
+                continue  
+            else:
+                skids_to_retrieve.append(skid)
 
-        for skid in threads:
-            skdata[skid] = threads[skid].join()        
+        skdata,errors = retrieveSkeletonData( skids_to_retrieve , neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
             CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
 
         print('Finished Import in', time.clock()-start, 's')
-        msg = 'Success! %i neurons imported' % len(skdata)
-        self.report({'INFO'}, msg)
+        if errors is None:
+            msg = 'Success! %i neurons imported' % len(skdata)
+            self.report({'INFO'}, msg)
+        else:
+            self.report({'ERROR'}, errors)
 
                         
         return {'FINISHED'}
@@ -1246,8 +1237,6 @@ class RetrieveNeuron(Operator):
             return False
         
         
-        
-        
 class RetrievePairs(Operator):      
     """Retrieve Neurons from CATMAID database based on Annotation"""
     bl_idname = "retrieve.by_pairs"  
@@ -1289,6 +1278,7 @@ class RetrievePairs(Operator):
         
         neurons = []
         self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        self.time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out
         
         if self.which_neurons == 'Active':
             if bpy.context.active_object != None:
@@ -1365,23 +1355,10 @@ class RetrievePairs(Operator):
             print('Warning! Incorrect annotated skid(s) among pairs found!')
             self.report({'ERROR'},'Error(s) occurred: see console')
 
-        print("Collection skeleton data for:",paired)
-        threads = {}
-        skdata = {}
-        start = time.clock()
+        print("Collection skeleton data for:",paired)        
+        start = time.clock()        
 
-        print('Creating threads to retrieve data:')
-        for i,skid in enumerate(paired):
-            if checkIfNeuronExists(skid,neuron_names[skid]):
-                print(neuron_names[skid],'already exists - skipping.')
-                continue            
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
-
-        for skid in threads:
-            skdata[skid] = threads[skid].join()      
+        skdata,errors = retrieveSkeletonData( paired , neuron_names , self.time_out)   
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -1392,8 +1369,11 @@ class RetrievePairs(Operator):
                 self.report({'ERROR'},'Error(s) occurred: see console')
 
         print('Finished Import in', time.clock()-start, 's')
-        msg = 'Success! %i neurons imported' % len(skdata)
-        self.report({'INFO'}, msg)
+        if errors is None:
+            msg = 'Success! %i neurons imported' % len(skdata)
+            self.report({'INFO'}, msg)
+        else:
+            self.report({'ERROR'}, errors)
         
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self)
@@ -1455,31 +1435,21 @@ class RetrieveInVolume(Operator):
 
         neuron_names = get_neuronnames(skid_list)
 
-        print("Collection skeleton data for %i neurons" % len(skid_list))
-        threads = {}
-        skdata = {}
-        start = time.clock()
+        print("Collection skeleton data for %i neurons" % len(skid_list))        
+        start = time.clock()              
 
-        print('Creating threads to retrieve data:')
-        for i,skid in enumerate(skid_list):
-            if checkIfNeuronExists(str(skid),neuron_names[str(skid)]):
-                print(neuron_names[str(skid)],'already exists - skipping.')
-                continue            
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
-
-        for skid in threads:
-            skdata[skid] = threads[skid].join()        
+        skdata, errors = retrieveSkeletonData ( skid_list, neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out )  
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
             CATMAIDtoBlender.extract_nodes(skdata[skid], str(skid), neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
 
         print('Finished Import in', time.clock()-start, 's')
-        msg = 'Success! %i neurons imported' % len(skdata)
-        self.report({'INFO'}, msg)    
+        if errors is None:
+            msg = 'Success! %i neurons imported' % len(skdata)
+            self.report({'INFO'}, msg)    
+        else:
+            self.report({'ERROR'}, errors)
         
         return{'FINISHED'}                                  
 
@@ -1525,29 +1495,74 @@ class RetrieveInVolume(Operator):
         else:
             return False  
 
-class retrieveSkidsThreaded(threading.Thread):
-    def __init__(self,skids):
-        self.skidlist = skids    
-        threading.Thread.__init__(self)
+def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
+    threads = {}
+    threads_closed = []
+    skdata = {}
+    errors = None
+
+    print('Creating threads to retrieve data:')
+    for i,skid in enumerate(skid_list): 
+        if neuron_names:
+            if checkIfNeuronExists(skid,neuron_names[skid]):
+                #print(neuron_names[skid],'already exists - skipping.')
+                continue
+        t = retrieveSkidThreaded(skid)
+        t.start()
+        threads[skid] = t
+        print('\r Threads: '+str(len(threads)),end='')
+
+    print('\n Now joining threads.')
+
+    start = cur_time = time.time()
+    joined = 0
+    while cur_time <= (start + time_out) and len(skdata) != len(threads):
+        for skid in threads:
+            if skid in threads_closed:
+                continue
+            if not threads[skid].is_alive():
+                skdata[skid] = threads[skid].join()
+                threads_closed.append(skid)                
+        time.sleep(1)
+        cur_time = time.time()
+        print('\r Closing Threads: '+ str( len( threads_closed ) ) + ' - ' + str(round(cur_time-start)) + ' s' ,end='')
+
+    if cur_time > (start + time_out):
+        errors = 'Timeout while joining threads. Retrieved only %i of %i skeletons' % (len(skdata),len(threads))
+        print('\n !WARNING: Timeout while joining threads. Retrieved only %i of %i skeletons' % (len(skdata),len(threads)))  
+        for skid in threads:
+            if skid not in threads_closed:
+                print('Did not close thread for skid',skid)  
+
+    return skdata, errors
+
+
+class retrieveSkidThreaded(threading.Thread):
+    def __init__(self,skid):
+        try:
+            self.skid = skid    
+            threading.Thread.__init__(self)
+            self.connector_flag = 1
+            self.tag_flag = 1
+        except:
+            print('!Error initiating thread for',self.kids)
 
     def run(self):
-        #print(self.skidlist)        
-        for count,skid in enumerate( self.skidlist ): 
-            #print('Retrieving skeleton %s [%i of %i]' % (skid,count+1,len(self.skidlist)))
-            self.sk_data = get_3D_skeleton ( skid, remote_instance, connector_flag = 1, tag_flag = 1)           
-        return 
-
-    def get_3D_skeleton ( skid, remote_instance, connector_flag = 1, tag_flag = 1):
         """
         Retrieve 3D skeletons for a single skeleton_ids
-        """        
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skid, connector_flag, tag_flag )
-        data = remote_instance.fetch( remote_compact_skeleton_url )
-        return data
+        """  
+        #print(self.skids)        
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , self.skid, self.connector_flag, self.tag_flag )
+        self.sk_data = remote_instance.fetch( remote_compact_skeleton_url )          
+        return 
 
     def join(self):
-        threading.Thread.join(self)
-        return self.sk_data
+        try:
+            threading.Thread.join(self)
+            return self.sk_data
+        except:
+            print('!ERROR joining thread for',self.skid)
+            return None
 
 def checkIfNeuronExists(skid,neuron_name):
     cellname = skid + ' - ' + neuron_name  
@@ -1604,7 +1619,8 @@ class RetrievebyAnnotation(Operator):
         ### Get annotation ID of self.annotation
         annotation_id = self.retrieve_annotation_list()
 
-        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor       
+        self.time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out 
         
         if annotation_id != 'not found':
             self.retrieve_annotated(self.annotation, annotation_id)
@@ -1648,30 +1664,21 @@ class RetrievebyAnnotation(Operator):
         neuron_names = get_neuronnames(annotated_skids)
 
         print("Collection skeleton data for:",annotated_skids)
-        threads = {}
-        skdata = {}
         start = time.clock()
 
-        print('Creating threads to retrieve data:')
-        for i,skid in enumerate(annotated_skids): 
-            if checkIfNeuronExists(skid,neuron_names[skid]):
-                print(neuron_names[skid],'already exists - skipping.')
-                continue
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
+        skdata, errors = retrieveSkeletonData(annotated_skids,neuron_names, self.time_out)   
 
-        for skid in threads:
-            skdata[skid] = threads[skid].join()        
-
-        print("Creating meshes for %i neurons" % len(skdata))
+        print("\n Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
             CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
 
         print('Finished Import in', time.clock()-start, 's')
-        msg = 'Success! %i neurons imported' % len(skdata)
-        self.report({'INFO'}, msg)
+        if errors is None:
+            msg = 'Success! %i neurons imported' % len(skdata)
+            self.report({'INFO'}, msg)
+        else:
+            self.report({'ERROR'}, errors)
+        
 
         return{'FINISHED'}
         
@@ -1861,22 +1868,11 @@ class RetrieveConnectors(Operator):
         for ob in to_search:
             if ob.name.startswith('#'):
                 filtered_ob_list.append(ob)
-
-        threads = {}
-        skdata = {}
+        
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
-        print('Creating threads to retrieve data:')
-        for i,neuron in enumerate(filtered_ob_list):
-            skid = re.search('#(.*?) -',neuron.name).group(1)                        
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
-
-        for skid in threads:
-            skdata[skid] = threads[skid].join()
+        skdata, errors = retrieveSkeletonData(filtered_ob_list, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
 
         for i,neuron in enumerate(filtered_ob_list):
             print('Creating Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
@@ -1884,7 +1880,10 @@ class RetrieveConnectors(Operator):
             self.get_connectors(skid,skdata[skid], neuron.active_material.diffuse_color[0:3])
             bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
-        self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
+        if errors is None:
+            self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
+        else:
+            self.report({'ERROR'}, errors)
                 
             
         return {'FINISHED'}   
@@ -2168,18 +2167,11 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     if self.mesh_colors:
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
-        threads = {}
-        skdata = {}
-        print("Retrieving connector data for %i neurons" % len(skids_to_export))
-        print('Creating threads to retrieve data:')
-        for i,skid in enumerate(skids_to_export):            
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
+        print("Retrieving connector data for %i neurons" % len(skids_to_export)) 
+        skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
 
-        for skid in threads:
-            skdata[skid] = threads[skid].join()
+        if errors is not None:
+            self.report({'ERROR'},errors)
 
         for skid in skids_to_export:
             connector_data[skid] = self.get_connectors(skid,skdata[skid])
@@ -4106,6 +4098,7 @@ class RetrievePartners(Operator):
 
         to_process = []
         self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        self.time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out
 
         if self.which_neurons == 'Active':
             if bpy.context.active_object.name.startswith('#'):
@@ -4124,7 +4117,10 @@ class RetrievePartners(Operator):
         
         skids = []
         for n in to_process:
-            skids.append(re.search('#(.*?) -',n.name).group(1))
+            try:
+                skids.append(re.search('#(.*?) -',n.name).group(1))
+            except:
+                pass
         print('Retrieving partners for %i neurons...' % len(skids))
         self.get_partners(skids)
                         
@@ -4211,30 +4207,21 @@ class RetrievePartners(Operator):
             filtered_partners = list(set(partners))
 
 
-        print('Retrieving skeletons for %i above-threshold partners' % len(filtered_partners))
+        print('Retrieving skeletons for %i above-threshold partners' % len(filtered_partners))        
+        start = time.clock()        
 
-        threads = {}
-        skdata = {}
-        start = time.clock()
-
-        print('Creating threads to retrieve data:')
-        for i,skid in enumerate(filtered_partners):
-            if checkIfNeuronExists(skid,neuron_names[skid]):
-                print(neuron_names[skid],'already exists - skipping.')
-                continue            
-            t = retrieveSkidsThreaded([skid])
-            t.start()
-            threads[skid] = t
-            print('\r Threads: '+str(i),end='')
-
-        for skid in threads:
-            skdata[skid] = threads[skid].join()        
+        skdata,errors = retrieveSkeletonData(filtered_partners,neuron_names, self.time_out)      
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
             CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
 
         print('Finished in', time.clock()-start)
+
+        if errors is None:
+            self.report({'INFO'}, 'SUCCESS! %i partners imported' % len(skdata))
+        else:
+            self.report({'ERROR'}, errors)
 
 
             
@@ -5197,21 +5184,15 @@ class ExportAllToSVG(Operator, ExportHelper):
         
         if self.use_bevel is True:
             base_line_width = self.line_width
-
-        skdata = {}
-        threads = {}        
+               
         if self.color_by_density is True and self.object_for_density == 'Synapses' or self.color_by_inputs_outputs is True:
             print('Retrieving skeleton data for %i neurons' % len(to_process_sorted))
-            print('Creating threads to retrieve data:')
+            to_process_skids = []
             for i,neuron in enumerate(to_process_sorted):
                 skid = re.search('#(.*?) ',neuron.name).group(1)                  
-                t = retrieveSkidsThreaded([skid])
-                t.start()
-                threads[skid] = t
-                print('\r Threads: '+str(i),end='')
+                to_process_skids.append(skid)            
 
-            for skid in threads:
-                skdata[skid] = threads[skid].join()
+            skdata,errors = retrieveSkeletonData(to_process_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
 
         for neuron in to_process_sorted:            
             ### Create List of Lines
@@ -7364,7 +7345,7 @@ class ColorBySimilarity(Operator):
     path_dendrogram = StringProperty (
                                 name='Save to',
                                 default = '',
-                                description = 'Set file for saving dendrogram.'
+                                description = 'Set file for saving dendrogram as svg.'
                                 )
 
     use_inputs = BoolProperty (
@@ -7520,18 +7501,16 @@ class ColorBySimilarity(Operator):
             missing_skids = []
             for n in skids:
                 if n not in synapse_data:
-                    missing_skids.append(n)
+                    missing_skids.append(n)   
 
-            threads = {}
-            print('Creating threads to retrieve data:')
-            for i,skid in enumerate(missing_skids):                                
-                t = retrieveSkidsThreaded([skid])
-                t.start()
-                threads[skid] = t
-                print('\r Threads: '+str(i),end='')
+            print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
 
-            for skid in threads:
-                synapse_data[skid] = threads[skid].join()[1]                 
+            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
+
+            for skid in skdata:
+                synapse_data[str(skid)] = skdata[skid][1]
+
+                          
             
         elif self.compare == 'Connectivity' or self.compare == 'Paired-Connectivity':
             if self.use_inputs is False and self.use_outputs is False:
@@ -7593,9 +7572,7 @@ class ColorBySimilarity(Operator):
 
         elif self.compare == 'Connect For More Options':
             self.report({'ERROR'},'Please pick valid method.')
-            return{'FINISHED'}            
-                        
-        print('Done!')
+            return{'FINISHED'}
 
         global matching_scores
 
@@ -7727,9 +7704,10 @@ class ColorBySimilarity(Operator):
             except:
                 print('%s - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.compare,self.cluster_at,merges_at[i]))
                 #print( all_clusters[i])
-                clusters_to_plot = all_clusters[i]                   
+                clusters_to_plot = all_clusters[i] 
 
-        print('Created %i clusters at threshold %f' % ( len ( clusters_to_plot ) , self.cluster_at ) )
+
+        print('Created %i clusters at closest merge of %f' % ( len ( clusters_to_plot ) , merges_at[i] ) )
         #self.report ( {'INFO'} , 'Created %i clusters at threshold %f' % ( len ( clusters_to_plot ) , self.cluster_at ) )
 
         #print('Clusters:', clusters_to_plot)
@@ -8917,12 +8895,17 @@ class CATMAIDAddonPreferences(AddonPreferences):
             name="API Token",
             default='',
             subtype='PASSWORD',
-            description = 'Retrieve your API token by logging into CATMAID and hovering over your username (top right) on the project selection screen'
+            description = 'Retrieve your API token by logging into CATMAID and hovering over your username (top right) on the project selection screen.'
             )
     conversion_factor = IntProperty(
             name="CATMAID to Blender Unit Conversion Factor",
             default=10000,
             description = 'CATMAID units will be divided by this factor when imported into Blender.'
+            )
+    time_out = IntProperty(
+            name="Time to Server Timeout [s]",
+            default=20,
+            description = 'Server requests will be timed out after this duration to prevent Blender from freezing indefinitely.'
             )
 
     def draw(self, context):
@@ -8934,6 +8917,7 @@ class CATMAIDAddonPreferences(AddonPreferences):
         layout.prop(self, "http_pw")
         layout.prop(self, "token")
         layout.prop(self, "conversion_factor")
+        layout.prop(self, "time_out")
 
         
 def register():
