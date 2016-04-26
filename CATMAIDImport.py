@@ -19,6 +19,13 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.21 26/04/2015:
+    - greatly improved speed when importing/exporting connectors by pooling requests to server
+    - use mesh color will now also affect the order of export such that same colors are grouped
+    - added perspective brain outline to connector to svg export
+    - fixed a bug when importing connector spheres
+    - fixed a bug that ignored project_id when requesting skeleton data
+
 ### V5.2 19/04/2015:
     - combined all threaded skeleton data retrieval into one function and added a timeout variable
 
@@ -279,7 +286,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 1, 0),
+ "version": (5, 2, 1),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -626,7 +633,7 @@ def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
         #print('Retrieving %i skeletons' % len(skids))
         for i, skeleton_id in enumerate(skids):
             #Create URL for retrieving example skeleton from server
-            remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skeleton_id, connector_flag, tag_flag )
+            remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skeleton_id, connector_flag, tag_flag )
 
             #Retrieve node_data for example skeleton
             skeleton_data = remote_instance.fetch( remote_compact_skeleton_url )
@@ -636,7 +643,7 @@ def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
             #print('Skeleton #%s retrieved [%i of %i]' % ( str(skeleton_id) , i+1 , len(skids) ) )            
     #if only a single skids is provided
     else:
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , skids, connector_flag, tag_flag )
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id , skids, connector_flag, tag_flag )
         sk_data = remote_instance.fetch( remote_compact_skeleton_url )
 
     return (sk_data)
@@ -1493,7 +1500,7 @@ class RetrieveInVolume(Operator):
         if connected:
             return True
         else:
-            return False  
+            return False 
 
 def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
     threads = {}
@@ -1501,13 +1508,14 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
     skdata = {}
     errors = None
 
-    print('Creating threads to retrieve data:')
+    print('Creating threads to retrieve skeleton data:')
     for i,skid in enumerate(skid_list): 
         if neuron_names:
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 #print(neuron_names[skid],'already exists - skipping.')
                 continue
-        t = retrieveSkidThreaded(skid)
+        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id ,skid, 1 , 1 )
+        t = retrieveUrlThreaded ( remote_compact_skeleton_url )
         t.start()
         threads[skid] = t
         print('\r Threads: '+str(len(threads)),end='')
@@ -1536,11 +1544,11 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
 
     return skdata, errors
 
-
-class retrieveSkidThreaded(threading.Thread):
-    def __init__(self,skid):
+class retrieveUrlThreaded(threading.Thread):
+    def __init__(self,url,post_data=None):
         try:
-            self.skid = skid    
+            self.url = url
+            self.post_data = post_data 
             threading.Thread.__init__(self)
             self.connector_flag = 1
             self.tag_flag = 1
@@ -1549,19 +1557,21 @@ class retrieveSkidThreaded(threading.Thread):
 
     def run(self):
         """
-        Retrieve 3D skeletons for a single skeleton_ids
+        Retrieve data from single url
         """  
-        #print(self.skids)        
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( 1 , self.skid, self.connector_flag, self.tag_flag )
-        self.sk_data = remote_instance.fetch( remote_compact_skeleton_url )          
+        #print(self.skids)
+        if self.post_data:
+            self.data = remote_instance.fetch( self.url, self.post_data ) 
+        else:
+            self.data = remote_instance.fetch( self.url )         
         return 
 
     def join(self):
         try:
             threading.Thread.join(self)
-            return self.sk_data
+            return self.data
         except:
-            print('!ERROR joining thread for',self.skid)
+            print('!ERROR joining thread for',self.url)
             return None
 
 def checkIfNeuronExists(skid,neuron_name):
@@ -1865,41 +1875,69 @@ class RetrieveConnectors(Operator):
             to_search = bpy.context.selected_objects
 
         filtered_ob_list = []
+        filtered_skids = []
         for ob in to_search:
             if ob.name.startswith('#'):
+                skid = re.search('#(.*?) -',ob.name).group(1)
                 filtered_ob_list.append(ob)
+                filtered_skids.append(skid)
         
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
-        skdata, errors = retrieveSkeletonData(filtered_ob_list, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
+        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out )
+        cndata, neuron_names = self.get_all_connectors( skdata )
 
         for i,neuron in enumerate(filtered_ob_list):
             print('Creating Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
             skid = re.search('#(.*?) -',neuron.name).group(1)                    
-            self.get_connectors(skid,skdata[skid], neuron.active_material.diffuse_color[0:3])
+            self.get_connectors(skid,skdata[skid], cndata, neuron_names ,neuron.active_material.diffuse_color[0:3])
             bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
         if errors is None:
             self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
         else:
-            self.report({'ERROR'}, errors)
-                
+            self.report({'ERROR'}, errors)                
             
-        return {'FINISHED'}   
+        return {'FINISHED'}
+
+    def get_all_connectors(self, skdata):
+        connector_id_list = []
+        connector_postdata = {}
+
+        for skid in skdata:
+            for c in skdata[skid][1]:
+                if self.get_outputs is True and c[2] == 0:
+                    connector_id_list.append(c[1])
+                if self.get_inputs is True and c[2] == 1:
+                    connector_id_list.append(c[1])
+
+        for i, c in enumerate( list( set( connector_id_list ) ) ):           
+            connector_tag = 'connector_ids[%i]' % i
+            connector_postdata[connector_tag] = c
+
+        remote_connector_url = remote_instance.get_connectors_url( project_id )
+
+        temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )
+
+        skids_to_check = []
+        cn_data = {}
+        for c in temp_data:
+            cn_data[ c[0] ] = c[1]    
+
+            if c[1]['presynaptic_to'] != None:
+               skids_to_check.append(c[1]['presynaptic_to'])
+           
+            for target_skid in c[1]['postsynaptic_to']:
+                if target_skid != None:
+                    skids_to_check.append(target_skid)  
+
+        neuron_names = get_neuronnames( list ( set( skids_to_check + list(skdata) ) ) )
+
+        return cn_data, neuron_names 
     
         
-    def get_connectors(self, active_skeleton, node_data ,mesh_color = None):        
-        """             
-        ### Retrieve compact json data and filter connector ids
-        node_data = []
-        print('Retrieving connector data for skid %s...' % active_skeleton)
-        node_data = get_3D_skeleton ( active_skeleton, remote_instance, connector_flag = 1, tag_flag = 0 )        
-
-        if node_data:
-            print('Success!')
-        """
-
+    def get_connectors(self, active_skeleton, node_data, cndata, neuron_names ,mesh_color = None):
         connector_ids = []
         i_pre = 0
         i_post = 0
@@ -1907,68 +1945,43 @@ class RetrieveConnectors(Operator):
         connector_pre_postdata = {}
         connector_post_coords = {}
         connector_pre_coords = {}
+
+        connector_data_pre = []
+        connector_data_post = []
             
         print('Extracting coordinates..')        
         
         ### Get coordinates, divide into pre-/postsynapses and bring them into Blender space: switch y and z, divide by 10.000/10.000/-10.000
-        for connection in node_data[1]:
-            
+        for connection in node_data[1]:            
             if connection[2] == 1 and self.get_inputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
                 connector_pre_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)   
 
-                connector_tag = 'connector_ids[%i]' % i_pre
-                connector_pre_postdata[connector_tag] = connection[1]         
+                #connector_tag = 'connector_ids[%i]' % i_pre
+                #connector_pre_postdata[connector_tag] = connection[1]         
 
-                i_pre += 1            
+                #i_pre += 1       
+
+                connector_data_pre.append ( [connection[1] ,  cndata[ connection[ 1 ] ] ] )    
                 
             if connection[2] == 0 and self.get_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
                 connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)            
 
-                connector_ids.append(connection[1])
-                connector_tag = 'connector_ids[%i]' % i_post
+                #connector_ids.append(connection[1])
+                #connector_tag = 'connector_ids[%i]' % i_post
                 ### Add connector_id of this synapse to postdata
-                connector_post_postdata[connector_tag] = connection[1]
+                #connector_post_postdata[connector_tag] = connection[1]
                 
-                i_post += 1            
-       
-        print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
+                #i_post += 1      
 
-        remote_connector_url = remote_instance.get_connectors_url( project_id )
-
-        if self.get_outputs is True and len(connector_post_postdata) > 0:
-            print( "Retrieving Postsynaptic Targets..." )
-            ### Get connector data for all presynapses to determine number of postsynaptic targets and filter
-            connector_data_post = remote_instance.fetch( remote_connector_url , connector_post_postdata )
-        else:
-            connector_data_post = []        
-        
-        if self.get_inputs is True and len(connector_pre_postdata) > 0:
-            print( "Retrieving Presynaptic Targets..." )
-            ### Get connector data for all presynapses to filter later           
-            connector_data_pre = remote_instance.fetch( remote_connector_url , connector_pre_postdata ) 
-        else:
-            connector_data_pre = []  
-        
-        skids_to_check = []        
-        
-        for connector in connector_data_post+connector_data_pre:
-           if connector[1]['presynaptic_to'] != None:
-               skids_to_check.append(connector[1]['presynaptic_to'])
-           
-           for target_skid in connector[1]['postsynaptic_to']:
-               if target_skid != None:
-                   skids_to_check.append(target_skid)
-                   
-        skids_to_check = set(skids_to_check)
+                connector_data_post.append ( [connection[1] ,  cndata[ connection[ 1 ] ] ] )       
        
-        neuron_names = get_neuronnames(skids_to_check)
+        print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))        
                     
-        if connector_data_post or connector_data_pre:
-            print("Connector data successfully retrieved")
+        if connector_data_post or connector_data_pre:            
             number_of_targets = {}
             neurons_included = []
             
@@ -2026,6 +2039,9 @@ class RetrieveConnectors(Operator):
         return context.window_manager.invoke_props_dialog(self)
     
 def availableObjects(self, context):
+    """
+    Polls for available density objects for export to svg (skeletons as well as connectors)
+    """
     available_objects = []
     for obj in bpy.data.objects:
         name = obj.name
@@ -2046,7 +2062,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
                                       description = "Choose for which neurons to export connectors.")    
     random_colors = BoolProperty(name="Use Random Colors", default = False)
-    mesh_colors = BoolProperty(name="Use Mesh Colors", default = False,
+    use_mesh_colors = BoolProperty(name="Use Mesh Colors", default = False,
                                 description = "Neurons are exported with their Blender material diffuse color")
     #gray_colors = BoolProperty(name="Use Gray Colors", default = False)
     merge = BoolProperty(name="Merge into One", default = True,
@@ -2066,7 +2082,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                                                  default = 0.25,
                                                  description = "Maximum allowed distance between Connector and a Node")        
     export_inputs = BoolProperty(name="Export Inputs", default = True)
-    export_outputs = BoolProperty(name="Export Outputs", default = False)
+    export_outputs = BoolProperty(name="Export Outputs", default = True)
     scale_outputs = BoolProperty(name="Scale Presynapses", default = False,
                                  description = "Size of Presynapses based on number of postsynaptically connected neurons")    
     basic_radius = FloatProperty(name="Base Radius", default = 0.5) 
@@ -2146,7 +2162,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
             skids_to_export.append(active_skid)
             neurons_to_export.append(bpy.context.active_object)
 
-            if self.mesh_colors:
+            if self.use_mesh_colors:
                 self.mesh_color[active_skeleton] =  bpy.context.active_object.active_material.diffuse_color   
 
         elif self.which_neurons == 'Selected':
@@ -2155,7 +2171,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     skid = re.search('#(.*?) -',neuron.name).group(1)                    
                     skids_to_export.append(skid)
                     neurons_to_export.append(neuron)
-                    if self.mesh_colors:
+                    if self.use_mesh_colors:
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
         elif self.which_neurons == 'All':
@@ -2164,17 +2180,18 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     skid = re.search('#(.*?) -',neuron.name).group(1)                    
                     skids_to_export.append(skid)
                     neurons_to_export.append(neuron)
-                    if self.mesh_colors:
+                    if self.use_mesh_colors:
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
         print("Retrieving connector data for %i neurons" % len(skids_to_export)) 
         skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
+        cndata = self.get_all_connectors( skdata )
 
         if errors is not None:
             self.report({'ERROR'},errors)
 
         for skid in skids_to_export:
-            connector_data[skid] = self.get_connectors(skid,skdata[skid])
+            connector_data[skid] = self.get_connectors(skid,skdata[skid],cndata)
 
         if self.color_by_connections:
             #If outputs are exported then count only upstream connections (upstream sources of these outputs)
@@ -2186,62 +2203,54 @@ class ConnectorsToSVG(Operator, ExportHelper):
             neurons_svg_string = self.create_svg_for_neuron(neurons_to_export)                    
         else:
             neurons_svg_string = {}
+
+        #Sort skids_to_export by color
+        if self.use_mesh_colors:
+            color_strings = { skid:str(color) for (skid,color) in self.mesh_color.items() }
+            skids_to_export = list( sorted( self.mesh_color, key = color_strings.__getitem__  ) )             
     
-        self.export_to_svg(connector_data, neurons_svg_string) 
-
-        """
-        if bpy.context.active_object is None and self.all_neurons is False:
-            print ('No Object Active')       
-        elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name and self.all_neurons is False:
-            print ('Active Object not a Neuron')         
-        elif self.all_neurons is False:                       
-            active_skeleton = re.search('#(.*?) -',bpy.context.active_object.name).group(1)
-            connector_data[active_skeleton] = self.get_connectors(active_skeleton)
-            
-            if self.color_by_connections:
-                #If outputs are exported then count only upstream connections (upstream sources of these outputs)
-                #If inputs are exported then count only downstream connections (downstream targets of these inputs)
-                #-> just use them invertedly for use_inputs/outputs when calling get_connectivity
-                self.connections_for_color = self.get_connectivity([active_skeleton],self.export_outputs,self.export_inputs)  
-                
-            if self.mesh_colors:
-                self.mesh_color[active_skeleton] =  bpy.context.active_object.active_material.diffuse_color            
-
-            if self.export_neuron is True:        
-                neurons_svg_string = self.create_svg_for_neuron([bpy.context.active_object])                    
-            else:
-                neurons_svg_string = {}                
-            
-            self.export_to_svg(connector_data,neurons_svg_string)           
-        elif self.all_neurons is True:             
-            
-            for neuron in bpy.data.objects:
-                if neuron.name.startswith('#'):
-                    skid = re.search('#(.*?) -',neuron.name).group(1)                    
-                    connector_data[skid] = self.get_connectors(skid)   
-                    neurons_to_export.append(neuron)
-                    skids_to_export.append(skid)
-                    if self.mesh_colors:
-                        self.mesh_color[skid] =  neuron.active_material.diffuse_color
-                    
-            if self.color_by_connections:
-                #If outputs are exported then count only upstream connections (upstream sources of these outputs)
-                #If inputs are exported then count only downstream connections (downstream targets of these inputs)
-                #-> just use them invertedly for use_inputs/outputs when calling get_connectivity
-                self.connections_for_color = self.get_connectivity(skids_to_export,self.export_outputs,self.export_inputs)                
-            
-            if self.export_neuron is True:        
-                neurons_svg_string = self.create_svg_for_neuron(neurons_to_export)                    
-            else:
-                neurons_svg_string = {}
-        
-            self.export_to_svg(connector_data, neurons_svg_string) 
-        """
+        self.export_to_svg( skids_to_export, connector_data, neurons_svg_string)        
             
         return {'FINISHED'} 
+
+
+    def get_all_connectors(self, skdata):
+        connector_id_list = []
+        connector_postdata = {}
+
+        for skid in skdata:
+            for c in skdata[skid][1]:
+                if self.export_outputs is True and c[2] == 0:
+                    connector_id_list.append(c[1])
+                if self.export_inputs is True and c[2] == 1:
+                    connector_id_list.append(c[1])
+
+        for i, c in enumerate( list( set( connector_id_list ) ) ):           
+            connector_tag = 'connector_ids[%i]' % i
+            connector_postdata[connector_tag] = c
+
+        remote_connector_url = remote_instance.get_connectors_url( project_id )
+
+        temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )
+
+        skids_to_check = []
+        cn_data = {}
+        for c in temp_data:
+            cn_data[ c[0] ] = c[1]    
+
+            if c[1]['presynaptic_to'] != None:
+               skids_to_check.append(c[1]['presynaptic_to'])
+           
+            for target_skid in c[1]['postsynaptic_to']:
+                if target_skid != None:
+                    skids_to_check.append(target_skid)  
+
+        self.check_ancestry ( list ( set( skids_to_check + list(skdata) ) ) )
+
+        return cn_data 
       
         
-    def get_connectors(self, active_skeleton,node_data):
+    def get_connectors(self, active_skeleton, node_data, cndata):
         connector_ids = []
         
         if self.filter_connectors:
@@ -2261,6 +2270,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
         connector_post_coords = {}
         connector_pre_coords = {}
         nodes_list = {}
+
+        connector_data_post = []
+        connector_data_pre = []
             
         print('Extracting coordinates..')        
         
@@ -2285,46 +2297,21 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     
                 #Format: connector_pre_coord[target_treenode_id][upstream_connector_id] = coords of target treenode
                 connector_pre_coords[connection[0]][connection[1]] = {} 
-                connector_pre_coords[connection[0]][connection[1]]['coords'] = nodes_list[connection[0]] #these are treenode coords, NOT connector coords
-                
-                """
-                connector_pre_coords[connection[0]] = {}
-                connector_pre_coords[connection[0]]['connector_id'] = connection[1]
-                connector_pre_coords[connection[0]]['coords'] = nodes_list[connection[0]]                
-                """               
+                connector_pre_coords[connection[0]][connection[1]]['coords'] = nodes_list[connection[0]] #these are treenode coords, NOT connector coords                            
 
-                ### This format is necessary for CATMAID url postdata:
-                ### Dictonary: 'connector_ids[x]' : connectorid
-                connector_tag = 'connector_ids[%i]' % i
-                connector_postdata_presynapses[connector_tag] = connection[1]
+                connector_data_pre.append( [ connection[1] , cndata[ connection[1] ] ] )
 
             if connection[2] == 0 and self.export_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
-                connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)            
+                connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)
 
-                connector_ids.append(connection[1])
-                connector_tag = 'connector_ids[%i]' % i
-                connector_postdata_postsynapses[connector_tag] = connection[1]
+                connector_data_post.append( [ connection[1] , cndata[ connection[1] ] ] )
                 
             i += 1
         
         print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
         remote_connector_url = remote_instance.get_connectors_url( project_id )
-    
-        if self.export_outputs is True:        
-            print( "Retrieving Target Connectors..." )        
-            connector_data_post = remote_instance.fetch( remote_connector_url , connector_postdata_postsynapses )
-            #print(connector_data_post)
-        else:
-            connector_data_post = []
-
-        if self.export_inputs is True:    
-            print( "Retrieving Source Connectors..." )
-            connector_data_pre = remote_instance.fetch( remote_connector_url , connector_postdata_presynapses )
-            #print(connector_data_pre)
-        else:
-            connector_data_pre = []
 
         if connector_data_pre or connector_data_post:
             print("Connectors successfully retrieved")     
@@ -2541,7 +2528,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         return {'FINISHED'}
     
     
-    def export_to_svg(self, connector_data, neurons_svg_string):      
+    def export_to_svg(self, skids_to_export, connector_data, neurons_svg_string):      
         print('%i Neurons in Connector data found' % len(connector_data))
         
         svg_header =    '<svg xmlns="http://www.w3.org/2000/svg" version="1.1">\n'
@@ -2587,10 +2574,14 @@ class ConnectorsToSVG(Operator, ExportHelper):
         brain_shape_top_string = '<g id="brain shape top">\n <polyline points="28.3,-5.8 34.0,-7.1 38.0,-9.4 45.1,-15.5 50.8,-20.6 57.7,-25.4 59.6,-25.6 63.2,-22.8 67.7,-18.7 70.7,-17.2 74.6,-14.3 78.1,-12.8 84.3,-12.6 87.7,-15.5 91.8,-20.9 98.1,-32.4 99.9,-38.3 105.2,-48.9 106.1,-56.4 105.6,-70.1 103.2,-75.8 97.7,-82.0 92.5,-87.2 88.8,-89.1 82.6,-90.0 75.0,-89.9 67.4,-89.6 60.8,-85.6 55.3,-77.2 52.4,-70.2 51.9,-56.7 55.0,-47.0 55.9,-36.4 56.0,-32.1 54.3,-31.1 51.0,-33.4 50.7,-42.5 52.7,-48.6 49.9,-58.4 44.3,-70.8 37.4,-80.9 33.1,-84.0 24.7,-86.0 14.2,-83.9 8.3,-79.1 2.9,-68.3 1.3,-53.5 2.5,-46.9 3.0,-38.3 6.3,-28.2 10.9,-18.7 16.3,-9.7 22.2,-6.4 28.3,-5.8" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="88.8,-89.1 90.9,-97.7 92.9,-111.3 95.6,-125.6 96.7,-139.4 95.9,-152.0 92.8,-170.2 89.4,-191.0 87.2,-203.7 80.6,-216.6 73.4,-228.3 64.5,-239.9 56.4,-247.3 48.8,-246.9 39.0,-238.3 29.6,-226.9 24.7,-212.0 22.9,-201.2 23.1,-186.9 18.7,-168.3 14.1,-150.4 12.6,-138.0 13.7,-121.5 16.3,-105.1 18.3,-84.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         brain_shape_front_string = '<g id="brain shape front"> \n <polyline points="51.5,24.0 52.0,21.3 52.0,17.6 50.2,11.2 46.8,6.5 40.5,2.5 33.8,1.1 25.4,3.4 18.8,8.0 13.2,12.5 8.3,17.9 4.3,23.8 1.8,29.3 1.4,35.6 1.6,42.1 4.7,48.3 7.9,52.5 10.8,56.9 13.1,64.3 14.3,73.2 12.8,81.0 16.2,93.6 20.9,101.5 28.2,107.5 35.3,112.7 42.2,117.0 50.8,119.3 57.9,119.3 67.1,118.0 73.9,114.1 79.0,110.4 91.1,102.7 96.3,94.2 96.3,85.3 94.0,81.4 95.4,74.8 96.6,68.3 97.5,64.7 100.9,59.7 103.8,52.5 105.4,46.7 106.1,38.8 105.4,32.4 103.1,26.4 98.9,21.0 94.1,16.3 88.3,11.1 82.0,6.5 74.8,3.3 67.8,3.1 61.7,5.1 56.8,9.6 53.4,15.2 52.2,19.7 52.3,25.3 51.4,24.1 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="46.6,34.0 45.5,36.1 43.2,38.6 41.1,43.3 39.7,48.7 39.7,51.0 42.6,55.2 51.4,59.5 54.9,60.9 60.8,60.8 62.9,58.2 62.9,52.6 60.3,47.6 57.7,43.9 56.1,40.2 55.1,35.9 55.1,34.4 51.8,33.6 49.1,33.5 46.6,34.0 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'         
         brain_shape_lateral_string = '<g id="brain shape lateral"> \n <polyline points="247.2,91.6 246.8,94.6 246.3,95.5 245.0,96.7 239.8,99.0 225.8,103.4 210.9,107.5 200.8,109.1 186.0,109.9 166.0,110.7 150.8,111.3 135.8,112.8 120.9,114.2 107.3,114.9 98.6,115.7 88.7,117.9 81.3,119.1 66.2,119.2 58.3,118.7 51.6,118.5 46.0,116.4 40.7,114.4 36.6,112.0 34.2,109.6 30.7,104.8 27.3,100.3 25.3,98.2 22.2,91.9 21.1,86.8 19.6,80.6 17.4,73.9 15.2,68.9 11.2,61.8 11.0,52.3 9.1,49.9 7.4,46.4 6.6,42.6 6.3,35.7 7.0,27.1 7.4,24.5 10.2,18.7 15.8,13.2 22.3,8.5 26.2,7.1 32.6,7.0 36.1,6.2 41.2,3.9 47.2,1.8 54.8,1.7 64.5,3.2 73.4,5.3 81.1,11.2 86.7,16.4 89.0,21.1 90.2,33.2 89.3,42.8 86.6,48.7 82.1,53.9 78.8,57.2 77.9,59.2 91.4,61.6 98.5,62.2 116.6,62.4 131.7,61.0 146.1,59.8 161.1,60.1 176.0,61.3 190.8,63.3 206.2,66.0 219.5,70.6 224.5,72.8 239.5,82.1 245.5,86.0 246.9,87.9 247.2,91.6 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'          
+        brain_shape_dorsal_perspective_05_string = '<g id="brain shape dorsal perspective" transform="scale(0.21) translate(-511,-30)"> \n <polyline points="255,974 238,968 184,939 174,932 113,880 100,863 92,845 79,793 64,751 46,706 45,685 51,636 72,565 77,536 78,524 73,508 64,462 60,427 52,395 31,370 17,348 9,321 3,284 2,230 7,185 22,153 40,126 59,105 88,82 126,60 145,51 163,47 175,46 201,53 214,62 234,88 243,104 263,90 275,63 280,33 285,27 293,14 308,5 319,2 343,3 389,21 424,44 451,74 469,110 491,145 504,177 508,204 507,235 501,269 482,309 466,334 452,345 445,351 443,377 435,393 429,433 427,462 425,515 436,558 444,571 452,600 451,624 454,655 441,690 429,707 423,729 403,839 382,893 365,913 335,936 271,969 255,974" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="52,395 90,401 129,392 145,374 153,346" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="445,351 433,355 417,355 396,346 381,336 382,337" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round" /> \n <polygon points="257,349 242,348 230,332 216,313 208,300 215,283 228,261 245,234 260,201 265,168 262,143 266,141 270,164 283,192 288,208 303,242 312,265 318,276 305,303 290,323 281,332 268,343" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'
+        brain_shape_dorsal_perspective_09_string = '<g id="brain shape dorsal perspective" transform="scale(0.173) translate(-620,-112)"> \n <path d="M514 676l5 64 1 92 30 122 9 144 -40 122 -26 223 -29 121 -108 118 -28 20 -26 8 -29 -20 -68 -78 -31 -46 -43 -69 -21 -34 -17 -115 -16 -86 -23 -101 0 -104 33 -235 -4 -146c-3,-22 -5,-31 -7,-42 -1,-12 4,-18 -2,-27 -6,-10 -22,-17 -32,-27 -9,-9 -19,-16 -26,-30 -7,-15 -9,-38 -12,-54 -2,-17 -3,-28 -4,-45 0,-17 0,-34 1,-57 0,-23 2,-64 3,-81 1,-17 0,-14 3,-22 3,-8 3,-8 13,-27 9,-19 33,-67 43,-85 4,-7 28,-41 33,-46 9,-9 28,-24 38,-30 31,-20 63,1 99,17 18,7 23,15 29,19 6,4 2,5 6,6 5,2 13,4 21,2 8,-2 21,-8 27,-15 6,-7 3,-14 6,-23 3,-9 9,-22 13,-31 3,-9 5,-15 9,-24 3,-8 5,-19 10,-26 5,-6 13,-9 20,-13 8,-4 15,-7 23,-9 8,-3 16,-6 27,-6 11,0 21,1 35,8 15,8 37,25 49,35 12,11 16,17 24,29 8,13 15,27 24,47 9,20 25,49 32,71 8,23 9,48 13,64 3,16 6,21 9,31 3,10 7,19 8,31 1,12 -1,28 -1,40 -1,13 -1,22 -3,35 -2,13 -3,30 -7,45 -5,15 -8,22 -18,42 -9,20 -30,60 -40,75 -11,14 -15,0 -20,9 -5,9 -5,19 -7,38 -3,19 -8,50 -8,74l0 2z" \n style="fill:#D9DADA;stroke-width:0" /> \n <path d="M301 495c-9,-17 -19,-33 -28,-50 3,-2 6,-4 9,-6 4,-6 8,-11 12,-17 5,-10 9,-20 13,-30 5,-20 10,-40 15,-60 -2,-14 -4,-28 -6,-41 0,-4 1,-7 2,-11 -1,-10 -2,-21 -4,-31 -2,-3 -4,-7 -6,-10 3,-2 6,-3 8,-5 1,9 1,17 2,25 5,16 11,32 16,48 3,17 7,35 10,52 8,17 17,34 25,50 -9,21 -17,42 -26,63 -8,12 -16,24 -25,36 -5,-4 -11,-9 -17,-13z" \n style="fill:#FEFEFE;stroke-width:0"/> \n </g> \n'
         
         ring_gland_top = '<g id="ring gland top"> \n <polyline points="57.8,-43.9 59.9,-43.8 62.2,-43.3 64.4,-41.1 67.3,-37.7 70.8,-34.0 73.9,-30.7 75.1,-28.3 76.2,-24.8 76.0,-22.1 75.2,-19.7 73.0,-17.3 70.4,-16.1 66.5,-16.1 64.4,-15.2 61.8,-12.3 58.8,-9.5 55.7,-8.6 51.3,-8.1 47.6,-8.3 44.0,-8.7 41.4,-10.3 40.8,-12.6 42.5,-16.1 45.4,-20.7 47.9,-25.5 48.9,-28.9 50.1,-32.3 51.8,-33.0 51.5,-35.1 51.7,-37.9 52.4,-41.2 53.9,-42.8 55.8,-43.8 57.8,-43.9 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'          
         ring_gland_front = '<g id="ring gland front"> \n <polyline points="45.5,11.3 44.3,12.3 41.9,14.2 40.9,16.8 41.3,20.1 42.7,24.7 44.0,27.8 45.9,28.6 49.0,27.7 50.1,27.7 53.0,28.1 56.5,28.4 59.2,28.3 62.2,27.5 64.5,26.6 67.1,26.6 69.7,27.2 70.9,26.9 73.1,25.4 74.8,22.8 75.9,20.3 75.9,17.6 74.8,15.1 72.8,12.8 69.3,10.2 66.7,8.6 64.2,7.7 61.9,7.6 59.0,8.4 57.1,9.4 56.6,11.1 55.1,10.0 53.5,9.2 51.3,8.9 49.6,9.2 45.5,11.3 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         ring_gland_lateral = '<g id="ring gland lateral"> \n <polyline points="9.0,16.8 13.7,13.3 23.4,9.8 27.9,9.1 31.1,9.5 34.8,8.1 38.8,7.7 41.2,8.4 42.6,9.8 44.0,12.7 44.2,16.6 43.5,22.3 41.2,25.1 36.3,26.4 31.6,26.4 26.9,27.2 22.1,26.7 20.2,27.1 15.7,28.6 12.7,28.2 11.0,28.7 9.3,27.7 8.3,24.8 8.3,20.9 9.0,16.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
+        ring_gland_dorsal_perspective_05 = '<g id="ring gland perspective" transform="scale(1.5) translate(-51,-4)"> \n <polygon points="15,18 13,17 11,15 10,13 5,11 3,12 1,10 0,8 1,6 3,4 7,3 10,3 13,2 17,0 20,0 20,0 23,0 24,2 24,5 23,8 22,10 18,10 17,10 17,12 16,14 16,16 " style="fill:#D8D9D9;stroke-width:0;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'        
+        ring_gland_dorsal_perspective_09 = '<g id="ring gland perspective" transform="scale(0.094) translate(-818,-220)"> \n <polygon points="249,25 257,21 266,16 275,13 283,9 292,7 300,5 301,5 302,5 316,2 330,0 343,0 355,1 366,3 375,6 384,11 390,17 394,24 396,33 397,45 395,59 391,77 387,96 381,115 375,132 369,144 363,152 356,157 350,161 343,163 335,163 327,162 318,161 313,159 310,163 303,167 298,170 294,173 293,173 292,177 289,183 285,187 284,187 281,194 280,196 279,199 277,205 274,211 271,218 268,223 264,228 262,229 263,230 262,237 265,241 270,254 273,270 274,287 274,303 271,318 267,332 261,344 261,352 259,366 256,380 252,392 247,403 242,410 235,415 227,415 219,411 215,407 215,407 210,405 205,400 200,394 194,387 189,380 185,374 182,367 179,362 179,361 177,359 171,348 167,339 165,332 165,326 165,326 164,324 162,320 160,316 159,313 158,310 157,308 157,306 158,303 158,303 155,299 151,292 147,289 141,286 135,282 128,278 128,278 125,279 120,279 115,279 111,277 107,274 104,271 101,268 99,264 96,261 95,260 87,256 78,252 68,248 60,244 56,241 54,241 44,236 35,230 28,225 21,218 15,212 10,205 5,197 2,190 1,182 1,177 1,175 0,163 2,151 8,141 16,132 26,123 38,116 51,111 64,106 77,103 88,101 98,101 107,101 115,104 118,105 120,103 131,95 142,86 154,77 167,69 181,61 195,54 210,47 217,44 229,37 243,29 " style="fill:#9D9E9E;stroke-width:0"/> \n </g> \n'
         
         arrows_defs = '<defs> \n <marker id="markerArrow" markerWidth="13" markerHeight="13" refx="2" refy="6" orient="auto"> \n <path d="M2,2 L2,11 L10,6 L2,2" style="fill: #000000;" /> \n </marker> \n </defs>'
  
@@ -2788,7 +2779,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         print('Max connections for color_by_connection:', max_connection)
         
         ### Creating SVG starts here
-        for neuron in connector_data:
+        for neuron in skids_to_export:
             connectors_weight = connector_data[neuron][0]
             connectors_pre = connector_data[neuron][1]
             connectors_post = connector_data[neuron][2]
@@ -2804,7 +2795,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 if self.export_inputs is True:
                     inputs_color = colormap[0]
                     colormap.pop(0)
-            elif self.mesh_colors is True:
+            elif self.use_mesh_colors is True:
                 inputs_color = (int(self.mesh_color[neuron][0] * 255),
                                 int(self.mesh_color[neuron][1] * 255),
                                 int(self.mesh_color[neuron][2] * 255))
@@ -3186,7 +3177,25 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
                 if self.export_outputs is True:
                     line_to_write += '</g>' 
-                    f.write(line_to_write + '\n')    
+                    f.write(line_to_write + '\n')
+
+                ### Add perspective brain shape                    
+                if self.merge is False or first_neuron is True:
+                    if 'Perspective-Dorsal' in self.views_to_export and self.export_brain_outlines is True:                            
+                        if round(self.x_persp_offset,2) == 0.5:
+                            if self.export_brain_outlines is True:
+                                f.write('\n' + brain_shape_dorsal_perspective_05_string + '\n')
+                            
+                            if self.export_ring_gland is True:
+                                f.write('\n' + ring_gland_dorsal_perspective_05 + '\n')
+                        
+                        elif round(self.x_persp_offset,2) == 0.9:                                
+                            if self.export_brain_outlines is True:
+                                f.write('\n' + brain_shape_dorsal_perspective_09_string + '\n')
+                            
+                            if self.export_ring_gland is True:
+                                f.write('\n' + ring_gland_dorsal_perspective_09 + '\n')
+
                 
                 line_to_write = '</g>'
                 f.write(line_to_write + '\n \n \n')
@@ -3837,16 +3846,12 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 skids_to_check.append(neuron)
             elif neuron not in self.neuron_names:
                 print('ERROR: Invalid Neuron Name found: %s' % neuron )
-                self.report({'ERROR'},'Error(s) occurred: see console')
+                self.report({'ERROR'},'Error(s) occurred: see console')      
         
-        #print('Checking Skeleton IDs:')
-        #print(skids_to_check)
-        skids = []
-        names = []
-        new_names = get_neuronnames(skids_to_check)
-        
-        for entry in new_names:
-            self.neuron_names[int(entry)] = new_names[entry]   
+        if skids_to_check:
+            new_names = get_neuronnames(skids_to_check)        
+            for entry in new_names:
+                self.neuron_names[int(entry)] = new_names[entry]   
             
     def get_connectivity(self,neurons,use_upstream=True,use_downstream=True):
         """Counts connections of neurons to/from filter set by self.color_by_connections """
@@ -4979,7 +4984,7 @@ class ExportAllToSVG(Operator, ExportHelper):
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
                                       items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
                                       description = "Choose which neurons to export.")
-    merge = BoolProperty(name="Merge into One", default = False,
+    merge = BoolProperty(name="Merge into One", default = True,
                         description = "If exporting more than one neuron, render them all on top of each other, not in separate panels.")
     random_colors = BoolProperty(name="Use Random Colors", 
                                  default = False,
