@@ -19,6 +19,9 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.211 01/05/2015:
+    - fixed a bug that led to an error with retrieve_paired when 'paired with #' annotation had invalid skid
+
 ### V5.21 26/04/2015:
     - greatly improved speed when importing/exporting connectors by pooling requests to server
     - use mesh color will now also affect the order of export such that same colors are grouped
@@ -423,6 +426,12 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("select.by_annotation", text = 'By Annotation', icon = 'BORDER_RECT')
+
+        layout.label('Analyze:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("analyze.statistics", text = 'Get Statistics', icon = 'BORDER_RECT')
         
         
 class VersionManager(bpy.types.PropertyGroup):
@@ -955,7 +964,7 @@ def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
     skeletons = set()
 
     for node in node_list:                       
-        skeletons.add(node[7]) 
+        skeletons.add(str(node[7])) 
 
     print(len(skeletons),'found in volume')          
 
@@ -1362,7 +1371,12 @@ class RetrievePairs(Operator):
             print('Warning! Incorrect annotated skid(s) among pairs found!')
             self.report({'ERROR'},'Error(s) occurred: see console')
 
-        print("Collection skeleton data for:",paired)        
+            for skid in paired:
+                if skid not in neuron_names:
+                    print('Did not retrieve name for skid', skid)
+                    neuron_names[skid] = 'ERROR - SKID does not exists'
+
+        print("Collection skeleton data for:", paired)        
         start = time.clock()        
 
         skdata,errors = retrieveSkeletonData( paired , neuron_names , self.time_out)   
@@ -1441,6 +1455,9 @@ class RetrieveInVolume(Operator):
         skid_list = get_neurons_in_volume ( self.left, self.right, self.top, self.bot, self.z1, self.z2, remote_instance )
 
         neuron_names = get_neuronnames(skid_list)
+
+        print(skid_list)
+        print(neuron_names)
 
         print("Collection skeleton data for %i neurons" % len(skid_list))        
         start = time.clock()              
@@ -1997,7 +2014,7 @@ class RetrieveConnectors(Operator):
                 
                 for connector_id in connectors_to_delete:
                     if connectors_to_delete[connector_id] is True:
-                        connector_post_coords.pop(connector_id)
+                        connector_post_coords.pop(connector_id)                        
                 
                 #Filter Upstream Targets
                 connectors_to_delete = {}
@@ -2009,10 +2026,10 @@ class RetrieveConnectors(Operator):
                             neurons_included.append(neuron_names[str(connector[1]['presynaptic_to'])])
                 
                 for connector_id in connectors_to_delete:
-                    if connectors_to_delete[connector_id] is True:
-                        connector_post_coords.pop(connector_id)
+                    if connectors_to_delete[connector_id] is True:                        
+                        connector_pre_coords.pop(connector_id)                                                   
                         
-                print('Neurons remaining after filtering: ',set(neurons_included))
+                print('Neurons remaining after filtering: ',list(set(neurons_included)))
             
             if len(connector_post_coords) > 0:
                 ### Extract number of postsynaptic targets for connectors    
@@ -2523,9 +2540,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
             return((number_of_targets, connector_pre_coords, connector_post_coords, presynaptic_to))
            
         else:
-            print('No data retrieved')   
-                        
-        return {'FINISHED'}
+            print('No data retrieved')
+            return((0, [], [], []))
     
     
     def export_to_svg(self, skids_to_export, connector_data, neurons_svg_string):      
@@ -2780,6 +2796,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         
         ### Creating SVG starts here
         for neuron in skids_to_export:
+            print('Creating neuron', neuron, connector_data[neuron])
             connectors_weight = connector_data[neuron][0]
             connectors_pre = connector_data[neuron][1]
             connectors_post = connector_data[neuron][2]
@@ -8379,7 +8396,10 @@ class SelectAnnotation(Operator):
     select_synapses = BoolProperty( name="Select synapses", 
                                     default = True,
                                     description ='If unchecked, no synapses will be selected.')
-    
+    allow_partial = BoolProperty( name="Allow partial match", 
+                                    default = True,
+                                    description ='Allow partial match of annotation.' )
+
 
     def execute (self, context):        
         #First generate list of skids for which to retrieve annotations
@@ -8403,18 +8423,34 @@ class SelectAnnotation(Operator):
         include_annotations = self.annotation.split(',')
 
         included = []       
+        include_skids = []
+
+        for skid in skids_to_retrieve:
+            if self.allow_partial is True:
+                for ia in include_annotations:
+                    try:
+                        for a in annotations[skid]:
+                            if ia in a:
+                                include_skids.append(skid)
+                    except:
+                        pass
+            else:
+                try:
+                    for a in annotations[skid]:
+                        if a in include_annotations:
+                            include_skids.append(skid)
+                except:
+                    pass
 
         #Now iterate over all objects and select those that have a matching annotation
         for object in bpy.data.objects:
-
             if object.name.startswith('#') and self.select_neurites is True:                
                 try:
-                    skid = re.search('#(.*?) -',object.name).group(1)        
+                    skid = re.search('#(.*?) -',object.name).group(1)
                     
-                    for tag in annotations[skid]:
-                        if tag in include_annotations:
-                            object.select = True
-                            included.append(object)                            
+                    if skid in include_skids:
+                        object.select = True
+                        included.append(object)
                 except:
                     pass
 
@@ -8422,9 +8458,9 @@ class SelectAnnotation(Operator):
                 try:
                     skid = re.search('Soma of (.*?) -',object.name).group(1)
                     
-                    for tag in annotations[skid]:
-                        if tag in include_annotations:
-                            object.select = True                            
+                    if skid in include_skids:
+                        object.select = True                                                  
+                        included.append(object)
                 except:
                     pass
 
@@ -8432,9 +8468,9 @@ class SelectAnnotation(Operator):
                 try:
                     skid = re.search('Inputs of (.*?) -',object.name).group(1)
                     
-                    for tag in annotations[skid]:
-                        if tag in include_annotations:
-                            object.select = True                            
+                    if skid in include_skids:
+                        object.select = True   
+                        included.append(object)                         
                 except:
                     pass
 
@@ -8442,9 +8478,9 @@ class SelectAnnotation(Operator):
                 try:
                     skid = re.search('Outputs of (.*?) -',object.name).group(1)
                     
-                    for tag in annotations[skid]:
-                        if tag in include_annotations:
-                            object.select = True                            
+                    if skid in include_skids:
+                        object.select = True
+                        included.append(object)
                 except:
                     pass
 
@@ -8452,6 +8488,110 @@ class SelectAnnotation(Operator):
         self.report({'INFO'},'%i objects selected' % len(included))
         
         return{'FINISHED'}
+
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
+
+class SelectAnnotation(Operator):
+    """Get statistics of loaded neurons"""  
+    bl_idname = "analyze.statistics"  
+    bl_label = "Select neurons by annotation"
+
+    which_neurons = EnumProperty(   name = "Which Neurons?", 
+                                      items = [('Selected','Selected','Selected'),('All','All','All'),('Active','Active','Active')],
+                                      default = 'All',
+                                      description = "Which neurons to analyze")   
+    
+
+    def execute (self, context):        
+
+        self.addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences
+
+        #First generate list of skids for which to retrieve annotations
+        #and also deselect all objects while we are at it
+        objects_to_analyze =[]
+        skids_to_analyze = []
+        stats = {}
+        if self.which_neurons == 'All':
+            for object in bpy.data.objects:
+                if object.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',object.name).group(1)                    
+                        skids_to_analyze.append(skid)
+                        objects_to_analyze.append(object)
+                    except:
+                        pass
+        elif self.which_neurons == 'Selected':
+            for object in bpy.context.selected_objects:
+                if object.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',object.name).group(1)                    
+                        skids_to_analyze.append(skid)
+                        objects_to_analyze.append(object)
+                    except:
+                        pass
+        elif self.which_neurons == 'Active':
+            try:
+                skid = re.search('#(.*?) -',bpy.context.active_object.name).group(1)                    
+                skids_to_analyze.append(skid)
+                objects_to_analyze.append(object)
+            except:
+                self.report({'ERROR'},'ERROR: active object not a neuron!')
+                return{'FINISHED'}
+                                
+        
+        for obj in objects_to_analyze:
+            stats[obj.name] = {}
+            stats[obj.name]['cable_length [nm]'] = self.calc_wire(obj)
+            stats[obj.name]['cable_length(smoothed) [nm]'] = self.calc_wire(obj,3)
+
+
+        self.report({'INFO'},'Look in console for stats')
+        
+        for n in stats:
+            print(n,':')
+            for s in stats[n]:
+                print(s,stats[n][s])                
+        
+        print('Total cable length:',sum( [ stats[n]['cable_length [nm]'] for n in stats ] ) )
+
+        return{'FINISHED'}
+
+    def calc_wire(self, obj, every_nth = 1):
+        total_length = 0
+
+        if obj.type != 'CURVE':
+            return 'ERROR: not a curve'
+
+        for sp in obj.data.splines:
+            for i in range(0,len(sp.points),every_nth):
+                #Skip last node
+                if i >= (len(sp.points)-every_nth):
+                    continue
+
+                this_p = sp.points[i]
+
+                next_p = sp.points[i+every_nth]
+
+                total_length += self.calc_distance(this_p,next_p)
+
+        return round(total_length * self.addon_prefs.conversion_factor)
+
+    def calc_distance(self, vecA ,vecB):
+        distX = (vecA.co[0] - vecB.co[0])**2  
+        distY = (vecA.co[1] - vecB.co[1])**2
+        distZ = (vecA.co[2] - vecB.co[2])**2        
+        dist = math.sqrt(distX+distY+distZ)
+
+        return(dist)
 
 
     def invoke(self, context, event):        
