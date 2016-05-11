@@ -6,7 +6,7 @@ Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATM
 *I encourage you to open an issue or contact me directly if you run into problems or have a feature request!*
 
 ## Installation:
-First download CATMAIDImport.py, then:
+First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/CATMAIDImport.py), then:
 
 ######Option A:
 2. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
