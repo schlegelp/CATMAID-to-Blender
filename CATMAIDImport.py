@@ -19,45 +19,56 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
-### V5.211 01/05/2015:
+### V5.31 16/06/2016:
+    - fixed bug with grouping in connector to svg export
+    - also, added error handling in case neurons had no connectors to export
+
+### V5.3 10/06/2016:
+    - added on-screen messages and area header messages for reporting progress: 
+        - on-screen msg has hick-ups if used at high frequency -> use area header
+        - also refresh does not seem to work when scene is more crowded 
+    - made similarity calculations threaded -> major speed-up for most but not for morphology
+
+
+### V5.211 01/05/2016:
     - fixed a bug that led to an error with retrieve_paired when 'paired with #' annotation had invalid skid
 
-### V5.21 26/04/2015:
+### V5.21 26/04/2016:
     - greatly improved speed when importing/exporting connectors by pooling requests to server
     - use mesh color will now also affect the order of export such that same colors are grouped
     - added perspective brain outline to connector to svg export
     - fixed a bug when importing connector spheres
     - fixed a bug that ignored project_id when requesting skeleton data
 
-### V5.2 19/04/2015:
+### V5.2 19/04/2016:
     - combined all threaded skeleton data retrieval into one function and added a timeout variable
 
-### V5.1 13/04/2015:
+### V5.1 13/04/2016:
     - added coloring by similarity in connectivity and paired connectivity    
     - added relative synapse count to color by synapse count
     - improved tooltips
     - bugfixes
 
-### V5 12/04/2015:
+### V5 12/04/2016:
     - separated requests to server into multiple threads (not for all operators): results in 6X increased import speed!
     - other improvements
     - bugfixes 
 
-### V4.33 02/04/2015:
+### V4.33 02/04/2016:
     - made sure Addon doesnt crash if numpy is not installed
       -> will instead throw error when not found 
 
-### V4.32 01/04/2015:
+### V4.32 01/04/2016:
     - added option to unify materials
     - changed 'Retrieve Weighted Connectors' to also retrieve non-weighted connectors
     - fixed bug that caused layer to be ignored
     - cleaned up connector retrieval
 
-### V4.31 25/03/2015:
+### V4.31 25/03/2016:
     - added select by annotation feature
     - fixed bug in dendrogram export
 
-### V4.3 23/03/2015:
+### V4.3 23/03/2016:
     - changed addon name to CATMAIDImport - needs to be the same as bl_label of Addon preference class
     - added Addon Settings for credentials and server url
     - added self.report() to all error messages -> will show error message at cursor loc
@@ -67,10 +78,10 @@
     - added 'Active/Selected/All neurons' option to remaining functions
     - optimized function icons
 
-### V4.21 15/03/2015:
+### V4.21 15/03/2016:
     - added option to export dendrogram svg of similarity clustering
 
-### V4.2 14/03/2015:
+### V4.2 14/03/2016:
     - added option to export barplot to SVG export- this will export distribution of pre-, postsynaptic sites or node count along vertical 
       and horizontal axis
     - various bug fixes
@@ -257,7 +268,7 @@
 
 """
 
-import bpy
+import bpy, blf
 import os
 import re
 import random
@@ -334,6 +345,17 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("check.version", text = "Check Version", icon ='VISIBLE_IPO_ON')
+
+        layout.label('Calculate Similarity:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'  
+        row.operator_context = 'INVOKE_DEFAULT'      
+        row.operator("calc.similarity_modal", text = "Start Calculation", icon ='PARTICLE_PATH')
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("calc.similarity_modal_settings", text = "Settings", icon ='MODIFIER')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
                
         layout.label('Materials:')        
 
@@ -341,10 +363,12 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("random.all_materials", text = "Randomize Color", icon ='COLOR')
 
+        """
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_similarity", text = "By Similarity", icon ='PARTICLE_PATH')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
+        """
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -1107,7 +1131,10 @@ class UpdateNeurons(Operator):
         print('Finished Import in', time.clock()-start, 's') 
         if errors is None:
             msg = 'Success! %i neurons imported' % len(skdata)
-            self.report({'INFO'}, msg)     
+            self.report({'INFO'}, msg)   
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
         else:
             self.report({'ERROR'}, errors)    
         return{'FINISHED'} 
@@ -1199,6 +1226,9 @@ class RetrieveNeuron(Operator):
         if errors is None:
             msg = 'Success! %i neurons imported' % len(skdata)
             self.report({'INFO'}, msg)
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()
         else:
             self.report({'ERROR'}, errors)
 
@@ -1393,6 +1423,9 @@ class RetrievePairs(Operator):
         if errors is None:
             msg = 'Success! %i neurons imported' % len(skdata)
             self.report({'INFO'}, msg)
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()
         else:
             self.report({'ERROR'}, errors)
         
@@ -1471,7 +1504,10 @@ class RetrieveInVolume(Operator):
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
             msg = 'Success! %i neurons imported' % len(skdata)
-            self.report({'INFO'}, msg)    
+            self.report({'INFO'}, msg)  
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
         else:
             self.report({'ERROR'}, errors)
         
@@ -1525,6 +1561,11 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
     skdata = {}
     errors = None
 
+    ahd.reinitalize()
+    
+    osd.show("Retrieving skeleton data...") 
+    bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=5)     
+
     print('Creating threads to retrieve skeleton data:')
     for i,skid in enumerate(skid_list): 
         if neuron_names:
@@ -1547,10 +1588,12 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
                 continue
             if not threads[skid].is_alive():
                 skdata[skid] = threads[skid].join()
-                threads_closed.append(skid)                
+                threads_closed.append(skid)
         time.sleep(1)
         cur_time = time.time()
-        print('\r Closing Threads: '+ str( len( threads_closed ) ) + ' - ' + str(round(cur_time-start)) + ' s' ,end='')
+        print('\r Closing Threads: '+ str( len( threads_closed ) ) + ' - ' + str(round(cur_time-start)) + ' s' ,end='')     
+
+        ahd.show("Retrieving skeleton data [%i of %i]" % (len( threads_closed ), len(skid_list) ))
 
     if cur_time > (start + time_out):
         errors = 'Timeout while joining threads. Retrieved only %i of %i skeletons' % (len(skdata),len(threads))
@@ -1559,7 +1602,9 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
             if skid not in threads_closed:
                 print('Did not close thread for skid',skid)  
 
-    return skdata, errors
+    osd.show("Skeletons retrieved.")    
+    ahd.clear()
+    return skdata, errors    
 
 class retrieveUrlThreaded(threading.Thread):
     def __init__(self,url,post_data=None):
@@ -1644,6 +1689,8 @@ class RetrievebyAnnotation(Operator):
     def execute(self, context):  
         global remote_instance        
         ### Get annotation ID of self.annotation
+        osd.show("Looking for Annotation...")
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
         annotation_id = self.retrieve_annotation_list()
 
         self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor       
@@ -1654,6 +1701,8 @@ class RetrievebyAnnotation(Operator):
         else:
             print('Annotation not found in List! Import stopped!')
             self.report({'ERROR'},'Annotation not found!')
+            osd.show("Error: Annotation not found!")
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
         
         return{'FINISHED'}
     
@@ -1676,7 +1725,7 @@ class RetrievebyAnnotation(Operator):
         return annotation_id            
 
     
-    def retrieve_annotated(self, annotation, annotation_id):
+    def retrieve_annotated(self, annotation, annotation_id):        
         print('Looking for Annotation | %s | (id: %s)' % (annotation,annotation_id))
         #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
         annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
@@ -1691,6 +1740,8 @@ class RetrievebyAnnotation(Operator):
         neuron_names = get_neuronnames(annotated_skids)
 
         print("Collection skeleton data for:",annotated_skids)
+        osd.show("Collection skeleton data...")
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
         start = time.clock()
 
         skdata, errors = retrieveSkeletonData(annotated_skids,neuron_names, self.time_out)   
@@ -1703,9 +1754,11 @@ class RetrievebyAnnotation(Operator):
         if errors is None:
             msg = 'Success! %i neurons imported' % len(skdata)
             self.report({'INFO'}, msg)
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()
         else:
-            self.report({'ERROR'}, errors)
-        
+            self.report({'ERROR'}, errors)        
 
         return{'FINISHED'}
         
@@ -1913,6 +1966,9 @@ class RetrieveConnectors(Operator):
 
         if errors is None:
             self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()
         else:
             self.report({'ERROR'}, errors)                
             
@@ -2204,6 +2260,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
         skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
         cndata = self.get_all_connectors( skdata )
 
+        if cndata is None:
+            return {'CANCELLED'}
+
         if errors is not None:
             self.report({'ERROR'},errors)
 
@@ -2227,6 +2286,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
             skids_to_export = list( sorted( self.mesh_color, key = color_strings.__getitem__  ) )             
     
         self.export_to_svg( skids_to_export, connector_data, neurons_svg_string)        
+
+        osd.show("Done.")
+        osd_timed = ClearOSDAfter(3)
+        osd_timed.start()
             
         return {'FINISHED'} 
 
@@ -2242,6 +2305,11 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 if self.export_inputs is True and c[2] == 1:
                     connector_id_list.append(c[1])
 
+        if not connector_id_list:
+            print('ERROR: no connectors found!')
+            self.report({'ERROR'},'Export aborted: No connectors found.')
+            return None
+
         for i, c in enumerate( list( set( connector_id_list ) ) ):           
             connector_tag = 'connector_ids[%i]' % i
             connector_postdata[connector_tag] = c
@@ -2252,8 +2320,11 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
         skids_to_check = []
         cn_data = {}
+        print('TEMP DATA:',temp_data)
         for c in temp_data:
-            cn_data[ c[0] ] = c[1]    
+            cn_data[ c[0] ] = c[1] 
+
+            #print('C:',c)   
 
             if c[1]['presynaptic_to'] != None:
                skids_to_check.append(c[1]['presynaptic_to'])
@@ -3362,7 +3433,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                f.write('\n <g id="density info"> \n <text x="15" y = "150" font-size="6">\n Density data - total nodes: ' + str(len(density_data)) + ' max density: ' + str(max_density) + '/' + str(round(self.proximity_radius_for_density,2)) + ' radius \n </text> \n </g> \n')
 
             ### Close remaining groups (3x)
-            line_to_write = '</g> \n </g> \n \n </g> \n \n \n' 
+            line_to_write = '</g> \n </g> \n \n \n'
             f.write(line_to_write) 
             offsetX += offsetIncrease
             ### Set first_neuron to false after first run (to prevent creation of a second brain's outline)
@@ -3814,6 +3885,9 @@ class ConnectorsToSVG(Operator, ExportHelper):
             f.write(line_to_write + '\n')
             line_to_write = '</g> ' 
             f.write(line_to_write + '\n')
+
+        if self.color_by_input is True or self.color_by_strength is True:
+            f.write('</g> \n')
             
         if self.color_by_strength is True and self.merge is True:
             print('ERROR: Cannot create scale for synaptic strength if merged: heterogenous data. Do not merge data.')
@@ -4150,6 +4224,8 @@ class RetrievePartners(Operator):
     
     def get_partners(self, skids):        
         print( "Retrieving Partners..." )
+        osd.show("Looking for partners...")
+        osd.update()
         connectivity_data = retrieve_connectivity (skids, remote_instance)
 
         if connectivity_data:
@@ -4244,6 +4320,10 @@ class RetrievePartners(Operator):
             self.report({'INFO'}, 'SUCCESS! %i partners imported' % len(skdata))
         else:
             self.report({'ERROR'}, errors)
+
+        osd.show("Done.")
+        osd_timed = ClearOSDAfter(3)
+        osd_timed.start()
 
 
             
@@ -4953,10 +5033,15 @@ class ConnectToCATMAID(Operator):
             response = remote_instance.fetch( remote_instance.get_user_list() )
             connected = True    
             self.report({'INFO'},'Connection successful')
-            print('Test call successful')
+            print('Test call successful')            
         except:
             self.report({'ERROR'},'Connection failed: see console')
             print('ERROR: Test call to server failed. Credentials incorrect?')
+
+        osd.show("Connection successful")
+        osd_timed = ClearOSDAfter(5)
+        osd_timed.start()
+        
         #Set standard project ID
         project_id = self.local_project_id
         
@@ -5973,6 +6058,10 @@ class ExportAllToSVG(Operator, ExportHelper):
         f.close()        
         print('Export finished')
         self.report({'INFO'},'Export finished. See console for details')
+
+        osd.show("Done.")
+        osd_timed = ClearOSDAfter(3)
+        osd_timed.start()
         
         #Write back line_width in case it has been changed due to bevel_depth
         if self.use_bevel is True:
@@ -7315,7 +7404,1294 @@ def availableOptions(self, context):
         available_options.append(('Paired-Connectivity','Paired-Connectivity','Paired-Connectivity'))
     else:
         available_options.append(('Connect For More Options','Connect For More Options','Connect For More Options'))
-    return available_options            
+    return available_options  
+
+class CalculateSimilarityModalHelper(Operator):
+    """Set values for calculating similarity"""  
+    bl_idname = "calc.similarity_modal_settings"  
+    bl_label = "Calculate similarity" 
+    bl_options = {'UNDO'}
+
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('All','All','All'),('Selected','Selected','Selected')],
+                                      description = "Choose which neurons to color by similarity.",
+                                      default = 'All')
+    compare = EnumProperty( name='Compare',
+                            items=availableOptions,
+                            description = 'Choose the method for comparing neurons.'
+                            )
+    method = EnumProperty( name='Cluster Method (Distance)',
+                            items=[('avg','avg','avg'),('min','min','min'),('max','max','max')],
+                            description = "Define if clusters are merged based on average, minimal or maximal distance between its members."
+                            )
+    cluster_at = FloatProperty (
+                                name='Cluster at similarity of:',
+                                min = 0,
+                                max = 1,
+                                default = 0.2,
+                                description = 'Sets similarity threshold for picking clusters that will have the same color. 1 = perfect match; 0 = not similar at all.'
+                                )
+    sigma   =    IntProperty (
+                                name='Sigma',
+                                min = 1,
+                                default = 2000,
+                                description = 'Sigma defines the distance between nodes or synapses that is considered close. In CATMAID units!'
+                                )
+    omega   =    IntProperty (
+                                name='Omega',
+                                min = 1,
+                                default = 2000,
+                                description = 'For synapse comparison only. Omega defines the radius in which adjacent synapses are counted. In CATMAID units!'
+                                )
+    use_saved = BoolProperty (
+                                name='Try using saved data',
+                                default = True,
+                                description = 'Use previously generated matching scores from this session. Check if e.g. you just want to change clustering threshold. Uncheck to compute from scratch!'
+                                )
+    save_dendrogram = BoolProperty (
+                                name='Save Dendrogram',
+                                default = True,
+                                description = 'Will save dendrogram of similarity to dendrogram.svg'
+                                )
+    path_dendrogram = StringProperty (
+                                name='Save to',
+                                default = '',
+                                description = 'Set file for saving dendrogram as svg.'
+                                )
+
+    use_inputs = BoolProperty (
+                                name='Use inputs',
+                                default = True,
+                                description = 'Use inputs for calculation of connectivity matching/pairing'
+                                )
+    use_outputs = BoolProperty (
+                                name='Use outputs',
+                                default = True,
+                                description = 'Use outputs for calculation of connectivity matching/pairing'
+                                )
+    calc_thresh = IntProperty (
+                                name='Calculation Threshold',
+                                default = 0,
+                                min=0,
+                                max=100,
+                                subtype='PERCENTAGE',
+                                description = 'Ignore neurons that have less than [%] usable synapses.'
+                                )
+   
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.label(text="Method:") 
+        box = layout.box()
+        row = box.row(align=False)        
+        row.prop(self, "compare")
+
+        layout.label(text="General:") 
+        box = layout.box()
+        row = box.row(align=False)
+        row.prop(self, "which_neurons")        
+        row = box.row(align=False)        
+        row.prop(self, "cluster_at")
+        row = box.row(align=False)
+        col = row.column()
+        col.label(text='Cluster Method (distance)')
+        col = row.column()
+        col.prop(self, "method", text="")
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "use_saved")
+        col = row.column()
+        col.prop(self, "save_dendrogram")
+        row = box.row(align=False)
+        if getattr(self,'path_dendrogram') == '':
+            try:
+                if os.path.dirname ( bpy.data.filepath ) != '':
+                    self.path_dendrogram = os.path.dirname( bpy.data.filepath ) 
+                else:
+                    self.path_dendrogram = 'Enter valid path'
+                    row.alert = True
+            except:
+                self.path_dendrogram = 'Enter valid path'
+                row.alert = True
+        row.prop(self, "path_dendrogram")
+
+        layout.label(text="For Morphology and Synapse Distribution only") 
+        box = layout.box()
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "sigma")        
+        col = row.column()
+        col.prop(self, "omega")
+
+        layout.label(text="For Connectivity and Paired-Connectivity only") 
+        box = layout.box()
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "use_inputs")
+        col = row.column()
+        col.prop(self, "use_outputs") 
+        row = box.row(align=False)
+        row.prop(self, "calc_thresh")       
+        
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute (self, context):
+        global similarity_scores_options
+
+        similarity_scores_options = { 'which_neurons' : self.which_neurons,
+                                    'compare' : self.compare,
+                                    'method' : self.method,
+                                    'cluster_at' : self.cluster_at ,
+                                    'sigma' : self.sigma,
+                                    'omega' : self.omega ,
+                                    'use_saved' : self.use_saved ,
+                                    'save_dendrogram': self.save_dendrogram ,
+                                    'path_dendrogram': self.path_dendrogram,
+                                    'use_inputs'  : self.use_inputs ,
+                                    'use_outputs': self.use_outputs ,
+                                    'calc_thresh' :self.calc_thresh
+                                    }
+
+        return{'FINISHED'}
+
+class CalcScoreThreaded(threading.Thread):
+    def __init__(self,this_neuron,neurons,compare,neuron_data,neuron_parent_vectors,use_inputs,use_outputs,connectivity,partner_names,list_of_pairs,to_exclude,number_of_partners,conversion_factor,sigma,omega):
+        self.this_neuron = this_neuron
+        self.neurons = neurons
+        self.compare = compare
+        self.neuron_data = neuron_data
+        self.neuron_parent_vectors = neuron_parent_vectors
+        self.use_inputs = use_inputs
+        self.use_outputs = use_outputs
+        self.connectivity = connectivity
+        self.partner_names = partner_names
+        self.list_of_pairs = list_of_pairs
+        self.to_exclude = to_exclude
+        self.number_of_partners = number_of_partners  
+        self.conversion_factor = conversion_factor
+        self.sigma = sigma
+        self.omega = omega
+
+        threading.Thread.__init__(self)
+            
+
+    def run(self):
+        """
+        Retrieve data from single url
+        """  
+        #print(self.skids)        
+        self.calc_score(self.this_neuron)
+                
+        return 
+
+    def join(self):
+        try:
+            threading.Thread.join(self)
+            return
+        except:
+            print('!ERROR joining thread for',self.url)
+            return None
+
+    def calc_score (self, neuronA):        
+        #self.report ( {'INFO'} , 'Comparing neurons. Please wait...' )
+        #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=5)
+        #self.report ( {'INFO'} , 'Processing neurons [%i of %i]' % ( i+1 , len ( neurons ) ) )
+        #print('Resolution:', self.check_resolution(neuronA))  
+        for neuronB in self.neurons:
+            tag = str(neuronA['skid'])+'-'+str(neuronB['skid'])
+
+            if tag in matching_scores[self.compare]:
+                #print('Skipping:',tag,self.compare)
+                continue
+
+            if self.compare == 'Morphology' and tag not in matching_scores[self.compare]:
+                matching_scores[self.compare][tag] = round(     self.calc_morphology_matching_score(
+                                                                                                    self.neuron_data[neuronA['skid']],
+                                                                                                    self.neuron_parent_vectors[neuronA['skid']],
+                                                                                                    self.neuron_data[neuronB['skid']],
+                                                                                                    self.neuron_parent_vectors[neuronB['skid']]                                                                                                        
+                                                                                                   )
+                                                                                            ,5)
+            elif self.compare == 'Synapses' and tag not in matching_scores[self.compare]:
+                matching_scores[self.compare][tag] = round(     self.calc_synapse_matching_score(
+                                                                                                    synapse_data[neuronA['skid']],
+                                                                                                    synapse_data[neuronB['skid']]
+                                                                                                  )
+                                                                                            ,5)                
+            elif self.compare == 'Connectivity' and tag not in matching_scores[self.compare]:
+                if self.use_inputs:
+                    incoming_score = self.calc_connectivity_matching_score( 
+                                                                        neuronA['skid'],
+                                                                        neuronB['skid'],
+                                                                        self.connectivity['incoming'],
+                                                                        self.partner_names,
+                                                                        threshold = 1
+                                                                        )
+                if self.use_outputs:
+                    outgoing_score = self.calc_connectivity_matching_score(
+                                                                        neuronA['skid'],
+                                                                        neuronB['skid'],
+                                                                        self.connectivity['outgoing'],
+                                                                        self.partner_names,
+                                                                        threshold = 1
+                                                                        )                    
+
+            elif self.compare == 'Paired-Connectivity' and tag not in matching_scores[self.compare]:
+                if self.use_inputs:
+                    incoming_score = self.calc_pairing_matching_score(  
+                                                                        neuronA['skid'],
+                                                                        neuronB['skid'],
+                                                                        self.connectivity['incoming'],
+                                                                        self.partner_names,
+                                                                        self.list_of_pairs
+                                                                        )
+                if self.use_outputs:
+                    outgoing_score = self.calc_pairing_matching_score(
+                                                                        neuronA['skid'],
+                                                                        neuronB['skid'],
+                                                                        self.connectivity['outgoing'],
+                                                                        self.partner_names,
+                                                                        self.list_of_pairs
+                                                                        )
+
+            if self.compare == 'Connectivity' or self.compare == 'Paired-Connectivity' and tag not in matching_scores[self.compare]:
+                if neuronA in self.to_exclude or neuronB in self.to_exclude:                        
+                    matching_scores[self.compare][tag] = 0                        
+
+                elif self.use_inputs is True and self.use_outputs is True:
+                    #Calculated combined score
+                    #Attention! Averaging over incoming and outgoing pairing scores will give weird results with - for example -  sensory/motor neurons
+                    #that have predominantly either only up- or downstream partners!
+                    #To compensate, ratio of upstream to downstream partners (after applying filters and removing all unpaired!) is considered!
+                    #Ratio is applied to neuronA of A-B comparison -> will of course be reversed at B-A comparison
+                    try:
+                        r_inputs = self.number_of_partners[neuronA['skid']]['incoming']/(self.number_of_partners[neuronA['skid']]['incoming']+self.number_of_partners[neuronA['skid']]['outgoing'])
+                        r_outputs = 1 - r_inputs
+                    except:
+                        print('Error calculating input/output ratio for' , neuronA , '- assuming 50/50 (probably division by 0 error)')
+                        r_inputs = 0.5
+                        r_outputs = 0.5
+
+                    avg_matching_score = incoming_score * r_inputs + outgoing_score * r_outputs
+
+                    #print(neuronA,neuronB,incoming_score,outgoing_score,avg_matching_score)
+                                                                                                                                  
+                    matching_scores[self.compare][tag] = round( avg_matching_score , 5 )
+                elif self.use_inputs is True:
+                    matching_scores[self.compare][tag] = round( incoming_score , 5 )
+                elif self.use_outputs is True:
+                    matching_scores[self.compare][tag] = round( outgoing_score , 5 )
+
+    def calc_synapse_matching_score(self,synapsesA,synapsesB):
+        all_values = []
+        coordsA = {}
+        coordsB = {}
+
+        #Create numpy arrays for pre- and postsynaptic connectors separately,
+        #to allow comparison of only pre- with pre- and post- with postsynaptic sites
+        coordsA['presynapses'] = np.array([e[3:6] for e in synapsesA if e[2] == 0])
+        coordsA['postsynapses'] = np.array([e[3:6] for e in synapsesA if e[2] == 1])        
+
+        coordsB['presynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 0])
+        coordsB['postsynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 1])
+
+        for direction in ['presynapses','postsynapses']:
+            for synA in coordsA[direction]:
+                try:
+                    #Generate distance Matrix of point a and all points in nB
+                    d = np.sum((coordsB[direction]-synA)**2,axis=1)
+
+                    #Calculate final distance by taking the sqrt!
+                    min_dist = math.sqrt(d[d.argmin()])
+                    closest_syn = coordsB[direction][d.argmin()]                    
+
+                    #Distances of synA to all synapses of the same neuron
+                    dA = np.sum((coordsA[direction]-synA)**2,axis=1)
+                    around_synA = len([e for e in dA if math.sqrt(e) < self.omega])
+
+                    #Distances of closest synapses in B to all synapses of the same neuron
+                    dB = np.sum((coordsB[direction]-closest_syn)**2,axis=1)
+                    around_synB = len([e for e in dB if math.sqrt(e) < self.omega])
+
+                    this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * self.sigma**2))
+
+                except:
+                    #will fail if no pre-/postsynapses in coordsB
+                    this_synapse_value = 0
+
+                all_values.append(this_synapse_value) 
+
+        try:
+            return (sum(all_values)/len(all_values))    
+        except:
+            #When len(all_values) = 0
+            return 0
+
+
+    def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB):
+        #nodesData = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
+
+        #Sigma defines how close two points have to be to be considered similar (in nanometers)
+        #Kohl et al. -> 3000nm (light microscopy + registration)    
+
+        all_values = []
+
+        #Sigma is defined as CATMAID units - have to convert to Blender units
+        blender_sigma = self.sigma / self.conversion_factor
+        
+
+        nA = np.array(nodeDataA)     
+        nB = np.array(nodeDataB)
+
+        for i,a in enumerate(nA):
+            #Generate distance Matrix of point a and all points in nB
+            d = np.sum((nB-a)**2,axis=1)
+
+            #Calculate final distance by taking the sqrt!
+            min_dist = math.sqrt(d[d.argmin()])
+
+            normal_parent_vectorB = parentVectorsB[d.argmin()] 
+            normal_parent_vectorA = parentVectorsA[i]
+
+            dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
+
+            this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
+
+            all_values.append(this_treenode_value) 
+
+        
+        return (sum(all_values)/len(all_values))  
+
+    def calc_connectivity_matching_score(self,neuronA,neuronB,connectivity,neuron_names,threshold=1):   
+        """
+        Ignores A->B, A->A, B->A and B->B
+        Attention! matching_index_synapses is tricky, because if neuronA has lots of connections and neuronB 
+        only little, they will still get a high matching index. E.g. 100 of 200 / 1 of 50 = 101/250 -> matching index = 0.404
+        matching_index_weighted_synapses somewhat solves that:
+        % of shared synapses A * % of shared synapses B * 2 / (% of shared synapses A + % of shared synapses B)
+        -> value will be between 0 and 1; if one neuronB has only few connections (percentage) to a shared partner, the final value will also be small
+
+        """
+
+        n_total = 0
+        n_shared = 0
+        n_synapses_shared = 0
+        n_synapses_sharedA = 0
+        n_synapses_sharedB = 0
+        n_synapses_total = 0
+        n_synapses_totalA = 0
+        n_synapses_totalB = 0
+
+
+        #Vertex similarity based on Jarrell et al., 2012
+        # f(x,y) = min(x,y) - C1 * max(x,y) * e^(-C2 * min(x,y))
+        # x,y = edge weights to compare
+        # vertex_similarity is the sum of f over all vertices
+        # C1 determines how negatively a case where one edge is much stronger than another is punished
+        # C2 determines the point where the similarity switches from negative to positive
+        C1 = 0.5
+        C2 = 1
+        vertex_similarity = 0
+        max_score = 0   
+
+        for entry in connectivity:      
+            if 'ambiguous' in neuron_names[entry].lower():
+                continue
+            if connectivity[entry]['num_nodes'] < 200:
+                continue
+
+            A_connected = False
+            B_connected = False
+
+            if neuronA in connectivity[entry]['skids'] and entry is not neuronB and entry is not neuronA:
+                if connectivity[entry]['skids'][neuronA] >= threshold:
+                    n_total += 1
+                    n_synapses_total += connectivity[entry]['skids'][neuronA]
+                    n_synapses_totalA += connectivity[entry]['skids'][neuronA]
+                    A_connected = True
+            if neuronB in connectivity[entry]['skids'] and entry is not neuronA and entry is not neuronB:
+                if connectivity[entry]['skids'][neuronB] >= threshold:              
+                    B_connected = True
+                    n_synapses_total += connectivity[entry]['skids'][neuronB]
+                    n_synapses_totalB += connectivity[entry]['skids'][neuronB]
+                    #Make sure to not count this entry again if it is already connected to A
+                    if A_connected is False:
+                        n_total += 1
+
+            if A_connected is True and B_connected is True:
+                n_shared += 1
+                n_synapses_shared += connectivity[entry]['skids'][neuronA] + connectivity[entry]['skids'][neuronB]
+                n_synapses_sharedA += connectivity[entry]['skids'][neuronA]
+                n_synapses_sharedB += connectivity[entry]['skids'][neuronB]
+
+            if A_connected is True:
+                a = connectivity[entry]['skids'][neuronA]
+            else: 
+                a = 0
+            if B_connected is True:
+                b = connectivity[entry]['skids'][neuronB]
+            else: 
+                b = 0
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        try: 
+            similarity_normalized = ( vertex_similarity + C1 * max_score ) / ( ( 1 + C1 ) * max_score) #Reason for (1+C1) is that by increasing vertex_similarity first by C1*max_score, we also increase the maximum reachable value            
+        except:     
+            similarity_normalized = 0
+
+        return similarity_normalized
+
+    def calc_pairing_matching_score(self,neuronA,neuronB,connectivity,neuron_names,list_of_pairs):    
+        """
+        Compares connections of A and B to given pairs of synaptic partners. 
+        Synaptic partners that have not been paired will be ignored.
+
+        Will only calculate similarity_normalized based on Jarrell's vertex similarity!
+
+        Does ignore A->A, B->B (unless A or B are unpaired medial)
+        Does NOT ignore A->B, B->A
+
+        list_of_pairs has to be a list [[A_left,A_right],[B_left,B_right],...]
+        for unpaired medial neurons just have the neuron twice in list [A_unpaired,A_unpaired],[B_unpaired,B_unpaired]
+        """
+
+        #Vertex similarity based on Jarrell et al., 2012
+        # f(x,y) = min(x,y) - C1 * max(x,y) * e^(-C2 * min(x,y))
+        # x,y = edge weights to compare
+        # vertex_similarity is the sum of f over all vertices
+        # C1 determines how negatively a case where one edge is much stronger than another is punished
+        # C2 determines the point where the similarity switches from negative to positive
+        C1 = 0.5
+        C2 = 1
+        vertex_similarity = 0
+        max_score = 0   
+
+
+        for pA,pB in list_of_pairs:
+            try:
+                a = connectivity[pA]['skids'][neuronA]
+            except:
+                a = 0
+            try:
+                b = connectivity[pB]['skids'][neuronB]
+            except:
+                b = 0
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        #Again but the other way around
+        for pB,pA in list_of_pairs:
+            try:
+                a = connectivity[pA]['skids'][neuronA]
+            except:
+                a = 0
+            try:
+                b = connectivity[pB]['skids'][neuronB]
+            except:
+                b = 0       
+
+            max_score += max([a,b])
+            vertex_similarity += ( 
+                                    min([a,b]) - C1 * max([a,b]) * math.exp(- C2 * min([a,b]))
+                                )
+
+        try: 
+            similarity_normalized = ( vertex_similarity + C1 * max_score ) / ( ( 1 + C1 ) * max_score) #Reason for (1+C1) is that by increasing vertex_similarity first by C1*max_score, we also increase the maximum reachable value
+            #print(vertex_similarity,similarity_normalized,max_score)
+        except:     
+            similarity_normalized = 0
+
+
+        return similarity_normalized
+
+    def closest_node(node,nodes):
+        nodes = numpy.asarray(nodes)
+        dist = numpy.sum((nodes - node)**2, axis = 1)
+        return np.argmin(dist_2)    
+
+    def dotproduct(self,v1, v2):
+        return sum((a*b) for a, b in zip(v1, v2))
+
+    def length(self,v):
+        return math.sqrt(self.dotproduct(v, v))  
+
+    def dist(self,v1,v2):        
+        return math.sqrt(sum(((a-b)**2 for a,b in zip(v1,v2))))   
+
+    def manhattan_dist(self,v1,v2):
+        return sum(((a-b) for a,b in zip(v1,v2)))
+
+
+class CalculateSimilarityModal(Operator):
+    """Color neurons by similarity"""  
+    bl_idname = "calc.similarity_modal"  
+    bl_label = "Calculate similarity modally" 
+
+    neurons_to_process = None
+    threads = []
+    threads_closed = []
+
+    def __init__(self):
+        #print('START')
+        pass
+
+    def __del__(self):
+        #print('END')    
+        pass
+
+    def modal(self, context, event):        
+        if event.type in {'ESC'}: 
+            print('Calculation cancelled!')
+            self.report({'INFO'},'Cancelled')
+            ahd.show('Cancelled') 
+            osd.show('Calculation Cancelled')
+            osd_timed = ClearOSDAfter(5)
+            osd_timed.start()          
+            return {'CANCELLED'}
+
+        if event.type == 'TIMER':
+
+            if self.neurons_to_process is None:
+                if self.prepare_vars(context) is False:
+                    return {'CANCELLED'}
+                
+
+            if len(self.threads) != len(self.neurons) and len(self.threads) == len(self.threads_closed):
+                active_threads = len(self.threads) - len(self.threads_closed)
+                to_open = 20 - active_threads
+                print ('Starting %i threads' % len(self.neurons_to_process[:to_open]) )
+                #Process only 20 threads at a time!
+                for n in self.neurons_to_process[:to_open]:
+                    t = CalcScoreThreaded(                  
+                                            n,
+                                            self.neurons,
+                                            self.compare,
+                                            self.neuron_data,
+                                            self.neuron_parent_vectors,
+                                            self.use_inputs,
+                                            self.use_outputs,
+                                            self.connectivity,
+                                            self.partner_names,
+                                            self.list_of_pairs,
+                                            self.to_exclude,
+                                            self.number_of_partners,
+                                            self.conversion_factor,
+                                            self.sigma,
+                                            self.omega
+                                        )
+                    t.start()
+                    self.threads.append(t)
+
+                self.neurons_to_process = self.neurons_to_process[to_open:]
+
+                ahd.show('Processing neurons [%i of %i]' % (len(self.threads_closed) ,len(self.neurons)) )
+                osd.show('Calculating similiarity scores... (ESC to cancel)')
+
+            for t in self.threads:
+                if t in self.threads_closed:
+                    continue
+                if not t.is_alive():                
+                    self.threads_closed.append(t)
+
+            #print(len(self.threads_closed),'of',len(self.threads),'threads closed')        
+
+            """
+            this_neuron = self.neurons_to_process[0]
+            print('Processing neuron', this_neuron.name, '[', self.run+1 ,'of',len(self.neurons),']')              
+            
+            self.calc_score (this_neuron)
+            self.run += 1
+
+            self.neurons_to_process.pop(0)   
+            """
+
+            
+
+            if len(self.threads_closed) == len(self.neurons):
+                self.after_calc()
+                osd.show('Done')
+                osd_timed = ClearOSDAfter(5)
+                osd_timed.start()
+                return{'FINISHED'}     
+
+        return {'PASS_THROUGH'}
+
+    """
+    def invoke(self,context,event):
+        threads = []
+        threads_closed = []
+        context.window_manager.modal_handler_add(self)     
+        return{'RUNNING_MODAL'}
+    """
+
+    def execute(self, context):
+        ahd.reinitalize()
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(2, context.window)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def cancel(self, context):
+        wm = context.window_manager
+        wm.event_timer_remove(self._timer)
+
+    def dotproduct(self,v1, v2):
+        return sum((a*b) for a, b in zip(v1, v2))
+
+    def length(self,v):
+        return math.sqrt(self.dotproduct(v, v))  
+
+    def dist(self,v1,v2):        
+        return math.sqrt(sum(((a-b)**2 for a,b in zip(v1,v2))))   
+
+    def manhattan_dist(self,v1,v2):
+        return sum(((a-b) for a,b in zip(v1,v2)))
+
+    def prepare_vars(self,context):
+        try:                
+            self.which_neurons = similarity_scores_options['which_neurons']
+            self.compare = similarity_scores_options['compare']
+            self.method = similarity_scores_options['method']
+            self.cluster_at  = similarity_scores_options['cluster_at']
+            self.sigma = similarity_scores_options['sigma']
+            self.omega  = similarity_scores_options['omega']
+            self.use_saved  = similarity_scores_options['use_saved']
+            self.save_dendrogram  = similarity_scores_options['save_dendrogram']
+            self.path_dendrogram = similarity_scores_options['path_dendrogram']
+            self.use_inputs  = similarity_scores_options['use_inputs']
+            self.use_outputs  = similarity_scores_options['use_outputs']
+            self.calc_thresh = similarity_scores_options['calc_thresh'] 
+        except:
+            self.report({'ERROR'},'Make sure to click <Settings> first!') 
+            osd.show('Go to <Settings> first!') 
+            osd_timed = ClearOSDAfter(5)
+            osd_timed.start()
+            return False    
+
+        self.threads = []
+        self.threads_closed = []                             
+        
+        #Check if numpy is installed
+        try:
+            np
+        except:
+            self.report({'ERROR'},'Cancelled: Python Numpy not installed.')
+            return{'FINISHED'}
+
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor    
+
+        #Get neurons first
+        self.neurons = []
+        self.neuron_names = {}
+        self.skids = []
+        self.to_exclude = []
+        self.to_exclude_skids = []
+        self.connectivity = None
+        self.number_of_partners = None          
+        self.synapses_used = None
+        self.total_synapses = None
+        self.neuron_data = {}
+        self.neuron_parent_vectors = {}
+        self.list_of_pairs = None
+        self.partner_names = None
+
+        if self.which_neurons == 'All':   
+            for obj in bpy.data.objects:
+                if obj.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',obj.name).group(1)
+                        self.neurons.append(obj)                
+                        self.skids.append(skid)
+                        obj['skid'] = skid
+                        self.neuron_names[skid] = obj.name
+                    except:
+                        pass
+        elif self.which_neurons == 'Selected':
+            for obj in bpy.context.selected_objects:
+                if obj.name.startswith('#'):
+                    try:
+                        skid = re.search('#(.*?) -',obj.name).group(1)
+                        self.neurons.append(obj)              
+                        self.skids.append(skid)
+                        obj['skid'] = skid
+                        self.neuron_names[skid] = obj.name
+                    except:
+                        pass
+
+        self.neurons_to_process = copy.copy(self.neurons)
+        
+        print('Collecting data of %i neurons' % len(self.neurons))
+        self.report ( {'INFO'} , 'Collecting neuron data. Please wait...' )
+        osd.show("Collecting neuron data...")     
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)  
+        
+        if self.compare == 'Morphology':
+            for n in self.neurons:                
+                self.neuron_data[n['skid']] = []
+                self.neuron_parent_vectors[n['skid']] = []
+                for spline in n.data.splines:
+                    for i,point in enumerate(spline.points):
+                        #Skip first node (root node of each spline -> has no parent)
+                        if i == 0:
+                            continue                        
+                        parent_vector = list(map(lambda x,y:(x-y) , point.co, spline.points[i-1].co))                        
+                        normal_parent_vector = list(map(lambda x: x/self.length(parent_vector), parent_vector))
+                        self.neuron_data[n['skid']].append(point.co)
+                        self.neuron_parent_vectors[n['skid']].append(normal_parent_vector)
+        
+        elif self.compare == 'Synapses':
+            global synapse_data
+
+            if self.compare is True:
+                try:
+                    synapse_data
+                except:
+                    print('No saved synapse data found - loading neurons from scratch. Please wait...')
+                    synapse_data = {}
+            else:
+                synapse_data = {}
+
+            missing_skids = []
+            for n in self.skids:
+                if n not in synapse_data:
+                    missing_skids.append(n)   
+
+            print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
+
+            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
+
+            for skid in skdata:
+                synapse_data[str(skid)] = skdata[skid][1]
+
+                          
+            
+        elif self.compare == 'Connectivity' or self.compare == 'Paired-Connectivity':
+            if self.use_inputs is False and self.use_outputs is False:
+                self.report({'ERROR'},'Need at least either <Use Inputs> or <Use Outputs> to be true!')
+                return{'CANCELLED'}
+
+            self.connectivity = retrieve_connectivity(self.skids,remote_instance)
+
+            if self.compare == 'Paired-Connectivity':
+                all_partners = list( set( list(self.connectivity['incoming']) + list(self.connectivity['outgoing']) ) )
+
+                temp = self.retrieve_pairs( all_partners, return_as_pairs=True)
+                self.list_of_pairs = temp['paired']
+                for e in temp['unpaired_medial']:                    
+                    self.list_of_pairs.append((e,e))
+
+            self.number_of_partners = dict([(e,{'incoming':0,'outgoing':0}) for e in self.skids])            
+            self.synapses_used = dict([(e,0) for e in self.skids])
+            self.total_synapses = dict([(e,0) for e in self.skids])
+
+            partner_skids = []
+
+            self.directions = []
+            if self.use_inputs is True:
+                self.directions.append('incoming')
+            if self.use_outputs is True:
+                self.directions.append('outgoing')
+
+            for d in self.directions:
+                for e in self.connectivity[d]:
+                    partner_skids.append(e)  
+                    
+            self.partner_names = get_neuronnames(list(set(partner_skids)))   
+
+            for d in self.directions:
+                for e in self.connectivity[d]:                    
+                    for skid in self.connectivity[d][e]['skids']:               
+                        self.total_synapses[skid] += self.connectivity[d][e]['skids'][skid]                       
+
+                        if self.compare == 'Connectivity':
+                            self.number_of_partners[skid][d] += 1
+                            if self.connectivity[d][e]['num_nodes'] > 200 and 'ambiguous' not in self.partner_names[e].lower():
+                                self.synapses_used[skid] += self.connectivity[d][e]['skids'][skid]
+
+                        if self.compare == 'Paired-Connectivity':
+                            if e in [n for sublist in self.list_of_pairs for n in sublist]:
+                                self.synapses_used[skid] += self.connectivity[d][e]['skids'][skid]
+                                self.number_of_partners[skid][d] += 1
+
+            for n in self.neurons:
+                try:
+                    percentages = round(self.synapses_used[ n['skid'] ] / self.total_synapses[ n['skid'] ] * 100,1)
+                except:
+                    percentages = 0
+
+                if percentages < self.calc_thresh:
+                    self.to_exclude.append(n)
+                    self.to_exclude_skids.append(n['skid'])
+
+        elif self.compare == 'Connect For More Options':
+            self.report({'ERROR'},'Please pick valid method.')
+            return{'FINISHED'}
+
+        global matching_scores
+
+        if self.use_saved is True:
+            try:
+                matching_scores
+                print('Re-using existing matching scores!')
+            except:
+                print('Creating matching scores from scratch!')
+                matching_scores = {'Synapses':{},'Morphology':{},'Connectivity':{},'Paired-Connectivity':{}}                
+        else:
+            print('Creating matching scores from scratch!')
+            matching_scores = {'Synapses':{},'Morphology':{},'Connectivity':{},'Paired-Connectivity':{}}
+        
+        return {'FINISHED'}    
+
+    def after_calc(self):
+        annotations = {}
+        if self.compare == 'Paired-Connectivity' or self.compare == 'Connectivity':
+            print('Percentage of synapses usable for calculation (',self.directions,')')
+            percentages = {}            
+            for n in self.neurons:
+                skid = n['skid']
+
+                try:
+                    percentages[skid] = round(self.synapses_used[skid]/self.total_synapses[skid] * 100,1)
+                except:
+                    percentages[skid] = 0
+
+                if n in self.to_exclude:
+                    annotations[skid] = 'OMITTED: %f percent of synapses TOO LOW for calculation!' % percentages[skid]
+                    print(self.neuron_names[skid],'#',skid,':',percentages[skid],'% - OMITTED FOR CALCULATION!') 
+                else:
+                    annotations[skid] = '%f percent of synapses usable for calculation (%s)' % (percentages[skid],str(self.directions))                
+                    print(self.neuron_names[skid],'#',skid,':',percentages[skid],'%') 
+
+        #print('Matchin scores:,',matching_scores[self.compare])
+
+        all_clusters,merges_at = self.create_clusters(self.skids,matching_scores[self.compare],self.method) 
+
+        for i in range(len(merges_at)):
+            try:
+                if merges_at[i+1] < self.cluster_at:
+                    clusters_to_plot = all_clusters[i]
+                    break
+            except:
+                print('%s - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (self.compare,self.cluster_at,merges_at[i]))
+                #print( all_clusters[i])
+                clusters_to_plot = all_clusters[i] 
+
+
+        print('Created %i clusters at closest merge of %f' % ( len ( clusters_to_plot ) , merges_at[i] ) )
+        #self.report ( {'INFO'} , 'Created %i clusters at threshold %f' % ( len ( clusters_to_plot ) , self.cluster_at ) )
+
+        #print('Clusters:', clusters_to_plot)
+
+        colors = ColorCreator.random_colors(len(clusters_to_plot)-len(self.to_exclude),'RGB')
+
+        colormap = {}
+        for c in clusters_to_plot:
+            if len(c) == 1 and c[0] in self.to_exclude_skids:
+                colormap[c[0]] = (0,0,0)
+            else:
+                for skid in c:                              
+                    colormap[skid] = colors[0]
+                colors.pop(0)
+
+        #print('Colormap:',colormap)
+
+        for n in self.neurons:
+            skid = re.search('#(.*?) -',n.name).group(1)
+            n.active_material.diffuse_color[0] = colormap[skid][0]/255
+            n.active_material.diffuse_color[1] = colormap[skid][1]/255
+            n.active_material.diffuse_color[2] = colormap[skid][2]/255
+        #for entry in matching_scores:
+        #    print(entry,'\t',matching_scores[entry])
+
+        self.report({'INFO'},'Success!' )
+        osd.show('Success! See console for details')
+        osd_timed = ClearOSDAfter(4)
+        osd_timed.start()
+        ahd.clear()
+
+        if self.save_dendrogram is True and bpy.data.filepath != '':
+            print('Creating Dendrogram.svg')
+            try:
+                svg_file = os.path.join ( os.path.normpath( self.path_dendrogram ) , 'dendrogram.svg' )
+                self.plot_dendrogram(self.skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', self.neuron_names , self.cluster_at, annotations)
+                print('Dendrogram.svg created in ', os.path.normpath( self.path_dendrogram ) )
+                self.report({'INFO'},'Dendrogram created:' + svg_file )
+            except:
+                self.report({'ERROR'},'Could not create dendrogram. See Console!') 
+                self.report({'INFO'},'ERROR. See Console!') 
+                print('ERROR: Could not create dendrogram')
+                if not os.access( os.path.normpath( self.path_dendrogram ) , os.W_OK ):
+                    print('Do not have permission to write in', os.path.normpath( self.path_dendrogram ) )
+                    print('Try saving the .blend file elsewhere!')
+        elif self.save_dendrogram is True and not os.path.exists ( os.path.normpath ( self.path_dendrogram ) ):
+            print('ERROR: Provided path does not exists!')
+            self.report({'ERROR'},'ERROR creating Dendrogram: path does not exists')        
+                
+        return{'FINISHED'}
+
+    def check_resolution(self,neuron):
+        """
+       Checks z resolution of given neuron -> due to virtual nodes, some neurons have less nodes than others
+        """
+
+        distances = []
+        for spline in neuron.data.splines:
+            for i,point in enumerate(spline.points):
+                #Skip first node (root node of each spline -> has no parent)
+                if i == 0:
+                    continue  
+                #Virtual nodes basically skip z-sections, so points are more than 50nm (0.005 in CATMAID coords)) apart in z-direction (y-direction in Blender)
+                dist = math.fabs(point.co[1] - spline.points[i-1].co[1])
+                if dist > 0:
+                    distances.append(dist)
+
+        return round(sum(distances)/len(distances),3)
+
+    def create_clusters(self,skids,matching_scores,method):
+        """
+        Sort skids into clusters based on similarity in matching score
+        """
+        similarity = 1
+        step_size = 0.01
+
+        clusters = list(map(lambda x:[x], skids))   
+        all_clusters = [copy.deepcopy(clusters)]
+        merges_at = [1] 
+
+        #print('Start clusters:',clusters)
+
+        while similarity >= 0:
+            #Find cluster that will be merged in this round
+            #merge contains indices of c in clusters
+            merge = {}
+            for c1 in clusters:
+                for c2 in clusters:
+                    #if clusters are identical
+                    if c1 == c2:
+                        continue
+                    all_similarities = []
+                    for neuronA in c1:              
+                        #if c1 has already been merged to c2 in previous iteration
+                        #if clusters.index(c2) in merge:
+                        #   if clusters.index(c1) in merge[clusters.index(c2)]:
+                                #print('!Skipped redundant merging:',c1,c2)
+                        #       continue
+                        #merged = False
+                        for neuronB in c2:
+                            #if merged is True:
+                            #   continue
+                            #Calculate average from both comparisons: A -> B and B -> A (will be different!!!!)
+                            avg_matching_score = (matching_scores[str(neuronA)+'-'+str(neuronB)] + matching_scores[str(neuronB)+'-'+str(neuronA)]) / 2
+                            all_similarities.append(avg_matching_score)                     
+
+
+                    #Important: for method 'max' (maximal distance), find pair of neurons for which the similarity is minimal 
+                    #           for method 'min' (minimal distance), find pair of neurons for which the similarity is maximal
+                    if ((    method == 'avg' and (sum(all_similarities)/len(all_similarities)) >= similarity ) 
+                        or ( method == 'max' and min(all_similarities) >= similarity )  
+                        or ( method == 'min' and max(all_similarities) >= similarity )): 
+                        if clusters.index(c1) not in merge:
+                            merge[clusters.index(c1)] = []
+                        if clusters.index(c2) not in merge[clusters.index(c1)]:
+                            merge[clusters.index(c1)].append(clusters.index(c2))
+                            #merged = True
+
+            if len(merge) != 0:
+                #Check if multiple clusters need to be merged:
+                #print('Merge:',merge)
+                temp_to_be_merged = []
+                for c1 in merge:
+                    #print('C1:',c1)
+                    exists = []
+                    for c2 in merge[c1]:                                        
+                        for entry in temp_to_be_merged:
+                            if c1 in entry or c2 in entry:
+                                if temp_to_be_merged.index(entry) not in exists:
+                                    exists.append(temp_to_be_merged.index(entry))
+
+                    #print('Exists:', exists)
+
+                    if len(exists) > 0:
+                        temp_to_be_merged[exists[0]].append(c1)
+                        temp_to_be_merged[exists[0]] += merge[c1]
+                        for entry in exists[1:]:
+                            temp_to_be_merged[exists[0]] += temp_to_be_merged[entry]
+                            temp_to_be_merged.remove(temp_to_be_merged[entry])
+                    else:
+                        to_append = [c1]
+                        to_append += merge[c1]
+                        temp_to_be_merged.append(to_append)                 
+
+                #Make sure each cluster shows up only once in to_be_merged:
+                to_be_merged = []
+                for entry in temp_to_be_merged:
+                    to_be_merged.append(list(set(entry)))
+
+                #print('Merging at similarity', similarity,':',to_be_merged,merge)
+
+                temp_clusters = copy.deepcopy(clusters)
+
+                #First merge clusters
+                for entry in to_be_merged:  
+                    for c in entry[1:]:
+                        temp_clusters[entry[0]] += copy.deepcopy(clusters[c])
+
+                #Then delete 
+                for entry in to_be_merged:                                          
+                    for c in entry[1:]:
+                        temp_clusters.remove(clusters[c])       
+
+                clusters = copy.deepcopy(temp_clusters)
+                all_clusters.append(copy.deepcopy(temp_clusters))
+                merges_at.append(similarity)
+                
+
+                #print(temp_clusters,'\n')
+
+            similarity -= step_size
+
+        return all_clusters,merges_at
+
+    def plot_dendrogram(self, skids, all_clusters, merges_at, remote_instance, filename, names, cluster_at=0, annotations = {}): 
+        """
+        Creates dendrogram based on previously calculated similarity scores
+        """
+        if cluster_at != 0:
+            for i in range(len(merges_at)):
+                try:
+                    if merges_at[i+1] < cluster_at:
+                        clusters_to_plot = all_clusters[i]
+                        break
+                except:
+                    print('Morphology - all Clusters merged before threshold %f - using next cluster constellation at %f:' % (cluster_at,merges_at[i]))
+                    print( all_clusters[i])
+                    clusters_to_plot = all_clusters[i]
+            
+            colors = ColorCreator.random_colors(len(clusters_to_plot))
+            colormap = {}
+            for c in clusters_to_plot:                      
+                for neuron in c:                              
+                    colormap[neuron] = colors[0]
+                colors.pop(0)
+        
+        svg_header =    '<svg xmlns="http://www.w3.org/2000/svg" version="1.1" style="background:white">\n'
+        text_color = (0,0,0)
+
+        svg_file = os.path.join ( os.path.dirname( bpy.data.filepath ) , 'dendrogram.svg' )
+
+        #Now create svg
+        with open( svg_file, 'w', encoding='utf-8') as f:  
+            f.write(svg_header)   
+
+            #Write neurons first as they are sorted in the last cluster
+            y_offset = 0
+            neuron_offsets = {}
+            clusters_by_neurons = {}
+            for neuron in [item for sublist in all_clusters[-1] for item in sublist]:
+                f.write('<text x="%i" y="%i" fill="rgb%s" style="font-size:14px;"> %s </text> \n'
+                            % (
+                                500 + 10,
+                                y_offset,
+                                str((0,0,0)),
+                                names[neuron] 
+                                )
+                            )
+
+                if annotations:
+                    f.write('<text x="%i" y="%i" fill="rgb%s" style="font-size:10px;"> %s </text> \n'
+                            % (
+                                500 + 10,
+                                y_offset+10,
+                                str((0,0,0)),
+                                annotations[neuron] 
+                                )
+                            )
+
+
+                neuron_offsets[neuron] = y_offset - 5
+                clusters_by_neurons[neuron] = (y_offset,500)
+                y_offset += 30
+
+            if cluster_at != 0:
+                f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1;stroke-dasharray:5,5" /> \n' 
+                        % (
+                            cluster_at * 500,                       
+                            -10,
+                            cluster_at * 500,
+                            y_offset
+                           )
+                        )
+                f.write('<text text-anchor="middle" x="%i" y="%i" fill="rgb(0,0,0)" style="font-size:10px;"> Cluster Threshold </text> \n' 
+                        % (
+                            cluster_at * 500,
+                            -30                     
+                          )
+                        )
+
+
+
+            #Write x axis:
+            f.write('<line x1="0" y1="%i" x2="500" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset,y_offset))
+            
+            f.write('<line x1="100" y1="%i" x2="100" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="100" y="%i" fill="rgb%s" style="font-size:12px;"> 0.2 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="200" y1="%i" x2="200" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="200" y="%i" fill="rgb%s" style="font-size:12px;"> 0.4 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="300" y1="%i" x2="300" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="300" y="%i" fill="rgb%s" style="font-size:12px;"> 0.6 </text> \n' % (y_offset+20,str(text_color)))
+            f.write('<line x1="400" y1="%i" x2="400" y2="%i" style="stroke:rgb(0,0,0);stroke-width:1" /> \n' % (y_offset-5,y_offset+5))
+            f.write('<text text-anchor="middle" x="400" y="%i" fill="rgb%s" style="font-size:12px;"> 0.8 </text> \n' % (y_offset+20,str(text_color)))
+
+            f.write('<text text-anchor="middle" x="250" y="%i" fill="rgb%s" style="font-size:14px;"> Similarity Score </text> \n' % (y_offset+50,str(text_color)))
+
+            previous_clusters = all_clusters[0]
+            neurons_connected = []
+            last_cluster_by_neuron = {}
+
+            previous_merges = {}        
+            for skid in skids:
+                previous_merges[skid]=1 
+                last_cluster_by_neuron[skid] = [skid]
+
+            i = 0
+            for step in all_clusters[1:]:
+                #print(step)
+                i += 1
+                for c in step:
+                    #If cluster has not changed, do nothing
+                    if c in previous_clusters:                  
+                        continue
+
+                    try:
+                        cluster_color = top_line_color = bot_line_color = colormap[c[0]]                     
+                    except:
+                        cluster_color = top_line_color = bot_line_color = (0,0,0)
+                    
+                    #Prepare clusters, colors and line width                
+                    mid_line_width = top_line_width = bot_line_width = 1                
+
+                    this_cluster_total = 0
+                    for neuron in c:
+                        try:                    
+                            if colormap[neuron] != cluster_color:                       
+                                cluster_color = (0,0,0)
+                                #Check if either top or bot cluster is a single neuron (not in neurons_connected)
+                                #-> if not, make sure that it still receives it's cluster color even if similarity to next cluster is < threshold
+                                if c[0] not in neurons_connected:
+                                    top_line_color = colormap[c[0]]
+                                else:
+                                    top_line_color = (0,0,0)
+                                if c[-1] not in neurons_connected:
+                                    bot_line_color = colormap[c[-1]]
+                                else:
+                                    bot_line_color = (0,0,0)
+                        except:
+                            cluster_color = top_line_color = bot_line_color = (0,0,0)                        
+
+                    top_boundary = clusters_by_neurons[c[0]]
+                    bottom_boundary = clusters_by_neurons[c[-1]]
+                    center = top_boundary[0] + (bottom_boundary[0] - top_boundary[0])/2             
+
+                    neurons_connected.append(c[0])
+                    neurons_connected.append(c[-1])         
+
+                    similarity = merges_at[i]
+
+                    #Vertical Line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,top_boundary[0],500*similarity,bottom_boundary[0],str(cluster_color),round(mid_line_width,1)))
+                    #Top horizontal line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,top_boundary[0],top_boundary[1],top_boundary[0],str(top_line_color),round(top_line_width,1)))
+                    #Bot horizontal line
+                    f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,bottom_boundary[0],bottom_boundary[1],bottom_boundary[0],str(bot_line_color),round(bot_line_width,1)))
+
+
+                    #This is for disconnected SINGLE neurons (need to fix this proper at some point)
+                    for neuron in c:
+                        if neuron not in neurons_connected:
+                            y_coord = neuron_offsets[neuron]                            
+                            this_line_width = mid_line_width
+                            f.write('<line x1="%i" y1="%i" x2="%i" y2="%i" style="stroke:rgb%s;stroke-width:%f" /> \n' % (500*similarity,y_coord,500,y_coord,str(cluster_color),round(this_line_width,1)))
+                            neurons_connected.append(neuron)
+                    
+                        previous_merges[neuron] = similarity
+                        last_cluster_by_neuron[neuron] = c
+                        clusters_by_neurons[neuron] = (center,500*similarity)
+
+                previous_clusters = step
+
+            f.write('</svg>')
+            f.close()
+
+        return 
+
+    def retrieve_pairs(self,neurons,return_as_pairs=False):
+        """
+        Checks if [neurons] have annotation "paired with #skid". 
+        Returns dict = {'paired': [paired_neurons,...], 'unpaired_medial': [],'not_paired':[not_paired]} 
+        """
+
+        neuron_annotations = get_annotations_from_list (neurons, remote_instance)
+
+        paired = [] 
+        not_paired = []
+        unpaired_medial = []
+
+        #Search for pairs   
+        for neuron in neurons:      
+            
+            connected_pair = None
+            unpaired_med = False
+
+            #print('checking annotations for ', neuron, neuron_annotations[neuron])
+
+            try:                
+                for annotation in neuron_annotations[neuron]:
+                    if annotation.startswith('paired with #'):
+
+                        if connected_pair != None:
+                            print('Warning! Neuron annotated twice:', neuron)
+
+                        connected_pair = annotation[13:]
+
+                        if connected_pair == neuron:
+                            print('Warning! Neuron paired with itself:', neuron)
+                    
+                    elif annotation == 'unpaired_medial' or annotation == 'unpaired medial':
+
+                        if connected_pair != None:
+                            print('Warning! Neuron annotated as pair AND as not_paired medial!')
+
+                        unpaired_med = True
+            except:
+                #this means neuron is not annotated at all
+                pass
+
+        
+            if connected_pair != None:
+                if return_as_pairs is False:
+                    if neuron not in paired and connected_pair not in paired:
+                        paired += [neuron,connected_pair]                               
+                elif return_as_pairs is True and (connected_pair,neuron) not in paired:             
+                    paired.append((neuron,connected_pair))
+            elif unpaired_med is True:
+                unpaired_medial.append(neuron)
+            else:
+                not_paired.append(neuron)   
+
+        #return {'paired':list(set(paired)),'not_paired':not_paired,'unpaired_medial':unpaired_medial}
+        return {'paired':paired,'not_paired':not_paired,'unpaired_medial':unpaired_medial}
+
 
 class ColorBySimilarity(Operator):
     """Color neurons by similarity"""  
@@ -7447,7 +8823,8 @@ class ColorBySimilarity(Operator):
         row.prop(self, "calc_thresh")       
         
 
-    def invoke(self, context, event):        
+    def invoke(self, context, event):    
+        ahd.reinitalize()       
         return context.window_manager.invoke_props_dialog(self)
 
     def execute (self, context):
@@ -7491,6 +8868,8 @@ class ColorBySimilarity(Operator):
 
         print('Collecting data of %i neurons' % len(neurons))
         self.report ( {'INFO'} , 'Collecting neuron data. Please wait...' )
+        osd.show("Collecting neuron data...")     
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)  
         
         if self.compare == 'Morphology':
             neuron_data = {}
@@ -7608,10 +8987,12 @@ class ColorBySimilarity(Operator):
             print('Creating matching scores from scratch!')
             matching_scores = {'Synapses':{},'Morphology':{},'Connectivity':{},'Paired-Connectivity':{}}
 
-
+        osd.show('Calculating similiarity scores...')
         #self.report ( {'INFO'} , 'Comparing neurons. Please wait...' )    
         for i,neuronA in enumerate(neurons):
-            print('Processing neuron', neuronA.name, '[', i+1 ,'of',len(neurons),']')
+            print('Processing neuron', neuronA.name, '[', i+1 ,'of',len(neurons),']')              
+            ahd.show('Processing neurons [%i of %i]' % (i+1 ,len(neurons)) )
+            #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=5)
             #self.report ( {'INFO'} , 'Processing neurons [%i of %i]' % ( i+1 , len ( neurons ) ) )
             #print('Resolution:', self.check_resolution(neuronA))  
             for neuronB in neurons:
@@ -7694,7 +9075,6 @@ class ColorBySimilarity(Operator):
                     elif self.use_outputs is True:
                         matching_scores[self.compare][tag] = round( outgoing_score , 5 )
 
-
         annotations = {}
         if self.compare == 'Paired-Connectivity' or self.compare == 'Connectivity':
             print('Percentage of synapses usable for calculation (',directions,')')
@@ -7756,6 +9136,10 @@ class ColorBySimilarity(Operator):
         #    print(entry,'\t',matching_scores[entry])
 
         self.report({'INFO'},'Success!' )
+        osd.show('Success! See console for details')
+        osd_timed = ClearOSDAfter(4)
+        osd_timed.start()
+        ahd.clear()
 
         if self.save_dendrogram is True and bpy.data.filepath != '':
             print('Creating Dendrogram.svg')
@@ -7824,7 +9208,7 @@ class ColorBySimilarity(Operator):
 
 
     def calc_morphology_matching_score(self,nodeDataA,parentVectorsA,nodeDataB,parentVectorsB):
-        #nodes_list = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
+        #nodesData = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
 
         #Sigma defines how close two points have to be to be considered similar (in nanometers)
         #Kohl et al. -> 3000nm (light microscopy + registration)    
@@ -7852,7 +9236,7 @@ class ColorBySimilarity(Operator):
 
             this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
 
-            all_values.append(this_treenode_value)  
+            all_values.append(this_treenode_value) 
 
         
         return (sum(all_values)/len(all_values))  
@@ -9011,6 +10395,80 @@ def calc_hue (value, max_value, lut):
 
     return hue/360
 
+class AreaMsg():
+    def __init__(self):
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                self._area = area
+                break
+
+    def reinitalize(self):
+        print('Reinitializing Area Header...')
+        for area in bpy.context.screen.areas:
+            if area.type == 'VIEW_3D':
+                self._area = area
+                break
+
+    def show(self,msg):
+        try: 
+            self._area.type
+        except:
+            print('3D View not found - reinitializing!')
+            self.__init__()
+        self._area.header_text_set(msg)
+        #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=10)
+
+    def clear(self):
+        self._area.header_text_set()
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=10)
+
+class OnScreenMsg():
+    """Hackish on screen display"""
+    _msg = ""
+        
+    def __init__(self):
+        self._handle = bpy.types.SpaceView3D.draw_handler_add(self._draw_handler, tuple(), 'WINDOW', 'POST_PIXEL')
+        
+    def remove(self):
+        if not self._handle: return
+        bpy.types.SpaceView3D.draw_handler_remove(self._handle, 'WINDOW')
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+    def _draw_handler(self):
+        blf.position(0,70,30,0)
+        blf.size(0,20,72)
+        blf.draw(0,self._msg)
+
+    def update(self):
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+          
+    def show(self,msg):
+        self._msg = str(msg)
+        """
+        try:
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        except:
+            pass
+        """
+
+    def clean(self):
+        self._msg = str()
+        """
+        try:
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        except:
+            pass   
+        """
+
+class ClearOSDAfter(threading.Thread):
+    def __init__(self,duration):
+        self.duration = duration
+        threading.Thread.__init__(self)
+
+    def run(self):
+        time.sleep(self.duration)
+        osd.clean()
+
 class CATMAIDAddonPreferences(AddonPreferences):
     """
     Sets Addon preferences -> can be accessed via context.user_preferences.addons['CATMAIDImport'].preferences
@@ -9064,12 +10522,16 @@ class CATMAIDAddonPreferences(AddonPreferences):
         layout.prop(self, "conversion_factor")
         layout.prop(self, "time_out")
 
+osd = OnScreenMsg()
+ahd = AreaMsg()
+
         
 def register():
-    bpy.utils.register_class(CATMAIDAddonPreferences)
+    bpy.utils.register_class(CATMAIDAddonPreferences)    
     bpy.utils.register_module(__name__)
     #bpy.utils.register_class(VersionManager)
     bpy.types.Scene.CONFIG_VersionManager = bpy.props.PointerProperty(type=VersionManager)
+    
 
     """    
     bpy.utils.register_class(CATMAIDimportPanel)
