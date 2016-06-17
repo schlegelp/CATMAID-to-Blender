@@ -10397,17 +10397,23 @@ def calc_hue (value, max_value, lut):
 
 class AreaMsg():
     def __init__(self):
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                self._area = area
-                break
+        try:
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    self._area = area
+                    break
+        except:
+            self._area = None
 
     def reinitalize(self):
         print('Reinitializing Area Header...')
-        for area in bpy.context.screen.areas:
-            if area.type == 'VIEW_3D':
-                self._area = area
-                break
+        try:
+            for area in bpy.context.screen.areas:
+                if area.type == 'VIEW_3D':
+                    self._area = area
+                    break
+        except:
+            self_area = None
 
     def show(self,msg):
         try: 
@@ -10415,7 +10421,9 @@ class AreaMsg():
         except:
             print('3D View not found - reinitializing!')
             self.__init__()
-        self._area.header_text_set(msg)
+
+        if self._area:
+            self._area.header_text_set(msg)
         #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=10)
 
     def clear(self):
