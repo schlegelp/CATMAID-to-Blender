@@ -3,7 +3,7 @@ CATMAID-to-Blender
 
 Plugin for [Blender](www.blender.org "Blender Homepage") to interface with [CATMAID](https://github.com/catmaid/CATMAID "CATMAID Repo") servers, request and analyze data. Tested with Blender 2.77 and CATMAID 2015.12.21
 
-*I encourage you to open an issue or contact me directly if you run into problems or have a feature request!*
+*I encourage you to open an issue or contact me directly if you run into problems or have a __feature request__!*
 
 ## Installation:
 First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/CATMAIDImport.py), then:
