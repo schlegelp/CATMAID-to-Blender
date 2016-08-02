@@ -19,6 +19,10 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.4 02/08/2016:
+    - added 'color by strahler index
+    - added option use node radius as thickness for neuron in Blender
+
 ### V5.31 16/06/2016:
     - fixed bug with grouping in connector to svg export
     - also, added error handling in case neurons had no connectors to export
@@ -300,7 +304,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 2, 1),
+ "version": (5, 3, 1),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -387,6 +391,11 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.alignment = 'EXPAND'
         row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'       
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_strahler", text = "By Strahler Index", icon ='MOD_ARRAY')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_strahler'
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -1056,6 +1065,10 @@ class UpdateNeurons(Operator):
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
     
     
     def execute(self,context):
@@ -1126,7 +1139,7 @@ class UpdateNeurons(Operator):
 
         print("Creating new meshes for %i neurons" % len(skdata))
         for skid in skdata:            
-            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], resampling_factors[skid], self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], resampling_factors[skid], self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished Import in', time.clock()-start, 's') 
         if errors is None:
@@ -1185,6 +1198,9 @@ class RetrieveNeuron(Operator):
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
       
     
     def execute(self, context):  
@@ -1220,7 +1236,7 @@ class RetrieveNeuron(Operator):
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
-            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
@@ -1262,7 +1278,7 @@ class RetrieveNeuron(Operator):
                 
         ### Continue only of data retrieved contains 5 entries (if less there was an error while importing)
         if len(node_data) == 3 or len(node_data) == 2:             
-            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, truncate_value, interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(node_data, skeleton_id, neuron_name, resampling, import_connectors, truncate_neuron, truncate_value, interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
         else:
             print('No/bad data retrieved')
             print('Data:')
@@ -1317,6 +1333,9 @@ class RetrievePairs(Operator):
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
     
     
     def execute(self, context):  
@@ -1414,7 +1433,7 @@ class RetrievePairs(Operator):
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
             try:
-                CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+                CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
             except:
                 print('Error importing skid %s - wrong annotated skid?' %skid)
                 self.report({'ERROR'},'Error(s) occurred: see console')
@@ -1477,7 +1496,10 @@ class RetrieveInVolume(Operator):
                                     ) 
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
-                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")                                       
+                                        description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")   
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")                                                                        
 
     def execute(self, context):  
         global remote_instance
@@ -1499,7 +1521,7 @@ class RetrieveInVolume(Operator):
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
-            CATMAIDtoBlender.extract_nodes(skdata[skid], str(skid), neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], str(skid), neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
@@ -1684,6 +1706,9 @@ class RetrievebyAnnotation(Operator):
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
     
     
     def execute(self, context):  
@@ -1748,7 +1773,7 @@ class RetrievebyAnnotation(Operator):
 
         print("\n Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
-            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
@@ -4187,6 +4212,9 @@ class RetrievePartners(Operator):
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+    use_radius = BoolProperty( name="Use node radii", 
+                                        default = False,
+                                        description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
     make_curve = False
 
     def execute(self, context):  
@@ -4312,7 +4340,7 @@ class RetrievePartners(Operator):
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
-            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished in', time.clock()-start)
 
@@ -4402,7 +4430,17 @@ class ShapeCreator:
 class CATMAIDtoBlender:
     """Extracts Blender relevant data from data retrieved from CATMAID"""
     
-    def extract_nodes (node_data, skid, neuron_name = 'name unknown', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1 , interpolate_virtual = False, conversion_factor=10000):
+    def extract_nodes ( node_data, 
+                        skid, 
+                        neuron_name = 'name unknown', 
+                        resampling = 1, 
+                        import_connectors = True, 
+                        truncate_neuron = 'none', 
+                        truncate_value = 1 , 
+                        interpolate_virtual = False, 
+                        conversion_factor=10000, 
+                        use_radius = False,
+                        color_by_strahler = False):
         
         index = 1            
         cellname = skid + ' - ' + neuron_name                
@@ -4416,7 +4454,8 @@ class CATMAIDtoBlender:
         connectors_post = []
         connectors_pre = []
         child_count = {}   
-        nodes_list = {}    
+        nodes_list = {} 
+        radii = {}   
         list_of_childs = {}         
         
         #Truncate object name is necessary 
@@ -4441,6 +4480,9 @@ class CATMAIDtoBlender:
             Z = float(entry[5])/conversion_factor
             ### Z-axis in Blender is Y-axis in CATMAID!
             XYZcoords.append((X,Z,Y))
+
+            if use_radius:
+                radii[ entry[0] ] = entry[6]           
             
             if entry[0] not in nodes_list:                
                 nodes_list[entry[0]] = (X,Z,Y)
@@ -4455,10 +4497,14 @@ class CATMAIDtoBlender:
             list_of_childs[entry[1]].append(entry[0])            
             
             ### Search for soma
-            if entry[6] > 100:
-                soma = (X,Z,Y,round(entry[6]/conversion_factor,2))
+            if entry[6] > 1000:
+                soma = (X,Z,Y,round(entry[6]/conversion_factor,2),entry[0])
                 soma_node = entry[0]
                 #print('Soma found')
+
+                #make sure to set radius of soma node to -1 -> will look funky others (sphere will be added instead)
+                if use_radius:
+                    radii[ entry[0] ] = -1
 
         #if no soma is found, then search for nerve ending (for sensory neurons)
         #print(node_data[2])       
@@ -4508,7 +4554,22 @@ class CATMAIDtoBlender:
         except:
             pass
 
-        Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep)            
+        if color_by_strahler is not False:
+            strahler_indices = CATMAIDtoBlender.calc_strahler_index(new_child_list,root_node)
+            max_strahler_index = max([strahler_indices[n] for n in strahler_indices])
+            print('Max strahler index:', max_strahler_index)
+            Create_Mesh.prepare_strahler_mats(skid,max_strahler_index,color_by_strahler)
+        else:
+            strahler_indices = None
+            
+
+        ob = Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep, radii, strahler_indices)            
+        ob['skeleton_id'] = skid
+        ob['name'] = neuron_name                
+        ob['date_imported'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+        ob['resampling'] = resampling
+        ob['interpolate_virtual'] = interpolate_virtual
+        ob['use_radius'] = use_radius
 
         ### Search through connectors and create a list with coordinates
         if import_connectors is True:            
@@ -6039,7 +6100,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                    #Calculated volume of searched area: 4/3 * pi * radius**3
                    #Conversion from Blender Units into um: * 10.000 / 1.000 -> * 10
                    search_volume = 4/3 * math.pi * (self.proximity_radius_for_density * 10)**3
-                   f.write('\n <g id="density info"> \n <text x="%i" y = "150" font-size="6">\n Density data - total nodes: %i max density: %i [per %i um3] / \n </text> \n </g> \n'
+                   f.write('\n <g id="density info"> \n <text x="%i" y = "150" font-size="6">\n Density data - total nodes: %i max density: %i [per %f um3] / \n </text> \n </g> \n'
                                         % ( 15+offsetX,
                                             len(density_data),
                                             max_density,
@@ -6417,7 +6478,7 @@ class Create_Mesh (Operator):
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
 
-    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = []):
+    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = [], radii = {}, strahler_indices = None):
         ### Creates Neuron from Curve data that was imported from CATMAID
         #start_creation = time.clock()        
         now = datetime.datetime.now()        
@@ -6425,27 +6486,39 @@ class Create_Mesh (Operator):
         ob = bpy.data.objects.new('#' + neuron_name,cu)
         bpy.context.scene.objects.link(ob)
         ob.location = (0,0,0)
-        ob.show_name = True
-        ob['skeleton_id'] = skid
-        ob['name'] = name                
-        ob['date_imported'] = now.strftime("%Y-%m-%d %H:%M")
-        ob['resampling'] = resampling
+        ob.show_name = True        
         cu.dimensions = '3D'
         cu.fill_mode = 'FULL'
-        cu.bevel_depth = 0.007
         cu.bevel_resolution = 5        
-        neuron_material_name = 'M#' + neuron_name
+        neuron_material_name = 'M#' + neuron_name        
+
+        if radii:
+            #If radii are used, set basic depth to 1nm -> scale will set final size
+            cu.bevel_depth = 0.0001
+        else:
+            cu.bevel_depth = 0.007
         
         if len(neuron_material_name) > 59:
             neuron_material_name = neuron_material_name[0:59]
              
         print('Creating Neuron %s  (%s nodes)' %(ob.name, len(child_list)))
 
-        for child in child_list[root_node]:
-            Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep)
+        #Spline indices always gives the first and the last node id of a spline
+        spline_indices = []
 
-        #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s')        
-        Create_Mesh.assign_material (ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
+        for child in child_list[root_node]:
+            spline_indices = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices)
+
+        #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s') 
+        if not strahler_indices:       
+            Create_Mesh.assign_material (ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
+        else:
+            Create_Mesh.assign_strahler_materials ( ob, skid, spline_indices, strahler_indices )
+            try:
+                bpy.context.space_data.viewport_shade = 'MATERIAL'
+            except:
+                print('Unable to set viewport shade to material. Try manually!')
+            
         
         if soma != (0,0,0,0):
             soma_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, size=soma[3], view_align=False, \
@@ -6457,14 +6530,21 @@ class Create_Mesh (Operator):
             bpy.context.active_object.name = 'Soma of ' + neuron_name
             bpy.context.active_object['Soma of'] = skid
             
-            ### Apply the same Material as for neuron tree
-            Create_Mesh.assign_material (bpy.context.active_object, neuron_material_name, random.randrange(0,100)/100 , \
-                                        random.randrange(0,100)/100 , random.randrange(0,100)/100)
+            if not strahler_indices:
+                ### Apply the same Material as for neuron tree
+                Create_Mesh.assign_material (bpy.context.active_object, neuron_material_name, random.randrange(0,100)/100 , \
+                                            random.randrange(0,100)/100 , random.randrange(0,100)/100)
+            else:
+                soma_strahler = strahler_indices[ soma[4] ]
+                mat_name = '#%s StrahlerMat %i' % ( skid, soma_strahler )
+                bpy.context.active_object.active_material = bpy.data.materials[ mat_name ]
  
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
+
+        return ob
         
 
-    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep):
+    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices):
         if start_node in nodes_to_keep or first_child in nodes_to_keep:
             newSpline = cu.splines.new('POLY')
                 
@@ -6472,20 +6552,28 @@ class Create_Mesh (Operator):
             newPoint = newSpline.points[-1]
             newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
 
+            if radii:
+                newPoint.radius = max ( 1, radii[ start_node ] )
+
         active_node = first_child
         number_of_childs = len(child_list[active_node])
         ### nodes_created is a failsafe for while loop
         nodes_created = 0
             
-        while nodes_created < 10000:
+        while nodes_created < 20000:
             if active_node in nodes_to_keep:
                 newSpline.points.add()
                 newPoint = newSpline.points[-1]
                 newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
+                
+                if radii:
+                    newPoint.radius = max ( 1, radii[ active_node ] )
+
             nodes_created += 1
             
             ### Stop after creation of leaf or branch node
             if number_of_childs == 0 or number_of_childs > 1:
+                spline_indices.append( ( start_node, active_node ))
                 break
             
             active_node = child_list[active_node][0]
@@ -6499,8 +6587,9 @@ class Create_Mesh (Operator):
             ### If active node is branch point, start new splines for each child    
         if number_of_childs  > 1:
             for child in child_list[active_node]:
-                Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep)
+                spline_indices = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices)
 
+        return spline_indices
     
     def make_neuron(neuron_name, index, XYZcoords, origin, edges, faces, convert_to_curve=True, soma = (0,0,0)): 
         ### Create mesh and object
@@ -6723,6 +6812,66 @@ class Create_Mesh (Operator):
         bpy.context.scene.objects.active = ob
         ob.select = True
         bpy.context.active_object.active_material = new_mat
+
+    def prepare_strahler_mats (skid, max_strahler_index, color_by):
+        """ Creates a set of strahler indices for this neuron """
+
+        #Generate a random color
+        if color_by == 'color_alpha':
+            rand_col = (    random.randrange(0,100)/100 ,
+                            random.randrange(0,100)/100 , 
+                            random.randrange(0,100)/100
+                        )
+
+        for i in range(max_strahler_index):
+            mat_name = '#%s StrahlerMat %i' % (skid,i+1)
+            if mat_name not in bpy.data.materials:
+                new_mat = bpy.data.materials.new(mat_name)
+            else:
+                new_mat = bpy.data.materials[ mat_name ]         
+
+            
+            if color_by == 'grey_alpha':
+                new_mat.diffuse_color[0] = i/max_strahler_index
+                new_mat.diffuse_color[1] = i/max_strahler_index           
+                new_mat.diffuse_color[2] = i/max_strahler_index
+                new_mat.use_transparency = True
+                new_mat.alpha = (i+1)/max_strahler_index 
+                new_mat.emit = i/max_strahler_index
+            elif color_by == 'color_alpha':
+                new_mat.diffuse_color[0] = rand_col[0] * (i+1) / (max_strahler_index+1)
+                new_mat.diffuse_color[1] = rand_col[1] * (i+1) / (max_strahler_index+1)        
+                new_mat.diffuse_color[2] = rand_col[2] * (i+1) / (max_strahler_index+1)
+                new_mat.use_transparency = True
+                new_mat.alpha = (i+1)/max_strahler_index 
+                new_mat.emit = i/max_strahler_index
+            elif type(color_by) == type([]):
+                new_mat.diffuse_color[0] = color_by[0] * (i+1) / (max_strahler_index+1)
+                new_mat.diffuse_color[1] = color_by[1] * (i+1) / (max_strahler_index+1)        
+                new_mat.diffuse_color[2] = color_by[2] * (i+1) / (max_strahler_index+1)
+                new_mat.use_transparency = True
+                new_mat.alpha = (i+1)/max_strahler_index 
+                new_mat.emit = i/max_strahler_index
+
+    def assign_strahler_materials ( ob, skid, spline_indices, strahler_indices ):
+        """Assign strahler indices"""
+
+        strahler_mats = []               
+
+        for i,sp in enumerate(spline_indices):
+            this_str_index = strahler_indices[ sp[1] ]
+
+            print(i,sp,this_str_index)
+
+            mat_name = '#%s StrahlerMat %i' % (skid,this_str_index)
+
+            if mat_name not in ob.data.materials:
+                ob.data.materials.append( bpy.data.materials[mat_name] )
+                slot = len(ob.data.materials)
+            else:
+                slot = [ mat.name for mat in ob.data.materials ].index( mat_name )
+
+            ob.data.splines[i].material_index = slot
         
 
 class RandomMaterial (Operator):
@@ -6893,11 +7042,128 @@ class ColorByPairs (Operator):
         else:
             return False   
         
+
+class ColorByStrahler (Operator):
+    """Colors a neuron by strahler index. This is essentially a helper class that will just lead to a reload of these neurons with strahler coloring"""  
+    bl_idname = "color.by_strahler"  
+    bl_label = "Gives Paired Neurons the same Color (Annotation-based)"  
+    bl_options = {'UNDO'}
+    
+    which_neurons = EnumProperty(name = "Which Neurons?", 
+                                      items = [('All','All','All'),('Selected','Selected','Selected')],
+                                      description = "Choose which neurons to color by similarity.",
+                                      default = 'All')    
+    color_code = EnumProperty(name="Color code",
+                                   items = (
+                                            ('grey_alpha', 'Shades of grey', 'use shades of grey + alpha values'),   
+                                            ('color_alpha', 'New random color', 'use shades of a random color + alpha values'),
+                                            ('this_color', 'Use current color', 'use shades of current color + alpha values')                                          
+                                            ),
+                                    default =  "this_color",
+                                    description = "Choose how strahler index is encoded")
+
+    def execute(self, context):        
+        neurons_to_reload = {}
+        resampling = 1
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        neuron_names = {}
+        neuron_mats = {}
+        
+        ### Gather skeleton IDs
+        if self.which_neurons == 'All':
+            to_check = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_check = bpy.context.selected_objects            
+        elif self.which_neurons == 'Active':
+            to_check = [bpy.context.active_object]
+
+        for neuron in to_check:
+            if neuron.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',neuron.name).group(1)
+                    neurons_to_reload[neuron.name] = {}
+                    neurons_to_reload[neuron.name]['skid'] = skid
+                    neuron_names[skid] = neuron.name
+                    neuron_mats[skid] = neuron.active_material
+                    if 'resampling' in neuron:
+                        neurons_to_reload[neuron.name]['resampling'] = neuron['resampling']
+                    else:
+                        neurons_to_reload[neuron.name]['resampling'] = 1
+                except:
+                    print('Unable to process neuron', neuron.name)                    
+    
+        print(len(neurons_to_reload),'neurons to reload')
+        print('Coloring %i neurons' % len(neurons_to_reload))
+
+        ### Deselect all objects, then select objects to update (Skeletons, Inputs/Outputs)                         
+        for obj in bpy.data.objects:
+            obj.select = False
+            if obj.name.startswith('#') or obj.name.startswith('Soma of'):
+                for neuron in neurons_to_reload:
+                    if neurons_to_reload[neuron]['skid'] in obj.name:
+                        obj.select = True                    
+                
+        ### Delete selected objects        
+        bpy.ops.object.delete(use_global=False)              
+
+        print("Collecting skeleton data for %i neurons" % len(neurons_to_reload) )
+        threads = {}
+        skdata = {}
+        start = time.clock()
+        resampling_factors = {}
+        use_radius = {}
+
+        skids_to_reload = []
+        
+        for i,n in enumerate(neurons_to_reload):    
+            skid = neurons_to_reload[n]['skid']
+            skids_to_reload.append(skid)           
+
+            try:     
+                resampling_factors[skid] = neurons_to_reload[n]['resampling']
+            except:
+                resampling_factors[skid] = 1
+
+            try:     
+                use_radius[skid] = neurons_to_reload[n]['use_radius']
+            except:
+                use_radius[skid] = False
+
+        skdata, errors = retrieveSkeletonData( skids_to_reload , neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
+
+        print("Creating new, colored meshes for %i neurons" % len(skdata))
+        for skid in skdata:            
+            if self.color_code == 'this_color':
+                this_color = list(neuron_mats[skid].diffuse_color)
+                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = this_color )
+            else:
+                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = self.color_code )
+
+        print('Finished coloring in', time.clock()-start, 's') 
+        if errors is None:
+            msg = 'Success! %i neurons colored' % len(skdata)
+            self.report({'INFO'}, msg)   
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
+        else:
+            self.report({'ERROR'}, errors)    
+        return{'FINISHED'}                
+    
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self) 
+    
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False  
     
 class SetupMaterialsForRender (Operator):
     """Prepares all Neuron's materials for Render: Emit Value and Transparency"""  
     bl_idname = "for_render.all_materials"  
-    bl_label = "Prepare neurons' materials"  
+    bl_label = "Setup materials for render. Breaks coloring by strahler index!"  
     bl_options = {'UNDO'}
 
     emit_value = FloatProperty(     name="Emit Value",                                   
@@ -7232,16 +7498,16 @@ class ColorBySynapseCount(Operator):
                             mat.diffuse_color[0] = hsv[0]
                             mat.diffuse_color[1] = hsv[1]
                             mat.diffuse_color[2] = hsv[2]  
-                        elif mat.diffuse_color == mathutils.Color((0.0,0.0,0.0)):
+                        elif mat.diffuse_color == mathutils.Color((0.5,0.5,0.5)):
                             mat.diffuse_color[0] = colorsys.hsv_to_rgb(self.end_hue/360,1,1)[0]
                             mat.diffuse_color[1] = colorsys.hsv_to_rgb(self.end_hue/360,1,1)[1]
                             mat.diffuse_color[2] = colorsys.hsv_to_rgb(self.end_hue/360,1,1)[2]
                         #elif synapse_count[skid] >= 3:
                         else:
-                            mat.diffuse_color = (0.5,0.5,0.5)
-                            #mat.diffuse_color[0] = math.fabs((mat.diffuse_color[0] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[0])/2)
-                            #mat.diffuse_color[1] = math.fabs((mat.diffuse_color[1] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[1])/2)
-                            #mat.diffuse_color[2] = math.fabs((mat.diffuse_color[2] - colorsys.hsv_to_rgb(self.end_hue/360,1,1)[2])/2)                        
+                            #mat.diffuse_color = (0.5,0.5,0.5)
+                            mat.diffuse_color[0] = math.fabs((mat.diffuse_color[0] + colorsys.hsv_to_rgb(self.end_hue/360,1,1)[0])/2)
+                            mat.diffuse_color[1] = math.fabs((mat.diffuse_color[1] + colorsys.hsv_to_rgb(self.end_hue/360,1,1)[1])/2)
+                            mat.diffuse_color[2] = math.fabs((mat.diffuse_color[2] + colorsys.hsv_to_rgb(self.end_hue/360,1,1)[2])/2)                        
                         
                         if self.change_bevel is True:
                             object.data.bevel_depth = 0.007 + synapse_count[skid]/max_count * 0.014
@@ -10129,6 +10395,14 @@ class DisplayHelp(Operator):
             box.label(text='Thus manual changes have to be made to each neuron individually.')
             box.label(text='To facilitate, this function assigns a single material to given')
             box.label(text='group of neurons. Cannot be reversed!')
+        elif self.entry == 'color.by_strahler':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Color by Strahler - Tooltip')
+            box = layout.box()
+            box.label(text='Colors neurons by strahler index. Result may will look odd')
+            box.label(text='in the viewport unless viewport shading is set to <render> or')
+            box.label(text='<material>. In any case, if you render it will look awesome!')
 
 
     def invoke(self, context, event):        
