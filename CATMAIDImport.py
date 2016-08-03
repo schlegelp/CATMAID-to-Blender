@@ -304,7 +304,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 3, 1),
+ "version": (5, 4, 0),
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -4497,14 +4497,15 @@ class CATMAIDtoBlender:
             list_of_childs[entry[1]].append(entry[0])            
             
             ### Search for soma
-            if entry[6] > 1000:
-                soma = (X,Z,Y,round(entry[6]/conversion_factor,2),entry[0])
+            if entry[6] > 1000:                
                 soma_node = entry[0]
+
+                if use_radius is False:
+                    soma = (X,Z,Y,round(entry[6]/conversion_factor,2),entry[0])
                 #print('Soma found')
 
                 #make sure to set radius of soma node to -1 -> will look funky others (sphere will be added instead)
-                if use_radius:
-                    radii[ entry[0] ] = -1
+                
 
         #if no soma is found, then search for nerve ending (for sensory neurons)
         #print(node_data[2])       
