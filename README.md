@@ -1,7 +1,7 @@
 CATMAID-to-Blender
 ==================
 
-Plugin for [Blender](www.blender.org) to interface with [CATMAID](https://github.com/catmaid/CATMAID "CATMAID Repo") servers, request and analyze data. Tested with Blender 2.77 and CATMAID 2016.09.01
+Plugin for [Blender](http://www.blender.org) to interface with [CATMAID](https://github.com/catmaid/CATMAID "CATMAID Repo") servers, request and analyze data. Tested with Blender 2.77 and CATMAID 2016.09.01
 
 *I encourage you to open an issue or contact me directly if you run into problems or have a __feature request__!*
 
@@ -17,7 +17,7 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 3. Activate by checking box and 'Save User Setting'
 
 ######Required Python packages:
-[Blender](www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
+[Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
 
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
