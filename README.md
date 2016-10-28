@@ -34,7 +34,7 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 
 ![import_panel](https://cloud.githubusercontent.com/assets/7161148/5356718/c244a7a6-7f9f-11e4-8cef-b69b3cf20b32.PNG)
 
-- Functions (e.g. Retrieving skeletons/connectors) that need you to be logged into your CATMAID server will be grayed-out until did so by hitting 'Connect 2 CATMAID'
+- Functions (e.g. Retrieving skeletons/connectors) that need you to be logged into your CATMAID server will be grayed-out until you did so by hitting 'Connect 2 CATMAID'
 - Skeletons can be retrieved by their skeleton ID, by annotations or based on connectivity (Retrieve Partners)
   - Important side node: in order to identify cell bodies, the script searches for nodes with a radius > 10
 - Once imported, skeleton/connector data can be readily exported to vector graphics (SVG) with a broad range of options (e.g. coloring, filters, scaling). Look at lower left panel when exporting for these options.
