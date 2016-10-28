@@ -19,6 +19,14 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.5 28/10/2016:
+    - combined 'retrieve by annotation' and 'retrieve by skeleton id' into single button -> now called 'Import Neuron(s)'
+        - added search by tag (=neuron name)
+        - added option for partial match (works for names and annotations)
+        - added option to intersect between annotations and/or names
+    - changed width of all property pop ups to 500 -> they had been too small e.g. on Macs
+    - added check for CATMAID server version!
+
 ### V5.4 02/08/2016:
     - added 'color by strahler index
     - added option use node radius as thickness for neuron in Blender
@@ -304,7 +312,8 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 4, 0),
+ "version": (5, 5, 0),
+ "for_catmaid_version": '2016.09.01-107-g146bc78',
  "blender": (2, 7, 7),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -326,13 +335,18 @@ class CATMAIDimportPanel(bpy.types.Panel):
         layout = self.layout   
         
         #Version Check
-        config = bpy.data.scenes[0].CONFIG_VersionManager               
-        layout.label(text="Script Versions:")
-        layout.label(text="Your System: %s" % str(round(config.current_version,3)))
+        config = bpy.data.scenes[0].CONFIG_VersionManager  
+        layout.label(text="Your Blender Script Version: %s" % str(round(config.current_version,3)))
         if config.latest_version == 0:
-            layout.label(text="On Github: Unable to Retrieve")
+            layout.label(text="On Github: Please Connect...")
         else:
             layout.label(text="On Github: %s" % str(round(config.latest_version,3))) 
+
+        layout.label(text="Tested for CATMAID Version: %s" % config.tested_catmaid_version)
+        if config.your_catmaid_server == "":
+            layout.label(text="Your CATMAID Server: Please Connect...")
+        else:
+            layout.label(text="Your CATMAID Server: %s" % config.your_catmaid_server)
             
         if config.last_stable_version > config.current_version:
             layout.label(text="Your are behind the last working", icon = 'ERROR')  
@@ -342,13 +356,17 @@ class CATMAIDimportPanel(bpy.types.Panel):
             layout.label(text="https://github.com/schlegelp/CATMAID-to-Blender")
         elif config.latest_version > config.current_version and config.new_features != '':
             layout.label(text="New Features in Latest Version: %s" % config.new_features)
+
+        if config.your_catmaid_server != 'Please connect...' and config.your_catmaid_server != config.tested_catmaid_version:
+            layout.label(text="Your server is running a version of CATMAID", icon = 'ERROR')  
+            layout.label(text="       that may not be supported!")         
             
         if config.message != '':
             print('Message from Github: %s' % config.message)
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("check.version", text = "Check Version", icon ='VISIBLE_IPO_ON')
+        row.operator("check.version", text = "Check Versions", icon ='VISIBLE_IPO_ON')
 
         layout.label('Calculate Similarity:')
 
@@ -415,11 +433,11 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.neuron", text = "Retrieve by SkeletonID", icon = 'ARMATURE_DATA')#.number=1
+        row.operator("retrieve.neuron", text = "Import Neuron(s)", icon = 'ARMATURE_DATA')#.number=1
 
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'OUTLINER_DATA_FONT')#.number=1
+        #row = layout.row(align=True)
+        #row.alignment = 'EXPAND'
+        #row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'OUTLINER_DATA_FONT')#.number=1
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -476,6 +494,9 @@ class VersionManager(bpy.types.PropertyGroup):
     message = bpy.props.StringProperty(name="Message", default="", description="Message from Github") 
     new_features = bpy.props.StringProperty(name="New Features", default="", description="New features in latest Version of the Script on Github")     
 
+    your_catmaid_server = bpy.props.StringProperty(name="Your CATMAID Server Version", default='', description="Your CATMAID Server's Version")
+    tested_catmaid_version = bpy.props.StringProperty(name="Last tested CATMAID Version", default='', description="Last Version confirmed to Work with this Blender")
+
 class AnnotationManager(bpy.types.PropertyGroup):
     """Class to hold annotations
     """
@@ -522,12 +543,23 @@ class get_version_info(Operator):
             new_features = ''
             message = ''
 
+        tested_catmaid_version = str(bl_info['for_catmaid_version'])
+        print('This Script was tested with CATMAID Server Version: ', tested_catmaid_version)
+        try:
+            your_catmaid_server = remote_instance.fetch( remote_instance.djangourl('/version') )['SERVER_VERSION']
+            print('You are running CATMAID Server Version: ', your_catmaid_server)
+        except:
+            your_catmaid_server = 'Please connect...'
+
+
         config = bpy.data.scenes[0].CONFIG_VersionManager    
         config.current_version = current_version
         config.latest_version = float(latest_version)
         config.last_stable_version = float(last_stable)
         config.message = message
         config.new_features = new_features
+        config.tested_catmaid_version = tested_catmaid_version
+        config.your_catmaid_server = your_catmaid_server
         
     #@classmethod
     #def poll(cls, context):                
@@ -637,7 +669,7 @@ class CatmaidInstance:
     def get_contributions_url(self, pid, skid):
        return self.djangourl("/" + str(pid) + "/skeleton/" + str(skid) + "/contributor_statistics" )     
 
-    #Use to parse url for retrieving annotated neurons (does need post data)
+    #Use to parse url for retrieving neurons with given annotation or name (does need post data)
     def get_annotated_url(self, pid):
         #return self.djangourl("/" + str(pid) + "/neuron/query-by-annotations" )
         return self.djangourl("/" + str(pid) + "/annotations/query-targets" )
@@ -662,6 +694,36 @@ class CatmaidInstance:
     #Returns list of edges: [source_skid, target_skid, weight]
     def get_edges_url(self, pid):
         return self.djangourl("/" + str(pid) + "/skeletongroup/skeletonlist_confidence_compartment_subgraph" )
+
+    def search_url(self,tag,pid):
+        return self.djangourl("/" + str(pid) + "/search?pid=" + str(pid) +  "&substring=" + str(tag) )
+
+    #Use to get all skeletons of a given neuron (neuron_id)
+    def get_skeletons_from_neuron_id(self,neuron_id,pid):
+        return self.djangourl("/" + str(pid) + "/neuron/" + str(neuron_id) + '/get-all-skeletons' )
+
+def search_neuron_names(tag, allow_partial = True):
+    search_url = remote_instance.get_annotated_url( project_id  )
+    annotation_post = { 'name': str(tag) , 'rangey_start': 0, 'range_length':500, 'with_annotations':False } 
+
+    results = remote_instance.fetch( search_url, annotation_post ) 
+
+    match = []
+    for e in results['entities']:
+        if allow_partial and e['type'] == 'neuron' and tag.lower() in e['name'].lower():
+            match += e['skeleton_ids']
+        if not allow_partial and e['type'] == 'neuron' and e['name'] == tag:
+            match += e['skeleton_ids']
+
+    return match
+
+def get_skids_from_neuron_ids(neuron_ids):
+    skids = []
+
+    for n in neuron_ids:
+        skids += remote_instance.fetch( remote_instance.get_skeletons_from_neuron_id( n , project_id ) )
+
+    return skids
 
 def get_3D_skeleton ( skids, remote_instance, connector_flag = 1, tag_flag = 1):
     """
@@ -1153,7 +1215,7 @@ class UpdateNeurons(Operator):
         return{'FINISHED'} 
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)        
+        return context.window_manager.invoke_props_dialog(self, width = 500)        
     
     @classmethod        
     def poll(cls, context):
@@ -1164,23 +1226,47 @@ class UpdateNeurons(Operator):
 
 
 class RetrieveNeuron(Operator):      
-    """Retrieves Skeletons from CATMAID database; use any delimiter; ID may contain only integers"""
+    """Retrieves Skeletons from CATMAID database"""
     ### ATTENTION: operator accepts only 400 characters - equals about 50 neurons
     bl_idname = "retrieve.neuron"  
-    bl_label = "Enter skeleton ID(s)"
-    
-    skeleton_id = StringProperty(name="Skeleton ID(s)",
-                                 description = "Enter skeleton IDs. Separate multiple skids by comma without spaces!"
+    bl_label = "Enter Search Parameters"
+
+    names = StringProperty(name="Name(s)",
+                                 description = "Search by neuron names. Multiple names comma-sparated."
                                 ) 
 
-    import_connectors = BoolProperty(   name="Import Connectors", 
+    partial_match_name = BoolProperty(   name="Allow partial NAME match?", 
+                                        default = True,
+                                        description = "Allow partial matches in neuron name! Will also become case-insensitive.")    
+    
+    
+    annotations = StringProperty(name="Annotations(s)",
+                                 description = "Search by skeleton IDs. Multiple annotations comma-sparated."
+                                ) 
+
+    partial_match_annotation = BoolProperty(   name="Allow partial ANNOTATION match?", 
+                                        default = False,
+                                        description = "Allow partial matches in neuron name! Will also become case-insensitive.") 
+
+    intersect = BoolProperty(   name="Intersect Name(s) and/or Annotation(s)", 
+                                        default = False,
+                                        description = "If true, all identifiers (e.g. two annotations or name + annotation) have to be true for a neuron to be loaded")
+
+    skeleton_ids = StringProperty(name="Skeleton ID(s)",
+                                 description = "Search by skeleton IDs. Multiple skids comma-sparated. Attention: Does not accept more than 400 characters!"
+                                ) 
+     
+
+    import_connectors = BoolProperty(   name="Import Synapses", 
                                         default = True,
                                         description = "Imports Connectors (pre-/postsynapses), similarly to 3D Viewer in CATMAID")
+
     resampling = IntProperty(name="Resampling Factor", 
                              default = 2, 
                              min = 1, 
                              max = 20,
                              description = "Will reduce number of nodes by given factor. Root, ends and forks are preserved!")
+
     truncate_neuron = EnumProperty(name="Truncate Neuron?",
                                    items = (('none','No','Load full neuron'),
                                             ('main_neurite','Main Neurite','Truncate Main Neurite'),
@@ -1195,12 +1281,48 @@ class RetrieveNeuron(Operator):
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!"
                                     )  
+
     interpolate_virtual = BoolProperty( name="Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!")
+
     use_radius = BoolProperty( name="Use node radii", 
                                         default = False,
                                         description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
+
+
+    def draw(self, context):
+        layout = self.layout
+         
+        box = layout.box()
+        row = box.row(align=False)        
+        row.prop(self, "names")
+        row = box.row(align=False)  
+        row.prop(self, "partial_match_name")
+        row = box.row(align=False)  
+        row.prop(self, "annotations")
+        row = box.row(align=False)  
+        row.prop(self, "partial_match_annotation")
+        row = box.row(align=False)  
+        row.prop(self, "intersect")
+        row = box.row(align=False)  
+        row.prop(self, "skeleton_ids")
+
+        layout.label(text="Import Options") 
+        box = layout.box()
+        row = box.row(align=False)
+        row.prop(self, "import_connectors")        
+        row = box.row(align=False)        
+        row.prop(self, "resampling")
+        row = box.row(align=False)        
+        row.prop(self, "truncate_neuron")
+        row = box.row(align=False)        
+        row.prop(self, "truncate_value")
+        row = box.row(align=False)        
+        row.prop(self, "interpolate_virtual")
+        row = box.row(align=False)        
+        row.prop(self, "use_radius")
+
       
     
     def execute(self, context):  
@@ -1208,35 +1330,62 @@ class RetrieveNeuron(Operator):
         
         errors = []
 
-        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor  
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor 
+
+        retrieve_by_annotations = []
+        retrieve_by_names = []
+        retrieve_by_skids = []
+
+        if self.names:
+            osd.show("Looking for Names...")
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+            
+            for n in [x.strip() for x in self.names.split(',')]:
+                retrieve_by_names +=  search_neuron_names( n, allow_partial = self.partial_match_name )
+
+            retrieve_by_names = [str(e) for e in retrieve_by_names]
+
+            if not retrieve_by_names:
+                print('WARNING: Search tag(s) not found!')
+                self.report({'ERROR'},'Search tag(s) not found!')
+                osd.show("WARNING: Search tag(s) not found!")
+                bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+        if self.skeleton_ids:
+            retrieve_by_skids = [x.strip() for x in self.skeleton_ids.split(',')]
+
+        if self.annotations:
+            annotations_to_retrieve = [x.strip() for x in self.annotations.split(',')]
+            retrieve_by_annotations = self.retrieve_annotated( annotations_to_retrieve )
+
+        if self.intersect and self.annotations and self.names:
+            skeletons_to_retrieve = list( set(  [ e for e in retrieve_by_names + retrieve_by_annotations if e in retrieve_by_names and e in retrieve_by_annotations ]  + retrieve_by_skids ) )
+
+            if not skeletons_to_retrieve:
+                print('WARNING: No neurons left after intersection!')
+                self.report({'ERROR'},'Intersection empty!')
+                osd.show("WARNING: Intersection empty!")
+                bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+        else:
+            skeletons_to_retrieve = list( set( retrieve_by_skids + retrieve_by_names + retrieve_by_annotations ) )
+
         
         ### Extract skeleton IDs from skeleton_id string
-        skeletons_to_retrieve = re.findall('[0-9]+',self.skeleton_id)
-        print('%i skeleton ids found - resolving names...' % len(skeletons_to_retrieve))
-        
-        neuron_names = get_neuronnames(skeletons_to_retrieve)
-        
-        print('Done:')
-        print(neuron_names)
+        print('%i neurons found - resolving names...' % len(skeletons_to_retrieve)) 
+        neuron_names = get_neuronnames(skeletons_to_retrieve)  
+        #print('Neuron names:' , neuron_names)     
 
         self.count = 1
 
-        print("Collection skeleton data for:",skeletons_to_retrieve)
-        start = time.clock()
+        print("Collection skeleton data...:")
+        start = time.clock()       
 
-        skids_to_retrieve = []
-        for i,skid in enumerate(skeletons_to_retrieve):      
-            if re.search('[a-zA-Z]', self.skeleton_id):
-                print ('Invalid Skeleton ID')
-                continue  
-            else:
-                skids_to_retrieve.append(skid)
-
-        skdata,errors = retrieveSkeletonData( skids_to_retrieve , neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out ) 
+        skdata,errors = retrieveSkeletonData( skeletons_to_retrieve , neuron_names , context.user_preferences.addons['CATMAIDImport'].preferences.time_out ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
-            CATMAIDtoBlender.extract_nodes(skdata[skid], skid, neuron_names[skid], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
+            CATMAIDtoBlender.extract_nodes(skdata[skid], str(skid), neuron_names[str(skid)], self.resampling, self.import_connectors, self.truncate_neuron, self.truncate_value, self.interpolate_virtual, self.conversion_factor, use_radius = self.use_radius)
 
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
@@ -1250,7 +1399,60 @@ class RetrieveNeuron(Operator):
 
                         
         return {'FINISHED'}
+   
 
+    def retrieve_annotated(self, annotations_to_retrieve):  
+         ### Get annotation IDs
+        osd.show("Looking for Annotations...")
+        print('Looking for Annotations:', annotations_to_retrieve)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+        print('Retrieving list of Annotations...')
+        an_list = remote_instance.fetch( remote_instance.get_annotation_list( project_id ) )    
+
+        print('List of %i annotations retrieved.' % len(an_list['annotations']))
+
+        annotation_ids = []
+        annotation_names = []
+        if not self.partial_match_annotation:
+            annotation_ids = [ x['id'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
+            annotation_names = [ x['name'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
+        else:
+            annotation_ids = [ x['id'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
+            annotation_names = [ x['name'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
+        
+        if not annotation_ids:
+            print('ERROR: No matching anotation(s) found!')
+            self.report({'ERROR'},'No matching anotation(s) found!')
+            osd.show("ERROR: No matching anotation(s) found!")
+            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+            return []
+
+        #Now retrieve annotated skids
+        print('Looking for Annotation(s) | %s | (id: %s)' % ( str(annotation_names), str(annotation_ids) ) )
+        #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
+        if self.intersect:
+            annotation_post = { 'rangey_start': 0, 'range_length':500, 'with_annotations':False }            
+            for i,e in enumerate(annotation_ids):
+                key = 'annotated_with[%i]' % i
+                annotation_post[key] = e
+
+            remote_annotated_url = remote_instance.get_annotated_url( project_id )
+            neuron_list = [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
+
+        else:
+            neuron_list = []
+            for e in annotation_ids:
+                annotation_post = { 'annotated_with[0]': e, 'rangey_start': 0, 'range_length':500, 'with_annotations':False }   
+                remote_annotated_url = remote_instance.get_annotated_url( project_id )
+                neuron_list += [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
+
+        annotated_skids = list(set(neuron_list))  
+        
+        print('Annotation(s) found for %i neurons' % len(annotated_skids))  
+        neuron_names = get_neuronnames(annotated_skids)            
+
+        return annotated_skids
 
     def add_skeleton(self, skeleton_id, neuron_name = '', resampling = 1, import_connectors = True, truncate_neuron = 'none', truncate_value = 1,  interpolate_virtual = False):
         
@@ -1289,7 +1491,7 @@ class RetrieveNeuron(Operator):
         return error    
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)    
+        return context.window_manager.invoke_props_dialog(self, width = 500)    
     
     @classmethod        
     def poll(cls, context):
@@ -1449,7 +1651,7 @@ class RetrievePairs(Operator):
             self.report({'ERROR'}, errors)
         
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
     
 
     @classmethod        
@@ -1537,7 +1739,7 @@ class RetrieveInVolume(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)        
+        return context.window_manager.invoke_props_dialog(self, width = 500)        
 
     def draw(self, context):
         layout = self.layout
@@ -1590,7 +1792,7 @@ def retrieveSkeletonData(skid_list,neuron_names=[],time_out=20):
 
     print('Creating threads to retrieve skeleton data:')
     for i,skid in enumerate(skid_list): 
-        if neuron_names:
+        if skid in neuron_names:
             if checkIfNeuronExists(skid,neuron_names[skid]):
                 #print(neuron_names[skid],'already exists - skipping.')
                 continue
@@ -1671,6 +1873,7 @@ def checkIfNeuronExists(skid,neuron_name):
         return True
     else:
         return False
+    
 
 class RetrievebyAnnotation(Operator):       
     """Retrieve Neurons from CATMAID database based on Annotation"""
@@ -1751,7 +1954,7 @@ class RetrievebyAnnotation(Operator):
 
     
     def retrieve_annotated(self, annotation, annotation_id):        
-        print('Looking for Annotation | %s | (id: %s)' % (annotation,annotation_id))
+        print('Looking for Annotation | %s | (id: %s)' % ( annotation, annotation_id ) )
         #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
         annotation_post = {'annotated_with0': annotation_id, 'rangey_start': 0, 'range_length':500, 'with_annotations':False}
         remote_annotated_url = remote_instance.get_annotated_url( project_id )
@@ -1789,7 +1992,7 @@ class RetrievebyAnnotation(Operator):
         
         
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500 )
     
 
     @classmethod        
@@ -1902,7 +2105,7 @@ class OLDRetrieveByAnnotation(Operator):
         print('Finished Import in', time.clock()-start, 's')        
         
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)    
+        return context.window_manager.invoke_props_dialog(self, width = 500)    
 
     @classmethod        
     def poll(cls, context):
@@ -2116,6 +2319,8 @@ class RetrieveConnectors(Operator):
                 ### Extract number of postsynaptic targets for connectors    
                 for connector in connector_data_post:
                     number_of_targets[connector[0]] = len(connector[1]['postsynaptic_to'])              
+
+            print('Number of postsynapses/connector:', number_of_targets)
                 
             ### Create a sphere for every connector - presynapses will be scaled based on number of postsynaptic targets
             if self.color_prop == 'Black':
@@ -2134,7 +2339,7 @@ class RetrieveConnectors(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
     
 def availableObjects(self, context):
     """
@@ -4264,7 +4469,7 @@ class RetrievePartners(Operator):
         
         
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
     
     @classmethod        
     def poll(cls, context):
@@ -4443,7 +4648,7 @@ class CATMAIDtoBlender:
                         color_by_strahler = False):
         
         index = 1            
-        cellname = skid + ' - ' + neuron_name                
+        cellname = str(skid) + ' - ' + neuron_name                
         origin = (0,0,0)
         faces = []  
         XYZcoords = []
@@ -5050,10 +5255,7 @@ class ConnectToCATMAID(Operator):
     def execute(self, context):               
         global remote_instance, connected, project_id
 
-        addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences       
-        
-        #Check for latest version of the Script
-        get_version_info.check_version(context)
+        addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences        
         
         print('Connecting to CATMAID server')
         print('HTTP user: %s' % self.local_http_user)
@@ -5062,6 +5264,9 @@ class ConnectToCATMAID(Operator):
 
         #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, \                                           self.local_http_pw )          
         remote_instance = CatmaidInstance( self.local_server_url, self.local_http_user, self.local_http_pw, self.local_token )      
+
+        #Check for latest version of the Script
+        get_version_info.check_version(context)
 
         """
         response = json.loads( remote_instance.auth().decode( 'utf-8' ) )
@@ -5136,7 +5341,7 @@ class ConnectToCATMAID(Operator):
         self.local_server_url = addon_prefs.server_url
         #self.local_catmaid_user = catmaid_user
         #self.local_catmaid_pw = catmaid_pw
-        return context.window_manager.invoke_props_dialog(self)      
+        return context.window_manager.invoke_props_dialog(self, width = 500)      
       
     
 class ExportAllToSVG(Operator, ExportHelper):
@@ -6921,7 +7126,7 @@ class RandomMaterial (Operator):
         return {'FINISHED'}
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)  
+        return context.window_manager.invoke_props_dialog(self, width = 500)  
     
 class ColorByPairs (Operator):
     """Gives Paired Neurons the same Color (Annotation-based)"""  
@@ -7034,7 +7239,7 @@ class ColorByPairs (Operator):
         return {'FINISHED'}
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self) 
+        return context.window_manager.invoke_props_dialog(self, width = 500) 
     
     @classmethod        
     def poll(cls, context):
@@ -7152,7 +7357,7 @@ class ColorByStrahler (Operator):
         return{'FINISHED'}                
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self) 
+        return context.window_manager.invoke_props_dialog(self, width = 500) 
     
     @classmethod        
     def poll(cls, context):
@@ -7193,7 +7398,7 @@ class SetupMaterialsForRender (Operator):
         return {'FINISHED'}           
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self) 
+        return context.window_manager.invoke_props_dialog(self, width = 500) 
 
 
 class RenderAllNeurons(Operator):
@@ -7562,7 +7767,7 @@ class ColorBySynapseCount(Operator):
             
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)  
+        return context.window_manager.invoke_props_dialog(self, width = 500)  
     
     @classmethod        
     def poll(cls, context):
@@ -7651,7 +7856,7 @@ class ColorByAnnotation(Operator):
         return{'FINISHED'}
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)      
+        return context.window_manager.invoke_props_dialog(self, width = 500)      
     
     @classmethod        
     def poll(cls, context):
@@ -7804,7 +8009,7 @@ class CalculateSimilarityModalHelper(Operator):
         
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
 
     def execute (self, context):
         global similarity_scores_options
@@ -8263,7 +8468,7 @@ class CalculateSimilarityModal(Operator):
                 self.neurons_to_process = self.neurons_to_process[to_open:]
 
                 ahd.show('Processing neurons [%i of %i]' % (len(self.threads_closed) ,len(self.neurons)) )
-                osd.show('Calculating similiarity scores... (ESC to cancel)')
+                osd.show('Calculating similarity scores... (ESC to cancel)')
 
             for t in self.threads:
                 if t in self.threads_closed:
@@ -9092,7 +9297,7 @@ class ColorBySimilarity(Operator):
 
     def invoke(self, context, event):    
         ahd.reinitalize()       
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
 
     def execute (self, context):
         #Check if numpy is installed
@@ -9675,7 +9880,7 @@ class ColorBySimilarity(Operator):
         return sum(((a-b) for a,b in zip(v1,v2)))
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)  
+        return context.window_manager.invoke_props_dialog(self, width = 500)  
 
     def check_resolution(self,neuron):
         """
@@ -10142,7 +10347,7 @@ class SelectAnnotation(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
 
     @classmethod        
     def poll(cls, context):
@@ -10151,7 +10356,7 @@ class SelectAnnotation(Operator):
         else:
             return False
 
-class SelectAnnotation(Operator):
+class NeuronStatistics(Operator):
     """Get statistics of loaded neurons"""  
     bl_idname = "analyze.statistics"  
     bl_label = "Select neurons by annotation"
@@ -10246,7 +10451,7 @@ class SelectAnnotation(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
 
     @classmethod        
     def poll(cls, context):
@@ -10313,7 +10518,7 @@ class UnifyMaterial(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
 
 
 class DisplayHelp(Operator):
@@ -10407,7 +10612,7 @@ class DisplayHelp(Operator):
 
 
     def invoke(self, context, event):        
-        return context.window_manager.invoke_popup(self,width=400)
+        return context.window_manager.invoke_popup(self,width=500)
     
 
 class ColorBySpatialDistribution(Operator):
@@ -10581,7 +10786,7 @@ class ColorBySpatialDistribution(Operator):
     
     
     def invoke(self, context, event):        
-        return context.window_manager.invoke_props_dialog(self)
+        return context.window_manager.invoke_props_dialog(self, width = 500)
     
 def calc_color (value, max_value, start_rgb, end_rgb,take_longest_route):
     """
