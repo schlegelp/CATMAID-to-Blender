@@ -10,18 +10,19 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 
 ######Option A:
 2. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
-3. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAID' addon and activate by checking box -> 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
+3. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAIDImport' addon 
+4. Activate the script by ticking the check box and click 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 ######Option B:
 2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> 'Install from File' and select CATMAIDImport.py
-3. Activate by checking box and 'Save User Setting'
+3. Activate by ticking check box and click 'Save User Setting'
 
 ######Required Python packages:
 [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
 
 ## Before First Use:
 Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
-You may also set credentials to be saved for convenience.
+You may also save your credentials for convenience.
 
 ![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
 
