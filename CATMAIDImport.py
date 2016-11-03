@@ -19,6 +19,10 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.51 03/11/2016:
+    - added export and import of meshes to/from CATMAID
+    - minor improvements in UI
+
 ### V5.5 28/10/2016:
     - combined 'retrieve by annotation' and 'retrieve by skeleton id' into single button -> now called 'Import Neuron(s)'
         - added search by tag (=neuron name)
@@ -485,11 +489,14 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("calc.similarity_modal_settings", text = "Settings", icon ='MODIFIER')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
 
-        layout.label('Export to CATMAID:')
+        layout.label('Volumes:')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("export.volume", text = 'Export Volume', icon = 'BORDER_RECT')
+        row.operator("export.volume", text = 'Export Mesh', icon = 'EXPORT')
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("import.volume", text = 'Import Volume', icon = 'IMPORT')
         
         
 class VersionManager(bpy.types.PropertyGroup):
@@ -712,6 +719,14 @@ class CatmaidInstance:
     #Use to parse url for adding volumes
     def add_volume(self, pid):
         return self.djangourl("/" + str(pid) + "/volumes/add")
+
+    #Get list of all volumes in project
+    def get_volumes(self, pid):
+        return self.djangourl("/" + str(pid) + "/volumes/")
+
+    #Get details on a given volume
+    def get_volume_details(self, pid, volume_id):
+        return self.djangourl("/" + str(pid) + "/volumes/" + str(volume_id) )
 
 def search_neuron_names(tag, allow_partial = True):
     search_url = remote_instance.get_annotated_url( project_id  )
@@ -10545,7 +10560,11 @@ class ExportVolume(Operator):
 
     volume_name = StringProperty(  name= 'Name',
                                 default = '',
-                                description = 'Exporte mesh will show up under this name in CATMAID.'
+                                description = 'Exported mesh will show up under this name in CATMAID.'
+                                )
+    comment = StringProperty(  name= 'Comment',
+                                default = '',
+                                description = 'Add comment to mesh.'
                                 )
     
 
@@ -10610,7 +10629,8 @@ class ExportVolume(Operator):
 
         postdata = {'title':  self.volume_name,
                     'type': 'trimesh',
-                    'mesh': mesh
+                    'mesh': mesh,
+                    'comment': self.comment
                     }
 
         add_volume_url = remote_instance.add_volume( project_id )
@@ -10645,6 +10665,137 @@ class ExportVolume(Operator):
         layout.label(text="Requires CATMAID version 2016.04.18 or higher. Meshes will be converted into trimesh - please")
         layout.label(text="save before clicking OK.")           
         layout.prop(self, "volume_name")  
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
+
+def availableVolumes(self, context):
+    """
+    Receives available volumes
+    """
+    get_volumes_url = remote_instance.get_volumes(project_id)
+
+    response =  remote_instance.fetch ( get_volumes_url )  
+
+    global available_v
+
+    available_v = [ ( str( e['id'] ) , e['name'], str( e['comment'] ) ) for e in response ]
+
+    return available_v
+
+class ImportVolume(Operator):
+    """Imports a volume (mesh) from CATMAID"""
+    bl_idname = "import.volume"
+    bl_label = "Import volumes from CATMAID" 
+    bl_options = {'UNDO'}       
+
+    volume = EnumProperty( name='Volume to Import',
+                            items=availableVolumes,
+                            description = 'Select volume to be imported. Will refresh whenever this dialog is opened'
+                            )
+    
+
+    def execute(self,context):      
+        conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
+
+        url = remote_instance.get_volume_details( project_id, self.volume )
+
+        response = remote_instance.fetch(url)
+
+        mesh_string = response['mesh']
+        mesh_name = response['name']
+
+        mesh_type = re.search('<(.*?) ', mesh_string).group(1)
+
+        #Now reverse engineer the mesh
+        if mesh_type  == 'IndexedTriangleSet':            
+            t = re.search("index='(.*?)'", mesh_string).group(1).split(' ')
+            faces = [ ( int( t[i] ), int( t[i+1] ), int( t[i+2] ) ) for i in range( 0, len(t) - 2 , 3 ) ]
+
+            v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
+            vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
+
+        elif mesh_type  == 'IndexedFaceSet':
+            #For this type, each face is indexed and an index of -1 indicates the end of this face set
+            t = re.search("coordIndex='(.*?)'", mesh_string).group(1).split(' ')
+            faces = []
+            this_face = []
+            for f in t:
+                if int(f) != -1:
+                    this_face.append( int(f) )
+                else:
+                    faces.append( this_face )
+                    this_face = []
+
+            #Make sure the last face is also appended
+            faces.append( this_face )
+
+            v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
+            vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
+
+        else:
+            print("Unknown volume type:", mesh_type)
+            print(mesh_string)                
+            osd.show("Export cancelled - unknown volume type" )
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start() 
+            return{'FINISHED'}
+
+        #For some reason, in this format vertices occur multiple times - we have to collapse that to get a clean mesh
+        final_faces = []
+        final_vertices = []
+
+        for t in faces:
+            this_faces = []
+            for v in t:
+                if vertices[v] not in final_vertices:
+                    final_vertices.append( vertices[v] )
+                    
+                this_faces.append( final_vertices.index( vertices[v] ) )
+
+            final_faces.append( this_faces )
+
+        print('Volume type:', mesh_type)
+        print('# of vertices after clean-up:' , len(final_vertices) )
+        print('# of faces after clean-up:' , len(final_faces) )     
+
+        #Now bring vertices in Blender space
+        blender_verts = [ ( v[0] / conversion_factor, v[2] / conversion_factor , v[1] / - conversion_factor  ) for v in final_vertices ]
+
+        #Now create the mesh
+        me = bpy.data.meshes.new(mesh_name + '_mesh')
+        ob = bpy.data.objects.new(mesh_name, me)
+
+        scn = bpy.context.scene
+        scn.objects.link(ob)
+        scn.objects.active = ob
+        ob.select = True
+
+        me.from_pydata(blender_verts, [], final_faces)
+        me.update()
+
+        
+
+        
+        return{'FINISHED'}
+
+
+    def invoke(self, context, event): 
+        #self.available_volumes = availableVolumes(self, context)
+        return context.window_manager.invoke_props_dialog(self, width = 500)    
+
+    """
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="This will export the ACTIVE object. Will then show up in CATMAID 3D viewer and volume manager.")        
+        layout.label(text="Requires CATMAID version 2016.04.18 or higher. Meshes will be converted into trimesh - please")
+        layout.label(text="save before clicking OK.")           
+        layout.prop(self, "volume_name")  
+    """
 
     @classmethod        
     def poll(cls, context):
