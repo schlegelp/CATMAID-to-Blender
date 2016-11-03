@@ -366,19 +366,45 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("check.version", text = "Check Versions", icon ='VISIBLE_IPO_ON')
+        row.operator("check.version", text = "Check Versions", icon ='VISIBLE_IPO_ON')       
+        
 
-        layout.label('Calculate Similarity:')
+        layout.label('CATMAID Import:')
 
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'  
-        row.operator_context = 'INVOKE_DEFAULT'      
-        row.operator("calc.similarity_modal", text = "Start Calculation", icon ='PARTICLE_PATH')
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("calc.similarity_modal_settings", text = "Settings", icon ='MODIFIER')
-        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
-               
+        row.operator("connect.to_catmaid", text = "Connect 2 CATMAID", icon = 'PLUGIN')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("retrieve.neuron", text = "Import Neuron(s)", icon = 'ARMATURE_DATA')#.number=1
+
+        #row = layout.row(align=True)
+        #row.alignment = 'EXPAND'
+        #row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'OUTLINER_DATA_FONT')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("retrieve.partners", text = "Retrieve Partners", icon = 'AUTOMERGE_ON')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("retrieve.by_pairs", text = "Retrieve Paired", icon = 'MOD_ARRAY')#.number=1
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.by_pairs' 
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'        
+        row.operator("retrieve.in_volume", text = "Retrieve in Volume", icon = 'BBOX')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'        
+        row.operator("reload.neurons", text = "Reload Neurons", icon = 'FILE_REFRESH')#.number=1
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("retrieve.connectors", text = "Retrieve Connectors", icon = 'PMARKER_SEL')#.number=1
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
+
         layout.label('Materials:')        
 
         row = layout.row(align=True)
@@ -423,43 +449,6 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("for_render.all_materials", text = "Setup 4 Render", icon ='SCENE')
-        
-
-        layout.label('CATMAID Import:')
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("connect.to_catmaid", text = "Connect 2 CATMAID", icon = 'PLUGIN')#.number=1
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("retrieve.neuron", text = "Import Neuron(s)", icon = 'ARMATURE_DATA')#.number=1
-
-        #row = layout.row(align=True)
-        #row.alignment = 'EXPAND'
-        #row.operator("retrieve.by_annotation", text = "Retrieve by Annotation", icon = 'OUTLINER_DATA_FONT')#.number=1
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("retrieve.partners", text = "Retrieve Partners", icon = 'AUTOMERGE_ON')#.number=1
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("retrieve.by_pairs", text = "Retrieve Paired", icon = 'MOD_ARRAY')#.number=1
-        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.by_pairs' 
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'        
-        row.operator("retrieve.in_volume", text = "Retrieve in Volume", icon = 'BBOX')#.number=1
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'        
-        row.operator("reload.neurons", text = "Reload Neurons", icon = 'FILE_REFRESH')#.number=1
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("retrieve.connectors", text = "Retrieve Connectors", icon = 'PMARKER_SEL')#.number=1
-        row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
 
         
         layout.label(text="Export to SVG:")
@@ -476,13 +465,31 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("select.by_annotation", text = 'By Annotation', icon = 'BORDER_RECT')
+        row.operator("select.by_annotation", text = 'By Annotation', icon = 'BORDER_RECT')        
 
         layout.label('Analyze:')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("analyze.statistics", text = 'Get Statistics', icon = 'BORDER_RECT')
+
+
+        layout.label('Calculate Similarity:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'  
+        row.operator_context = 'INVOKE_DEFAULT'      
+        row.operator("calc.similarity_modal", text = "Start Calculation", icon ='PARTICLE_PATH')
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("calc.similarity_modal_settings", text = "Settings", icon ='MODIFIER')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_similarity'
+
+        layout.label('Export to CATMAID:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("export.volume", text = 'Export Volume', icon = 'BORDER_RECT')
         
         
 class VersionManager(bpy.types.PropertyGroup):
@@ -701,6 +708,10 @@ class CatmaidInstance:
     #Use to get all skeletons of a given neuron (neuron_id)
     def get_skeletons_from_neuron_id(self,neuron_id,pid):
         return self.djangourl("/" + str(pid) + "/neuron/" + str(neuron_id) + '/get-all-skeletons' )
+
+    #Use to parse url for adding volumes
+    def add_volume(self, pid):
+        return self.djangourl("/" + str(pid) + "/volumes/add")
 
 def search_neuron_names(tag, allow_partial = True):
     search_url = remote_instance.get_annotated_url( project_id  )
@@ -1346,10 +1357,11 @@ class RetrieveNeuron(Operator):
             retrieve_by_names = [str(e) for e in retrieve_by_names]
 
             if not retrieve_by_names:
-                print('WARNING: Search tag(s) not found!')
-                self.report({'ERROR'},'Search tag(s) not found!')
-                osd.show("WARNING: Search tag(s) not found!")
+                print('WARNING: Search tag(s) not found! Import stopped')
+                self.report({'ERROR'},'Search tag(s) not found! Import stopped')
+                osd.show("WARNING: Search tag(s) not found! Import stopped")
                 bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                return{'FINISHED'}
 
         if self.skeleton_ids:
             retrieve_by_skids = [x.strip() for x in self.skeleton_ids.split(',')]
@@ -1358,14 +1370,23 @@ class RetrieveNeuron(Operator):
             annotations_to_retrieve = [x.strip() for x in self.annotations.split(',')]
             retrieve_by_annotations = self.retrieve_annotated( annotations_to_retrieve )
 
+            if not retrieve_by_annotations:
+                print('ERROR: No matching anotation(s) found! Import stopped')
+                self.report({'ERROR'},'No matching anotation(s) found! Import stopped')
+                osd.show("ERROR: No matching anotation(s) found! Import stopped")
+                bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                return{'FINISHED'}
+
+
         if self.intersect and self.annotations and self.names:
             skeletons_to_retrieve = list( set(  [ e for e in retrieve_by_names + retrieve_by_annotations if e in retrieve_by_names and e in retrieve_by_annotations ]  + retrieve_by_skids ) )
 
             if not skeletons_to_retrieve:
-                print('WARNING: No neurons left after intersection!')
-                self.report({'ERROR'},'Intersection empty!')
-                osd.show("WARNING: Intersection empty!")
+                print('WARNING: No neurons left after intersection! Import stopped')
+                self.report({'ERROR'},'Intersection empty! Import stopped')
+                osd.show("WARNING: Intersection empty! Import stopped")
                 bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+                return{'FINISHED'}
 
         else:
             skeletons_to_retrieve = list( set( retrieve_by_skids + retrieve_by_names + retrieve_by_annotations ) )
@@ -1421,11 +1442,7 @@ class RetrieveNeuron(Operator):
             annotation_ids = [ x['id'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
             annotation_names = [ x['name'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
         
-        if not annotation_ids:
-            print('ERROR: No matching anotation(s) found!')
-            self.report({'ERROR'},'No matching anotation(s) found!')
-            osd.show("ERROR: No matching anotation(s) found!")
-            bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+        if not annotation_ids:            
             return []
 
         #Now retrieve annotated skids
@@ -10519,6 +10536,122 @@ class UnifyMaterial(Operator):
 
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self, width = 500)
+
+class ExportVolume(Operator):
+    """Takes a volume (mesh) and exports it to CATMAID"""
+    bl_idname = "export.volume"
+    bl_label = "Export mesh to CATMAID" 
+    bl_options = {'UNDO'}   
+
+    volume_name = StringProperty(  name= 'Name',
+                                default = '',
+                                description = 'Exporte mesh will show up under this name in CATMAID.'
+                                )
+    
+
+    def execute(self,context):      
+        conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor   
+        obj = bpy.context.active_object
+
+        if type(obj) == type(None):
+            print("No active object found!")
+            osd.show("No active object found!")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
+            return{'FINISHED'}
+
+        if self.volume_name == '':
+            print("No name entered! Please enter a name for the volume.")
+            osd.show("No name entered! Please enter a name for the volume.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
+            return{'FINISHED'}
+
+        if obj.type != 'MESH':
+            print("Object to export has to be a MESH!x Active object is %s" % obj.type )
+            osd.show("Object to export has to be a MESH!x Active object is %s" % obj.type )
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()  
+            return{'FINISHED'}
+
+        #Check if mesh is trimesh:
+        if [f for f in obj.data.polygons if len(f.vertices) != 3]:
+            print('Mesh not a trimesh - trying to convert')
+
+            #First go out of edit mode and select all vertices while in object mode:
+            if obj.mode != 'OBJECT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+            for v in obj.data.vertices:
+                v.select = True
+
+            #Now go to edit mode and convert to trimesh
+            bpy.ops.object.mode_set(mode='EDIT')
+            bpy.ops.mesh.quads_convert_to_tris()
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            #Check if again mesh is trimesh:
+            if not [f for f in obj.data.polygons if len(f.vertices) != 3]:
+                print('MESH successfully converted to trimesh!')
+            else:
+                print("Error during conversion to trimesh - try manually!" )                
+                osd.show("Error during conversion to trimesh - try manually!" )
+                osd_timed = ClearOSDAfter(3)
+                osd_timed.start() 
+                return{'FINISHED'}
+
+        #Now create postdata
+        verts = [ list(obj.matrix_world * v.co) for v in obj.data.vertices ]
+        #Multiply by conversion factor, switch y and z coordinates and invert z
+        verts = [ [ round( v[0] * conversion_factor), round( v[2] * -conversion_factor ) , round ( v[1] * conversion_factor ) ] for v in verts]
+        faces = [ list(p.vertices) for p in obj.data.polygons ]
+
+        mesh = [ verts, faces ]      
+
+        postdata = {'title':  self.volume_name,
+                    'type': 'trimesh',
+                    'mesh': mesh
+                    }
+
+        add_volume_url = remote_instance.add_volume( project_id )
+
+        response = remote_instance.fetch ( add_volume_url, postdata )        
+
+        if response['success'] is True:
+            print("Export successful")                
+            osd.show("Export successful" )
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start() 
+        else:
+            print("Something went wrong - see console.")                
+            osd.show("Something went wrong - see console." )
+            print(response)
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start() 
+
+        return{'FINISHED'}
+
+
+    def invoke(self, context, event): 
+        try:
+            self.volume_name = bpy.context.active_object.name
+        except:
+            pass       
+        return context.window_manager.invoke_props_dialog(self, width = 500)    
+
+    def draw(self, context):
+        layout = self.layout
+        layout.label(text="This will export the ACTIVE object. Will then show up in CATMAID 3D viewer and volume manager.")        
+        layout.label(text="Requires CATMAID version 2016.04.18 or higher. Meshes will be converted into trimesh - please")
+        layout.label(text="save before clicking OK.")           
+        layout.prop(self, "volume_name")  
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
 
 
 class DisplayHelp(Operator):

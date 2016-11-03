@@ -3,5 +3,5 @@
 
 current_version = {5.5}
 last_stable = {4.1}
-new_features = {improved neuron import; improved ui; check for CATMAID server version}
+new_features = {added volume export;improved neuron import; improved ui; check for CATMAID server version}
 message = {}
