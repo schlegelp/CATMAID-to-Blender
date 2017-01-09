@@ -56,10 +56,10 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 ## License:
 This code is under GNU GPL V3
 
-## Acknowledgments:
+## Acknowledgments and how to cite:
 
 #### General:
-Please cite [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/04/07/044990) if you use the plugin in your publication.
+Please cite [Schlegel et al., 2016 (eLife)](https://elifesciences.org/content/5/e16799) if you use the plugin in your publication.
 
 #### Specific Methods:
 Some functions available within the plugin are based on/derived from previously published methods. Please cite the original papers if you make use of these specific methods.
@@ -72,6 +72,6 @@ http://www.cell.com/abstract/S0092-8674(13)01476-1
 *The connectome of a decision-making neural network.*
 Jarrell TA, Wang Y, Bloniarz AE, Brittin CA, Xu M, Thomson JN, Albertson DG, Hall DH, Emmons SW.
 http://science.sciencemag.org/content/337/6093/437.long
-3. **Comparison of neurons based on synapse distribution**: *Synaptic Transmission Parallels Neuromodulation in a Central Food-Intake Circuit* 
-Philipp Schlegel, Michael J Texada, Anton Miroschnikow, Marc Peters, Casey M Schneider-Mizell, Haluk Lacin, Feng Li, Richard D Fetter, James W Truman, Albert Cardona, Michael J Pankratz
-bioRxiv doi: http://dx.doi.org/10.1101/044990
+3. **Comparison of neurons based on synapse distribution**: eLife. doi: 10.7554/eLife.16799 
+*Synaptic transmission parallels neuromodulation in a central food-intake circuit.*
+Schlegel, P., Texada, M. J., Miroschnikow, A., Schoofs, A., Hückesfeld, S., Peters, M., … Pankratz, M. J.
