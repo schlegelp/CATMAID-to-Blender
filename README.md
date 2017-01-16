@@ -20,9 +20,9 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 ######Required Python packages:
 [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS should come with all necessary Python packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
 
-There are several ways to install additional packages for Blender's Python. On MacOS, the easiest way is probably this:
+There are several ways to install additional packages for Blender's Python. The easiest way is probably this:
 
-- Download [get-pip.py](https://pip.pypa.io/en/stable/installing/) and save e.g. in your downloads directory
+- Download pip's [get-pip.py](https://pip.pypa.io/en/stable/installing/) and save e.g. in your downloads directory
 - Run [get-pip.py](https://pip.pypa.io/en/stable/installing/) from Blender Python console:
 
 ```
