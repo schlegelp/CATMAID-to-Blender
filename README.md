@@ -69,6 +69,36 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 
 ####3. Check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/04/07/044990) for more examples.
 
+## Using Python to manipulate data:
+
+First, download [pymaid](https://github.com/schlegelp/pymaid) to interact with and manipulate CATMAID data programmatically. In Blender's Python console:
+```python
+import sys
+sys.path.append('PATH_TO_PYMAID')
+
+from pymaid import CatmaidInstance, get_3D_skeleton
+from catnat import cut_neuron
+from CATMAIDImport import CATMAIDtoBlender
+
+remote_instance = CatmaidInstance( 'www.your.catmaid-server.org' , 'user' , 'password', 'token' )
+
+#Get skeleton for a neuron of interest
+skeleton_data = get_3D_skeleton ( ['SKELETON_ID'], myInstance )[0]
+
+#Cut neurons at specific treenode
+proximal, distal = cut_neuron( skeleton_data, TREENODE_ID )
+
+#Bring the neuron fragments into Blender
+CATMAIDtoBlender.extract_nodes( proximal,
+                                SKELETON_ID,
+                                neuron_name = 'proximal fragment',
+                                resampling = 2,
+                                import_connectors = False,
+                                conversion_factor = 10000 
+                                )
+```
+
+
 ## License:
 This code is under GNU GPL V3
 
