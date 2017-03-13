@@ -19,6 +19,12 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.63 28/02.2017:
+    - added invert_colors and change_bevel to color_by_strahler
+
+### V5.62 15/02/2017:
+    - added optional usage of SciPy.spatial.distance for clustering -> about 2 fold increase in speed
+
 ### V5.61 01/02/2017:
     - UI improvements
     - code clean up
@@ -307,10 +313,21 @@ import copy
 import http.cookiejar as cj
 import threading
 import mathutils
+import sys
 try:
     import numpy as np
 except:
-    print('Unable to import Python numpy. Some functions will not work!')
+    print('Please install SciPy - this will speed up clustering more than 2-fold!')
+try:
+    from scipy.spatial import distance        
+    import pylab
+    from scipy import cluster
+except:
+    print('Unable to import SciPy. Some functions will not work!')
+try: 
+    import matplotlib.pyplot as plt    
+except:
+    print('Unable to import matplotlib. Some functions will not work!')
 
 import base64
 import statistics
@@ -326,7 +343,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 6, 1),
+ "version": (5, 6, 3),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -1162,7 +1179,7 @@ def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
     return list(skeletons)
 
 
-def retrieveSkeletonData( skid_list, time_out = 20):
+def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True):
     """ Retrieves 3D skeleton data from CATMAID server using threads
 
     Parameters:
@@ -1186,11 +1203,12 @@ def retrieveSkeletonData( skid_list, time_out = 20):
     errors = None
 
     #Check if neurons are already in scene - if so, skip
-    existing_skids = [ ob['skeleton_id'] for ob in bpy.data.objects if 'skeleton_id' in ob ]
+    existing_skids = [ ob['skeleton_id'] for ob in bpy.data.objects if 'skeleton_id' in ob ]    
 
-    skid_list = [ s for s in skid_list if str(s) not in existing_skids ]
-    if [ s for s in skid_list if str(s) in existing_skids ]:
-        print( 'Skipping existing neurons:', [ s for s in skid_list if str(s) in existing_skids ] )
+    if skip_existing:
+        if [ s for s in skid_list if str(s) in existing_skids ]:
+            print( 'Skipping existing neurons:', [ s for s in skid_list if str(s) in existing_skids ] )
+        skid_list = [ s for s in skid_list if str(s) not in existing_skids ]        
 
     #Reinitialize/clear header display
     ahd.reinitalize()
@@ -1294,9 +1312,9 @@ class RetrieveNeuron(Operator):
                                  description = "Search by neuron names. Separate multiple names by commas."
                                 ) 
 
-    partial_match = BoolProperty(   name="Allow partial matches?", 
-                                        default = True,
-                                        description = "Allow partial matches for neuron names and annotations! Will also become case-insensitive.")        
+    partial_match = BoolProperty(       name="Allow partial matches?", 
+                                        default = False,
+                                        description = "Allow partial matches for neuron names and annotations! Will also become case-insensitive.")            
     
     annotations = StringProperty(name="Annotations(s)",
                                  description = "Search by skeleton IDs. Multiple annotations comma-sparated."
@@ -2182,11 +2200,14 @@ class RetrieveConnectors(Operator):
     bl_label = "Retrieve Connectors"
 
     which_neurons = EnumProperty(name = "For which Neuron(s)?", 
-                                      items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                      items = [('Selected','Selected','Selected'),('All','All','All')],
                                       description = "Choose for which neurons to retrieve connectors.")
     color_prop = EnumProperty(name = "Colors", 
                                       items = [('Black','Black','Black'),('Mesh-color','Mesh-color','Mesh-color'),('Random','Random','Random')],
                                       description = "How to color the connectors.")    
+    create_as = EnumProperty(name = "Create as", 
+                                      items = [('Spheres','Spheres','Spheres'),('Curves','Curves','Curves')],
+                                      description = "As what to create them. Curves suggested for large numbers.")
     basic_radius = FloatProperty(   name="Basic Radius", 
                                     default = 0.01,
                                     description = "Set to -1 to not weigh connectors")
@@ -2218,17 +2239,7 @@ class RetrieveConnectors(Operator):
 
         self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
         
-        if self.which_neurons == 'Active':
-            if bpy.context.active_object is None:
-                self.report({'ERROR'},'No Active Object!')
-                print ('No Object Active')
-            elif bpy.context.active_object is not None and '#' not in bpy.context.active_object.name:
-                self.report({'ERROR'},'Active Object not a Neuron!')
-                print ('Active Object not a Neuron') 
-            else:                      
-                to_search = [bpy.context.active_object]               
-        
-        elif self.which_neurons == 'All':
+        if self.which_neurons == 'All':
             to_search = bpy.data.objects
         elif self.which_neurons == 'Selected':
             to_search = bpy.context.selected_objects
@@ -2240,11 +2251,16 @@ class RetrieveConnectors(Operator):
                 skid = re.search('#(.*?) -',ob.name).group(1)
                 filtered_ob_list.append(ob)
                 filtered_skids.append(skid)
+
+        if not filtered_skids:
+            print('Error - no neurons found! Cancelled')
+            self.report({'ERROR'},'No neurons found!')
+            return {'FINISHED'}
         
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
-        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out )
+        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False )        
         cndata, neuron_names = self.get_all_connectors( skdata )
 
         for i,neuron in enumerate(filtered_ob_list):
@@ -2266,13 +2282,13 @@ class RetrieveConnectors(Operator):
     def get_all_connectors(self, skdata):
         connector_id_list = []
         connector_postdata = {}
-
-        for skid in skdata:
-            for c in skdata[skid][1]:
+        
+        for skid in skdata:            
+            for c in skdata[skid][1]:                
                 if self.get_outputs is True and c[2] == 0:
                     connector_id_list.append(c[1])
                 if self.get_inputs is True and c[2] == 1:
-                    connector_id_list.append(c[1])
+                    connector_id_list.append(c[1])        
 
         for i, c in enumerate( list( set( connector_id_list ) ) ):           
             connector_tag = 'connector_ids[%i]' % i
@@ -2280,7 +2296,7 @@ class RetrieveConnectors(Operator):
 
         remote_connector_url = remote_instance.get_connectors_url( project_id )
 
-        temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )
+        temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )        
 
         skids_to_check = []
         cn_data = {}
@@ -2318,6 +2334,7 @@ class RetrieveConnectors(Operator):
             if connection[2] == 1 and self.get_inputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
+                connector_pre_coords[connection[1]]['parent_node'] = connection[0]
                 connector_pre_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)   
 
                 #connector_tag = 'connector_ids[%i]' % i_pre
@@ -2330,6 +2347,7 @@ class RetrieveConnectors(Operator):
             if connection[2] == 0 and self.get_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
+                connector_post_coords[connection[1]]['parent_node'] = connection[0]
                 connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)            
 
                 #connector_ids.append(connection[1])
@@ -2391,7 +2409,9 @@ class RetrieveConnectors(Operator):
             elif self.color_prop == 'Mesh-color':
                 connector_color = mesh_color
 
-            Create_Mesh.make_connector_spheres (active_skeleton, connector_post_coords, connector_pre_coords, number_of_targets, connector_color, self.basic_radius, self.layer, self.weight_outputs)
+          
+            Create_Mesh.make_connector_objects (active_skeleton, connector_post_coords, connector_pre_coords, node_data, number_of_targets, connector_color, self.create_as ,self.basic_radius, self.layer, self.weight_outputs, self.conversion_factor)
+          
                 
         else:
             print('No connector data for presnypases retrieved')                    
@@ -2548,7 +2568,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
         print("Retrieving connector data for %i neurons" % len(skids_to_export)) 
-        skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
+        skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False)
         cndata = self.get_all_connectors( skdata )
 
         if cndata is None:
@@ -4720,7 +4740,9 @@ class CATMAIDtoBlender:
                         interpolate_virtual = False, 
                         conversion_factor=10000, 
                         use_radius = False,
-                        color_by_strahler = False):
+                        color_by_strahler = False,
+                        white_background = False,
+                        radii_by_strahler = False):
         
         index = 1            
         cellname = str(skid) + ' - ' + neuron_name                
@@ -4815,7 +4837,7 @@ class CATMAIDtoBlender:
 
         #print('Before Trunc',new_child_list)
 
-        #Do this is soma node has been found
+        #Do this if soma node has been found
         if truncate_neuron != 'none' and soma_node is not None:
             if soma_node != root_node:
                 print('Soma is not Root - Rerooting...')
@@ -4843,7 +4865,11 @@ class CATMAIDtoBlender:
             strahler_indices = CATMAIDtoBlender.calc_strahler_index(new_child_list,root_node)
             max_strahler_index = max([strahler_indices[n] for n in strahler_indices])
             print('Max strahler index:', max_strahler_index)
-            Create_Mesh.prepare_strahler_mats(skid,max_strahler_index,color_by_strahler)
+            Create_Mesh.prepare_strahler_mats(skid,max_strahler_index,color_by_strahler, white_background)
+
+            if radii_by_strahler:
+                radii = { n: strahler_indices[n] / max_strahler_index * 100 for n in strahler_indices }
+
         else:
             strahler_indices = None
             
@@ -5246,7 +5272,7 @@ class CATMAIDtoBlender:
         nodes_processed = []
 
         while starting_points:
-            print(len(starting_points))
+            print( 'Calculating strahler indices. Starting points:', len(starting_points) )
             starting_points_done = []
 
             for i,en in enumerate(starting_points):
@@ -5646,7 +5672,7 @@ class ExportAllToSVG(Operator, ExportHelper):
                 skid = re.search('#(.*?) ',neuron.name).group(1)                  
                 to_process_skids.append(skid)            
 
-            skdata,errors = retrieveSkeletonData( to_process_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out)
+            skdata,errors = retrieveSkeletonData( to_process_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False)
 
         for neuron in to_process_sorted:            
             ### Create List of Lines
@@ -6712,55 +6738,160 @@ class Create_Mesh (Operator):
     bl_idname = "create.new_neuron"  
     bl_label = "Create New Neuron"  
 
-    def make_connector_spheres (neuron_name, connectors_post, connectors_pre, connectors_weight, connector_color = (0,0,0), basic_radius = 0.01, layer = 3, weight_outputs = True, unify_materials = True):
+    def make_connector_objects ( neuron_name, connectors_post, connectors_pre, node_data, connectors_weight, connector_color, create_as ,basic_radius, layer, weight_outputs, conversion_factor, unify_materials = True):        
         ### Takes Connector data and create spheres in layer 3!!!
         ### For Downstream targets: sphere radius refers to # of targets
-        print('Creating connector meshes')   
-        start_creation = time.clock()
-
+        print('Creating connectors: %i/%i (pre/post)' % ( len(connectors_pre),len(connectors_post) ))   
+        start_creation = time.clock()        
         layers = [i == layer for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]]
+
+        if create_as == 'Curves':
+            node_list = { n[0]:n[3:6] for n in node_data[0] }
+        elif create_as == 'Spheres':
+            pi = np.pi
+            cos = np.cos
+            sin = np.sin
          
-        for connector in connectors_post:
-            #print('Creating connector %s' % connectors_post[connector]['id']) 
+        for i,connector in enumerate( connectors_post ):
+            if round(i/len(connectors_post)*100,2) % 10 == 0:
+                print ( 'Connectors_post:', round(i/len(connectors_post)*100), '%' )              
             if basic_radius != -1 and weight_outputs is True:   
                 co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]    
             elif basic_radius != -1 and weight_outputs is False:
                 co_size = basic_radius
             else:
                 co_size = 0.01
-            co_loc = connectors_post[connector]['coords']                
-            connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
-                                                                    enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=layers)            
-            bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
-            bpy.ops.object.shade_smooth()                        
-            
-            if unify_materials is False:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
-            else:
-                Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])        
 
-        for connector in connectors_pre:
-            #print('Creating connector %s' % connectors_pre[connector]['id']) 
+            co_loc = connectors_post[connector]['coords']        
+            co_parent = connectors_post[connector]['parent_node']
+
+            if create_as == 'Spheres':
+                """
+                #Generate coords
+                r = co_size                
+                phi, theta = np.mgrid[0.0:pi:6j, 0.0:2.0*pi:5j]
+                x = r*sin(phi)*cos(theta)
+                y = r*sin(phi)*sin(theta)
+                z = r*cos(phi)
+                """
+
+                connector_post_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
+                                                                            location=co_loc, size = co_size, \
+                                                                            layers=layers)
+
+
+                """
+                connector_post_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=4, ring_count=4, size=co_size, view_align=False, \
+                                                                        enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
+                                                                        layers=layers)
+                """
+
+                bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
+                bpy.ops.object.shade_smooth()     
+
+                if unify_materials is False:
+                    Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
+                else:
+                    Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])  
+            """
+            elif create_as == 'Curves':
+                co_parent_coords = (    
+                                    node_list[ co_parent ][0] / conversion_factor,
+                                    node_list[ co_parent ][2] / conversion_factor,
+                                    node_list[ co_parent ][1] / -conversion_factor
+                                )  
+
+                cu_post = bpy.data.curves.new( 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name) , 'CURVE')
+                ob_post = bpy.data.objects.new( 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name) , cu_post)
+                bpy.context.scene.objects.link(ob_post)
+                ob_post.location = (0,0,0)
+                ob_post.layers = layers
+                ob_post.show_name = False
+
+                cu_post.dimensions = '3D'
+                cu_post['type'] = 'POST_CONNECTORS'
+                cu_post.fill_mode = 'FULL'
+                cu_post.bevel_depth = co_size
+                cu_post.bevel_resolution = 0 
+                cu_post.resolution_u = 0             
+                
+                newSpline = cu_post.splines.new('POLY')                
+                newPoint = newSpline.points[-1]
+                newPoint.co = (co_loc[0], co_loc[1], co_loc[2] , 0)
+                newSpline.points.add()
+                newPoint = newSpline.points[-1]
+                newPoint.co = ( co_parent_coords[0], co_parent_coords[1], co_parent_coords[2] , 0) 
+            
+                if unify_materials is False:
+                    Create_Mesh.assign_material ( ob_post , 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
+                else:
+                    Create_Mesh.assign_material ( ob_post , None , connector_color[0] , connector_color[1] , connector_color[2])  
+        """
+
+
+        for i, connector in enumerate( connectors_pre ):
+            if round(i/len(connectors_pre)*100,2) % 10 == 0:
+                print ( 'Connectors_pre:', round(i/len(connectors_pre)*100), '%' )             
             if basic_radius != -1:
                 co_size = basic_radius
             else:
                 co_size = 0.01
-            co_loc = connectors_pre[connector]['coords']                
-            connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=6, ring_count=6, size=co_size, view_align=False, \
-                                                                    enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                    layers=layers)            
-            bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
-            bpy.ops.object.shade_smooth()                        
+            co_loc = connectors_pre[connector]['coords']               
+            co_parent = connectors_pre[connector]['parent_node'] 
+
+            if create_as == 'Spheres': 
+                connector_pre_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
+                                                                            location=co_loc, size = co_size, \
+                                                                            layers=layers)   
+                """         
+                connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=3, ring_count=3, size=co_size, view_align=False, \
+                                                                        enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
+                                                                        layers=layers)            
+                """
+
+                bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
+                bpy.ops.object.shade_smooth()                        
             
-            if unify_materials is False:
-                Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])       
-            else:
-                Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])       
+                if unify_materials is False:
+                    Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])       
+                else:
+                    Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])       
+
+            elif create_as == 'Curves':
+                co_parent_coords = (    
+                                    node_list[ co_parent ][0] / conversion_factor,
+                                    node_list[ co_parent ][2] / conversion_factor,
+                                    node_list[ co_parent ][1] / -conversion_factor
+                                )  
+
+                cu_pre = bpy.data.curves.new( 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name) , 'CURVE')
+                ob_pre = bpy.data.objects.new( 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name) , cu_pre)
+                bpy.context.scene.objects.link(ob_pre)
+                ob_pre.location = (0,0,0)
+                ob_pre.layers = layers
+                ob_pre.show_name = False
+
+                cu_pre.dimensions = '3D'
+                cu_pre['type'] = 'POST_CONNECTORS'
+                cu_pre.fill_mode = 'FULL'
+                cu_pre.bevel_depth = co_size
+                cu_pre.bevel_resolution = 0 
+                cu_pre.resolution_u = 0             
+                
+                newSpline = cu_pre.splines.new('POLY')                
+                newPoint = newSpline.points[-1]
+                newPoint.co = (co_loc[0], co_loc[1], co_loc[2] , 0)
+                newSpline.points.add()
+                newPoint = newSpline.points[-1]
+                newPoint.co = ( co_parent_coords[0], co_parent_coords[1], co_parent_coords[2] , 0) 
+            
+                if unify_materials is False:
+                    Create_Mesh.assign_material ( ob_pre , 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
+                else:
+                    Create_Mesh.assign_material ( ob_pre , None , connector_color[0] , connector_color[1] , connector_color[2])  
 
         print('Done in ' + str(time.clock()-start_creation)+'s')
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
-
 
     def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = [], radii = {}, strahler_indices = None):
         ### Creates Neuron from Curve data that was imported from CATMAID
@@ -7023,13 +7154,13 @@ class Create_Mesh (Operator):
         ob_post.show_name = True                  
 
         cu_pre.dimensions = '3D'
-        cu_pre['tyoe'] = 'PRE_CONNECTORS'
+        cu_pre['type'] = 'PRE_CONNECTORS'
         cu_pre.fill_mode = 'FULL'
         cu_pre.bevel_depth = 0.007
         cu_pre.bevel_resolution = 5 
         
         cu_post.dimensions = '3D'
-        cu_post['tyoe'] = 'POST_CONNECTORS'
+        cu_post['type'] = 'POST_CONNECTORS'
         cu_post.fill_mode = 'FULL'
         cu_post.bevel_depth = 0.007
         cu_post.bevel_resolution = 5 
@@ -7100,7 +7231,7 @@ class Create_Mesh (Operator):
         ob.select = True
         bpy.context.active_object.active_material = new_mat
 
-    def prepare_strahler_mats (skid, max_strahler_index, color_by):
+    def prepare_strahler_mats (skid, max_strahler_index, color_by, white_background = False):
         """ Creates a set of strahler indices for this neuron """
 
         #Generate a random color
@@ -7115,16 +7246,20 @@ class Create_Mesh (Operator):
             if mat_name not in bpy.data.materials:
                 new_mat = bpy.data.materials.new(mat_name)
             else:
-                new_mat = bpy.data.materials[ mat_name ]         
-
+                new_mat = bpy.data.materials[ mat_name ]
             
             if color_by == 'grey_alpha':
-                new_mat.diffuse_color[0] = i/max_strahler_index
-                new_mat.diffuse_color[1] = i/max_strahler_index           
-                new_mat.diffuse_color[2] = i/max_strahler_index
+                if white_background:
+                    e = v = 1 - ( ( i + 1 ) / max_strahler_index )                                         
+                else:
+                    e = v = i / max_strahler_index                    
+
+                new_mat.diffuse_color[0] = v
+                new_mat.diffuse_color[1] = v
+                new_mat.diffuse_color[2] = v
                 new_mat.use_transparency = True
-                new_mat.alpha = (i+1)/max_strahler_index 
-                new_mat.emit = i/max_strahler_index
+                new_mat.alpha = (i+1) / max_strahler_index 
+                new_mat.emit = e
             elif color_by == 'color_alpha':
                 new_mat.diffuse_color[0] = rand_col[0] * (i+1) / (max_strahler_index+1)
                 new_mat.diffuse_color[1] = rand_col[1] * (i+1) / (max_strahler_index+1)        
@@ -7198,9 +7333,9 @@ class RandomMaterial (Operator):
                 neuron.active_material.diffuse_color[0] = colormap[0][0]/255
                 neuron.active_material.diffuse_color[1] = colormap[0][1]/255
                 neuron.active_material.diffuse_color[2] = colormap[0][2]/255                
-                neuron.active_material.emit = 0
-                neuron.active_material.use_transparency = True
-                neuron.active_material.transparency_method = 'Z_TRANSPARENCY'
+                #neuron.active_material.emit = 0
+                #neuron.active_material.use_transparency = True
+                #neuron.active_material.transparency_method = 'Z_TRANSPARENCY'
                 
                 colormap.pop(0)
                 
@@ -7355,7 +7490,13 @@ class ColorByStrahler (Operator):
                                             ('this_color', 'Use current color', 'use shades of current color + alpha values')                                          
                                             ),
                                     default =  "this_color",
-                                    description = "Choose how strahler index is encoded")
+                                    description = "Choose how strahler index is encoded.")
+    white_background = BoolProperty( name="White background",
+                                    default = False,
+                                    description = "Inverts color scheme for white background.")    
+    change_bevel = BoolProperty( "Change bevel",
+                                    default = False,
+                                    description = "Primary neurites will be bigger.")    
 
     def execute(self, context):        
         neurons_to_reload = {}
@@ -7424,17 +7565,15 @@ class ColorByStrahler (Operator):
             except:
                 use_radius[skid] = False
 
-        skdata, errors = retrieveSkeletonData( skids_to_reload , context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
-
-        print(skdata)
+        skdata, errors = retrieveSkeletonData( skids_to_reload , context.user_preferences.addons['CATMAIDImport'].preferences.time_out)         
 
         print("Creating new, colored meshes for %i neurons" % len(skdata))
         for skid in skdata:            
             if self.color_code == 'this_color':
                 this_color = list(neuron_mats[skid].diffuse_color)
-                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = this_color )
+                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = this_color, white_background = self.white_background, radii_by_strahler = self.change_bevel )
             else:
-                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = self.color_code )
+                CATMAIDtoBlender.extract_nodes( skdata[skid], skid, neuron_names[skid], resampling_factors[skid], False , False, 0, False, self.conversion_factor, use_radius = use_radius[skid], color_by_strahler = self.color_code, white_background = self.white_background, radii_by_strahler = self.change_bevel )
 
         print('Finished coloring in', time.clock()-start, 's') 
         if errors is None:
@@ -8017,9 +8156,9 @@ class CalculateSimilarityModalHelper(Operator):
                                 description = 'Will save dendrogram of similarity to dendrogram.svg'
                                 )
     path_dendrogram = StringProperty (
-                                name='Save to',
+                                name='path for dendrogram',
                                 default = '',
-                                description = 'Set file for saving dendrogram as svg.'
+                                description = 'Set file for saving dendrogram as dendrogram.svg'
                                 )
 
     use_inputs = BoolProperty (
@@ -8122,7 +8261,11 @@ class CalculateSimilarityModalHelper(Operator):
         return{'FINISHED'}
 
 class CalcScoreThreaded(threading.Thread):
-    def __init__(self,this_neuron,neurons,compare,neuron_data,neuron_parent_vectors,use_inputs,use_outputs,connectivity,partner_names,list_of_pairs,to_exclude,number_of_partners,conversion_factor,sigma,omega):
+    def __init__(   self, this_neuron, neurons, compare, neuron_data, 
+                    neuron_parent_vectors, use_inputs, use_outputs, 
+                    connectivity, partner_names, list_of_pairs, 
+                    to_exclude, number_of_partners, conversion_factor, 
+                    sigma, omega):
         self.this_neuron = this_neuron
         self.neurons = neurons
         self.compare = compare
@@ -8262,31 +8405,55 @@ class CalcScoreThreaded(threading.Thread):
         coordsB['presynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 0])
         coordsB['postsynapses'] = np.array([e[3:6] for e in synapsesB if e[2] == 1])
 
-        for direction in ['presynapses','postsynapses']:
-            for synA in coordsA[direction]:
+        #Use SciPy if available 
+        if 'scipy.spatial.distance' in sys.modules:            
+            for direction in ['presynapses','postsynapses']:
                 try:
-                    #Generate distance Matrix of point a and all points in nB
-                    d = np.sum((coordsB[direction]-synA)**2,axis=1)
+                    all_by_all_distances = distance.cdist( coordsA[direction], coordsB[direction] )
+                    neuronA_all_distances =  distance.squareform( distance.pdist( coordsA[direction] ) )
+                    neuronB_all_distances = distance.squareform ( distance.pdist( coordsB[direction] ) )
+                    for i,synA in enumerate(coordsA[direction]):
+                        #Get final distance
+                        min_dist = all_by_all_distances[i][ all_by_all_distances[i].argmin() ]                           
 
-                    #Calculate final distance by taking the sqrt!
-                    min_dist = math.sqrt(d[d.argmin()])
-                    closest_syn = coordsB[direction][d.argmin()]                    
+                        around_synA = len( [ e for e in neuronA_all_distances[i] if e < self.omega] )
+                        around_synB = len( [ e for e in neuronB_all_distances[ all_by_all_distances[i].argmin() ] if e < self.omega] )
 
-                    #Distances of synA to all synapses of the same neuron
-                    dA = np.sum((coordsA[direction]-synA)**2,axis=1)
-                    around_synA = len([e for e in dA if math.sqrt(e) < self.omega])
+                        this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * self.sigma**2))                   
 
-                    #Distances of closest synapses in B to all synapses of the same neuron
-                    dB = np.sum((coordsB[direction]-closest_syn)**2,axis=1)
-                    around_synB = len([e for e in dB if math.sqrt(e) < self.omega])
-
-                    this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * self.sigma**2))
-
+                        all_values.append(this_synapse_value) 
+                
                 except:
                     #will fail if no pre-/postsynapses in coordsB
-                    this_synapse_value = 0
+                    all_values += [0] * len(coordsA[direction])
+                
 
-                all_values.append(this_synapse_value) 
+        else:
+            for direction in ['presynapses','postsynapses']:
+                for synA in coordsA[direction]:
+                    try:
+                        #Generate distance Matrix of point a and all points in nB
+                        d = np.sum((coordsB[direction]-synA)**2,axis=1)
+
+                        #Calculate final distance by taking the sqrt!
+                        min_dist = math.sqrt(d[d.argmin()])
+                        closest_syn = coordsB[direction][d.argmin()]                    
+
+                        #Distances of synA to all synapses of the same neuron
+                        dA = np.sum((coordsA[direction]-synA)**2,axis=1)
+                        around_synA = len([e for e in dA if math.sqrt(e) < self.omega])
+
+                        #Distances of closest synapses in B to all synapses of the same neuron
+                        dB = np.sum((coordsB[direction]-closest_syn)**2,axis=1)
+                        around_synB = len([e for e in dB if math.sqrt(e) < self.omega])
+
+                        this_synapse_value = math.exp( -1 * math.fabs(around_synA - around_synB) / (around_synA + around_synB) )   *   math.exp( -1 * (min_dist**2) / (2 * self.sigma**2))
+
+                    except:
+                        #will fail if no pre-/postsynapses in coordsB
+                        this_synapse_value = 0
+
+                    all_values.append(this_synapse_value) 
 
         try:
             return (sum(all_values)/len(all_values))    
@@ -8304,28 +8471,44 @@ class CalcScoreThreaded(threading.Thread):
         all_values = []
 
         #Sigma is defined as CATMAID units - have to convert to Blender units
-        blender_sigma = self.sigma / self.conversion_factor
-        
+        blender_sigma = self.sigma / self.conversion_factor        
 
         nA = np.array(nodeDataA)     
-        nB = np.array(nodeDataB)
+        nB = np.array(nodeDataB)       
 
-        for i,a in enumerate(nA):
-            #Generate distance Matrix of point a and all points in nB
-            d = np.sum((nB-a)**2,axis=1)
+        #Use SciPy if available (about 2fold faster)
+        if 'scipy.spatial.distance' in sys.modules:
+            all_by_all_distances = distance.cdist(nA,nB)
+            
+            for i,a in enumerate(nA):
+                #Get final distance
+                min_dist = all_by_all_distances[i][ all_by_all_distances[i].argmin() ]
 
-            #Calculate final distance by taking the sqrt!
-            min_dist = math.sqrt(d[d.argmin()])
+                normal_parent_vectorB = parentVectorsB[ all_by_all_distances[i].argmin() ] 
+                normal_parent_vectorA = parentVectorsA[i]
 
-            normal_parent_vectorB = parentVectorsB[d.argmin()] 
-            normal_parent_vectorA = parentVectorsA[i]
+                dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
 
-            dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
+                this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
 
-            this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
+                all_values.append(this_treenode_value)  
 
-            all_values.append(this_treenode_value) 
+        else:            
+            for i,a in enumerate(nA):
+                #Generate distance Matrix of point a and all points in nB
+                d = np.sum((nB-a)**2,axis=1)
 
+                #Calculate final distance by taking the sqrt!
+                min_dist = math.sqrt(d[d.argmin()])
+
+                normal_parent_vectorB = parentVectorsB[d.argmin()] 
+                normal_parent_vectorA = parentVectorsA[i]
+
+                dp = self.dotproduct(normal_parent_vectorA, normal_parent_vectorB)
+
+                this_treenode_value = math.fabs(dp) * math.exp( -1 * (min_dist**2) / (2 * blender_sigma**2))            
+
+                all_values.append(this_treenode_value)
         
         return (sum(all_values)/len(all_values))  
 
@@ -8578,14 +8761,14 @@ class CalculateSimilarityModal(Operator):
 
             self.neurons_to_process.pop(0)   
             """
-
             
 
             if len(self.threads_closed) == len(self.neurons):
+                print('Calculations done after', round ( time.time()- self._start_time ) , 's' )
                 self.after_calc()
                 osd.show('Done')
                 osd_timed = ClearOSDAfter(5)
-                osd_timed.start()
+                osd_timed.start()            
                 return{'FINISHED'}     
 
         return {'PASS_THROUGH'}
@@ -8602,6 +8785,7 @@ class CalculateSimilarityModal(Operator):
         ahd.reinitalize()
         wm = context.window_manager
         self._timer = wm.event_timer_add(2, context.window)
+        self._start_time = time.time()
         wm.modal_handler_add(self)
         return {'RUNNING_MODAL'}
 
@@ -8732,7 +8916,7 @@ class CalculateSimilarityModal(Operator):
 
             print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
 
-            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
+            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False) 
 
             for skid in skdata:
                 synapse_data[str(skid)] = skdata[skid][1]
@@ -8883,11 +9067,13 @@ class CalculateSimilarityModal(Operator):
         osd_timed.start()
         ahd.clear()
 
-        if self.save_dendrogram is True and bpy.data.filepath != '':
+        self.matplot_dendrogram()
+
+        if self.save_dendrogram is True and os.path.exists ( os.path.normpath ( self.path_dendrogram ) ):
             print('Creating Dendrogram.svg')
             try:
                 svg_file = os.path.join ( os.path.normpath( self.path_dendrogram ) , 'dendrogram.svg' )
-                self.plot_dendrogram(self.skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', self.neuron_names , self.cluster_at, annotations)
+                self.plot_dendrogram(self.skids, all_clusters, merges_at, remote_instance, 'dendrogram.svg', self.neuron_names , self.cluster_at, annotations)                
                 print('Dendrogram.svg created in ', os.path.normpath( self.path_dendrogram ) )
                 self.report({'INFO'},'Dendrogram created:' + svg_file )
             except:
@@ -9025,6 +9211,65 @@ class CalculateSimilarityModal(Operator):
             similarity -= step_size
 
         return all_clusters,merges_at
+
+    def matplot_dendrogram(self):
+        """ Creates dendrogram using matplotlib
+        """
+
+        #First convert matching scores into a distance matrix
+        squared_dist_mat = []
+        for neuronA in self.skids:
+            squared_dist_mat.append( [ matching_scores[self.compare][str(neuronA)+'-'+str(neuronB)] for neuronB in self.skids ] )
+        squared_dist_mat = np.array( squared_dist_mat )
+
+
+        # Compute and plot first dendrogram for all nodes.
+        fig = pylab.figure(figsize=(8,8))
+        ax1 = fig.add_axes([0.09,0.1,0.2,0.6])
+        if self.method == 'avg':
+            Y = cluster.hierarchy.average(squared_dist_mat)        
+        elif self.method == 'min':
+            Y = cluster.hierarchy.single(squared_dist_mat)        
+        elif self.method == 'max':
+            Y = cluster.hierarchy.complete(squared_dist_mat)        
+        elif self.method == 'ward':    
+            Y = cluster.hierarchy.ward(squared_dist_mat)        
+        Z1 = cluster.hierarchy.dendrogram(Y, orientation='left' , color_threshold = self.cluster_at)
+        ax1.hlines(self.cluster_at,0,len(self.skids),label='cluster threshold', linestyles='dashed')
+        #ax1.set_xticks([])
+        #ax1.set_yticks([])
+
+
+        # Compute and plot second dendrogram.
+        ax2 = fig.add_axes([0.3,0.71,0.6,0.2])        
+        #Y = cluster.hierarchy.ward(squared_dist_mat)
+        Z2 = cluster.hierarchy.dendrogram(Y, color_threshold = self.cluster_at)                
+        #ax2.set_xticks([])
+        #ax2.set_yticks([])
+
+        # Plot distance matrix.
+        axmatrix = fig.add_axes([0.3,0.1,0.6,0.6])
+        idx1 = Z1['leaves']
+        idx2 = Z2['leaves'] 
+        D = squared_dist_mat
+        D = D[idx1,:]
+        D = D[:,idx2]
+        im = axmatrix.matshow(D, aspect='auto', origin='lower', cmap=pylab.cm.YlGnBu)
+        #axmatrix.xaxis.set_ticks_position('bottom')
+        axmatrix.xaxis.set_label_position('bottom')
+        axmatrix.set_xticks(range( len ( self.skids ) ))
+        axmatrix.set_xticklabels( [ self.skids[i] for i in idx2 ] , minor=False)
+        axmatrix.xaxis.tick_bottom()
+        #axmatrix.set_xticks([])
+        axmatrix.set_yticks([])        
+
+        pylab.xticks(rotation=-90, fontsize=8)
+
+        # Plot colorbar.
+        axcolor = fig.add_axes([0.91,0.1,0.02,0.6])
+        pylab.colorbar(im, cax=axcolor)
+        
+        fig.show()  
 
     def plot_dendrogram(self, skids, all_clusters, merges_at, remote_instance, filename, names, cluster_at=0, annotations = {}): 
         """
@@ -9257,7 +9502,9 @@ class CalculateSimilarityModal(Operator):
 
 
 class ColorBySimilarity(Operator):
-    """Color neurons by similarity"""  
+    """Color neurons by similarity
+    Replaced by calc.similarity_modal!
+    """  
     bl_idname = "color.by_similarity"  
     bl_label = "Color neurons by similarity (see Advanced Tooltip)" 
     bl_options = {'UNDO'}
@@ -9337,7 +9584,7 @@ class ColorBySimilarity(Operator):
         row = box.row(align=False)        
         row.prop(self, "compare")
 
-        layout.label(text="General:") 
+        layout.label(text="General settings:") 
         box = layout.box()
         row = box.row(align=False)
         row.prop(self, "which_neurons")        
@@ -9469,7 +9716,7 @@ class ColorBySimilarity(Operator):
 
             print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
 
-            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out) 
+            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False) 
 
             for skid in skdata:
                 synapse_data[str(skid)] = skdata[skid][1]
@@ -10988,9 +11235,9 @@ class DisplayHelp(Operator):
             row.alignment = 'CENTER'
             row.label (text='Color Neurons by Similarity - Tooltip')
             box = layout.box()
-            box.label(text='This function colors neurons based on how similar they are in respect ')            
-            box.label(text='to either: morphology, synapse placement, connectivity or paired')
-            box.label(text='connectivity.')
+            box.label(text='This function colors neurons based on how similar they are in respect to either: morphology, synapse placement, connectivity or paired connectivity.')            
+            box.label(text='It is highly recommended to have SciPy installed - this will increase speed of calculation a lot!')
+            box.label(text='See https://github.com/schlegelp/CATMAID-to-Blender on how to install SciPy in Blender.')
             box.label(text='Use <Settings> button to set parameters, then <Start Calculation>.')            
             layout.label (text='Morphology:')
             box = layout.box()
