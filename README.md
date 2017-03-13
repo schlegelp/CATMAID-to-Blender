@@ -10,12 +10,12 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 
 ######Option A:
 2. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
-3. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> Search for 'CATMAIDImport' addon 
-4. Activate the script by ticking the check box and click 'Save User Settings' (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
+3. Start Blender -> **File** -> **User Preferences** -> **Addons** -> Search for **CATMAIDImport** addon 
+4. Activate the script by ticking the check box and click **Save User Settings** (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 ######Option B:
-2. Start Blender -> 'File' -> 'User Preferences' -> 'Addons' -> 'Install from File' and select CATMAIDImport.py
-3. Activate by ticking check box and click 'Save User Setting'
+2. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
+3. Activate by ticking check box and click **Save User Setting**
 
 ######Required Python packages:
 [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python that comes with all neccessary packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
@@ -37,8 +37,7 @@ pip.main(['install','scipy'])
 ```
 
 ## Before First Use:
-Open User Preferences, navigate to 'Add-ons' -> 'CATMAIDImport' and change 'CATMAID Server URL' in 'preferences' to your server.
-You may also save your credentials for convenience.
+Open **File** -> **User Preferences**, navigate to **Add-ons** -> **CATMAIDImport** and change **CATMAID Server URL** in **preferences** to your server. I also recommend saving your credentials for convenience.
 
 ![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
 
@@ -47,7 +46,7 @@ The CATMAID API authorizes requests using an API token tied to user account inst
 For Information on how to retrieve your Token look [here](http://catmaid.github.io/dev/api.html#api-token).
 
 ## Quickstart Guide:
-Import/Export panel will show up under the 'Scene' tab in the 'Properties' windows
+Import/Export panel will show up under the **Scene** tab in the **Properties** windows
 
 ![import_panel](https://cloud.githubusercontent.com/assets/7161148/23852692/fafcf71c-07e0-11e7-9e64-69ecdc3a3af0.png)
 
