@@ -18,7 +18,14 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 3. Activate by ticking check box and click **Save User Setting**
 
 ######Required Python packages:
-[Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python that comes with all neccessary packages. On Linux make sure [numpy](http://www.numpy.org/) is installed. Without [numpy](http://www.numpy.org/) the addon will work but some functions are limited.
+[Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python distribution. 
+
+On Windows/MacOs: 
+- [scipy](https://www.scipy.org/) (optional, will increase performance for clustering). 
+
+On Linux: 
+- [numpy](http://www.numpy.org/) (without numpy, functionality will be limited).
+- [scipy](https://www.scipy.org/) (optional, will increase performance for clustering).
 
 There are several ways to install additional packages for Blender's built-in Python. The easiest way is probably this:
 
