@@ -49,7 +49,7 @@ For Information on how to retrieve your Token look [here](http://catmaid.github.
 ## Quickstart Guide:
 Import/Export panel will show up under the 'Scene' tab in the 'Properties' windows
 
-![import_panel](https://cloud.githubusercontent.com/assets/7161148/5356718/c244a7a6-7f9f-11e4-8cef-b69b3cf20b32.PNG)
+![import_panel](https://cloud.githubusercontent.com/assets/7161148/23852692/fafcf71c-07e0-11e7-9e64-69ecdc3a3af0.png)
 
 - Functions (e.g. Retrieving skeletons/connectors) that need you to be logged into your CATMAID server will be grayed-out until you did so by hitting 'Connect 2 CATMAID'
 - Skeletons can be retrieved by their skeleton ID, by annotations or based on connectivity (Retrieve Partners)
@@ -57,6 +57,9 @@ Import/Export panel will show up under the 'Scene' tab in the 'Properties' windo
 - Once imported, skeleton/connector data can be readily exported to vector graphics (SVG) with a broad range of options (e.g. coloring, filters, scaling). Look at lower left panel when exporting for these options.
 
 ![export_options](https://cloud.githubusercontent.com/assets/7161148/5356716/bf994da4-7f9f-11e4-8e10-c5c628baab47.PNG)
+
+## Tutorials:
+Please check out the Github [Wiki](https://github.com/schlegelp/CATMAID-to-Blender/wiki) for additional information and tutorials.
 
 ## Examples:
 
