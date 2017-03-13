@@ -70,9 +70,9 @@ Please check out the Github [Wiki](https://github.com/schlegelp/CATMAID-to-Blend
 ####2. Group postsynaptic sites based on what presynaptic neuron they connect to
 <img src="https://cloud.githubusercontent.com/assets/7161148/14020676/7df96468-f1d8-11e5-9f04-aba115112890.png" width="650">
 
-####3. Check out [Schlegel et al., 2016](http://biorxiv.org/content/early/2016/04/07/044990) for more examples.
+####3. Check out [Schlegel et al., 2016 (eLife)](https://elifesciences.org/content/5/e16799) for more examples.
 
-## Using Python to manipulate data:
+## Using Python to manipulate data within Blender:
 
 First, download [pymaid](https://github.com/schlegelp/pymaid) to interact with and manipulate CATMAID data programmatically. In Blender's Python console:
 ```python
