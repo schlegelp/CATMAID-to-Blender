@@ -46,11 +46,10 @@ pip.main(['install','scipy'])
 ## Before First Use:
 Open **File** -> **User Preferences**, navigate to **Add-ons** -> **CATMAIDImport** and change **CATMAID Server URL** in **preferences** to your server. I also recommend saving your credentials for convenience.
 
-![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
-
-## Tokens:
 The CATMAID API authorizes requests using an API token tied to user account instead of a username and password.
 For Information on how to retrieve your Token look [here](http://catmaid.github.io/dev/api.html#api-token).
+
+![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
 
 ## Quickstart Guide:
 Import/Export panel will show up under the **Scene** tab in the **Properties** windows
