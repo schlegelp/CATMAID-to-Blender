@@ -9,13 +9,13 @@ Plugin for [Blender](http://www.blender.org "Blender Homepage") to interface wit
 First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/CATMAIDImport.py), then:
 
 #####Option A:
-2. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
-3. Start Blender -> **File** -> **User Preferences** -> **Addons** -> Search for **CATMAIDImport** addon 
-4. Activate the script by ticking the check box and click **Save User Settings** (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
+1. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
+2. Start Blender -> **File** -> **User Preferences** -> **Addons** -> Search for **CATMAIDImport** addon 
+3. Activate the script by ticking the check box and click **Save User Settings** (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 #####Option B:
-2. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
-3. Activate by ticking check box and click **Save User Setting**
+1. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
+2. Activate by ticking check box and click **Save User Setting**
 
 #####Required Python packages:
 [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python distribution. 
