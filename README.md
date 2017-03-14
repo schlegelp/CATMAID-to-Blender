@@ -43,6 +43,12 @@ import pip
 pip.main(['install','scipy'])
 ```
 
+**There appears to be a bug with macOS 10.12 Sierra which makes above steps fail if run from within Blender.** In this case try this: 
+1. Make sure Blender is in your Applications folder
+2. Right click on Blender icon -> **Show Package Contents**
+3. Navigate to **Contents/Resources/2.78/python/bin** and run **python3.5m** by drag&dropping it into a Terminal
+4. Try above steps from the Terminal 
+
 ## Before First Use:
 Open **File** -> **User Preferences**, navigate to **Add-ons** -> **CATMAIDImport** and change **CATMAID Server URL** in **preferences** to your server. I also recommend saving your credentials for convenience.
 
