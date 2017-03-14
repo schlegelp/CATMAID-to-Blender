@@ -43,7 +43,7 @@ import pip
 pip.main(['install','scipy'])
 ```
 
-**There appears to be a bug with macOS 10.12 Sierra which makes above steps fail if run from within Blender.** In this case try this: 
+**There appears to be a bug with macOS 10.12 Sierra which makes above steps fail if run from within Blender.** In that case try: 
 1. Make sure Blender is in your Applications folder
 2. Right click on Blender icon -> **Show Package Contents**
 3. Navigate to **Contents/Resources/2.78/python/bin** and run **python3.5m** by drag&dropping it into a Terminal
