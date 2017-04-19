@@ -18,6 +18,10 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.71 19/04/2017:
+    - added import of volumes by name (enables import of multiple volumes at a time)
+    - imported volumes are now smoothed
+
 ### V5.7 30/03/2017:
     - added import of gap junctions and abutting connectors
 
@@ -348,7 +352,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 6, 3),
+ "version": (5, 7, 1),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -6715,7 +6719,30 @@ class ExportAllToSVG(Operator, ExportHelper):
         f.write(line_to_write + '\n')
 
         """
-    
+
+def fibonacci_sphere(samples=1,randomize=True):
+        """ Calculates points on a sphere
+        """
+        rnd = 1.
+        if randomize:
+         rnd = random.random() * samples
+
+        points = []
+        offset = 2./samples
+        increment = math.pi * (3. - math.sqrt(5.));
+
+        for i in range(samples):
+         y = ((i * offset) - 1) + (offset / 2);
+         r = math.sqrt(1 - pow(y,2))
+
+         phi = ((i + rnd) % samples) * increment
+
+         x = math.cos(phi) * r
+         z = math.sin(phi) * r
+
+         points.append([x,y,z])
+
+        return points    
 
 class Create_Mesh (Operator):
     """Class used to instance neurons"""  
@@ -6732,9 +6759,7 @@ class Create_Mesh (Operator):
         if create_as == 'Curves':
             node_list = { n[0]:n[3:6] for n in node_data[0] }
         elif create_as == 'Spheres':
-            pi = np.pi
-            cos = np.cos
-            sin = np.sin
+            points = fibonacci_sphere( 10 )
          
         for i,connector in enumerate( connectors_post ):
             if round(i/len(connectors_post)*100,2) % 10 == 0:
@@ -6750,25 +6775,9 @@ class Create_Mesh (Operator):
             co_parent = connectors_post[connector]['parent_node']
 
             if create_as == 'Spheres':
-                """
-                #Generate coords
-                r = co_size                
-                phi, theta = np.mgrid[0.0:pi:6j, 0.0:2.0*pi:5j]
-                x = r*sin(phi)*cos(theta)
-                y = r*sin(phi)*sin(theta)
-                z = r*cos(phi)
-                """
-
                 connector_post_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
                                                                             location=co_loc, size = co_size, \
-                                                                            layers=layers)
-
-
-                """
-                connector_post_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=4, ring_count=4, size=co_size, view_align=False, \
-                                                                        enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                        layers=layers)
-                """
+                                                                            layers=layers)               
 
                 bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)            
                 bpy.ops.object.shade_smooth()     
@@ -6777,7 +6786,7 @@ class Create_Mesh (Operator):
                     Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
                 else:
                     Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])  
-            """
+            
             elif create_as == 'Curves':
                 co_parent_coords = (    
                                     node_list[ co_parent ][0] / conversion_factor,
@@ -6809,9 +6818,7 @@ class Create_Mesh (Operator):
                 if unify_materials is False:
                     Create_Mesh.assign_material ( ob_post , 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])        
                 else:
-                    Create_Mesh.assign_material ( ob_post , None , connector_color[0] , connector_color[1] , connector_color[2])  
-        """
-
+                    Create_Mesh.assign_material ( ob_post , None , connector_color[0] , connector_color[1] , connector_color[2])
 
         for i, connector in enumerate( connectors_pre ):
             if round(i/len(connectors_pre)*100,2) % 10 == 0:
@@ -6826,12 +6833,7 @@ class Create_Mesh (Operator):
             if create_as == 'Spheres': 
                 connector_pre_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
                                                                             location=co_loc, size = co_size, \
-                                                                            layers=layers)   
-                """         
-                connector_pre_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=3, ring_count=3, size=co_size, view_align=False, \
-                                                                        enter_editmode=False, location=co_loc, rotation=(0, 0, 0), \
-                                                                        layers=layers)            
-                """
+                                                                            layers=layers)                  
 
                 bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)            
                 bpy.ops.object.shade_smooth()                        
@@ -6875,7 +6877,7 @@ class Create_Mesh (Operator):
                     Create_Mesh.assign_material ( ob_pre , None , connector_color[0] , connector_color[1] , connector_color[2])  
 
         print('Done in ' + str(time.clock()-start_creation)+'s')
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)    
 
     def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = [], radii = {}, strahler_indices = None):
         ### Creates Neuron from Curve data that was imported from CATMAID
@@ -11141,7 +11143,7 @@ def get_volume_list(project_id):
 
     global available_volumes
 
-    available_volumes = [ ( str( e['id'] ) , e['name'], str( e['comment'] ) ) for e in response ]
+    available_volumes = [ ('None' , 'None', 'Do not import volume from this list') ] + [ ( str( e['id'] ) , e['name'], str( e['comment'] ) ) for e in response ]     
 
     return available_volumes
 
@@ -11159,89 +11161,114 @@ class ImportVolume(Operator):
     bl_label = "Import volumes from CATMAID" 
     bl_options = {'UNDO'}       
 
-    volume = EnumProperty( name='Volume to Import',
+    volume = EnumProperty( name='Import from List',
                             items=availableVolumes,
-                            description = 'Select volume to be imported. Will refresh whenever this dialog is opened'
+                            description = 'Select volume to be imported. Will refresh whenever this dialog is opened.'
                             )    
 
+    by_name = StringProperty( name='Import by Name',
+                            default = '',
+                            description = 'Name of volume to import.'
+                            )
+
+    allow_partial = BoolProperty(   name = 'Allow partial match',
+                                    default = True,
+                                    description = 'If True, name can be a partial match.')
+
     def execute(self,context):      
+        volumes_to_retrieve = []
+        
+        if self.volume != 'None':
+            volumes_to_retrieve.append(self.volume)
+
+        if self.by_name:
+            if self.allow_partial:
+                volumes_to_retrieve += [ v for v in available_volumes if self.by_name.lower() in v[1].lower() ]
+            else:
+                volumes_to_retrieve += [ v for v in available_volumes if self.by_name.lower() == v[1].lower() ]
+
         conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
 
-        url = remote_instance.get_volume_details( project_id, self.volume )
+        for vol in volumes_to_retrieve:
 
-        response = remote_instance.fetch(url)
+            url = remote_instance.get_volume_details( project_id, vol[0] )
 
-        mesh_string = response['mesh']
-        mesh_name = response['name']
+            response = remote_instance.fetch(url)
 
-        mesh_type = re.search('<(.*?) ', mesh_string).group(1)
+            mesh_string = response['mesh']
+            mesh_name = response['name']
 
-        #Now reverse engineer the mesh
-        if mesh_type  == 'IndexedTriangleSet':            
-            t = re.search("index='(.*?)'", mesh_string).group(1).split(' ')
-            faces = [ ( int( t[i] ), int( t[i+1] ), int( t[i+2] ) ) for i in range( 0, len(t) - 2 , 3 ) ]
+            mesh_type = re.search('<(.*?) ', mesh_string).group(1)
 
-            v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
-            vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
+            #Now reverse engineer the mesh
+            if mesh_type  == 'IndexedTriangleSet':            
+                t = re.search("index='(.*?)'", mesh_string).group(1).split(' ')
+                faces = [ ( int( t[i] ), int( t[i+1] ), int( t[i+2] ) ) for i in range( 0, len(t) - 2 , 3 ) ]
 
-        elif mesh_type  == 'IndexedFaceSet':
-            #For this type, each face is indexed and an index of -1 indicates the end of this face set
-            t = re.search("coordIndex='(.*?)'", mesh_string).group(1).split(' ')
-            faces = []
-            this_face = []
-            for f in t:
-                if int(f) != -1:
-                    this_face.append( int(f) )
-                else:
-                    faces.append( this_face )
-                    this_face = []
+                v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
+                vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
 
-            #Make sure the last face is also appended
-            faces.append( this_face )
+            elif mesh_type  == 'IndexedFaceSet':
+                #For this type, each face is indexed and an index of -1 indicates the end of this face set
+                t = re.search("coordIndex='(.*?)'", mesh_string).group(1).split(' ')
+                faces = []
+                this_face = []
+                for f in t:
+                    if int(f) != -1:
+                        this_face.append( int(f) )
+                    else:
+                        faces.append( this_face )
+                        this_face = []
 
-            v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
-            vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
+                #Make sure the last face is also appended
+                faces.append( this_face )
 
-        else:
-            print("Unknown volume type:", mesh_type)
-            print(mesh_string)                
-            osd.show("Export cancelled - unknown volume type" )
-            osd_timed = ClearOSDAfter(3)
-            osd_timed.start() 
-            return{'FINISHED'}
+                v = re.search("point='(.*?)'", mesh_string).group(1).split(' ')
+                vertices = [ ( float( v[i] ), float( v[i+1] ), float( v[i+2] ) ) for i in range( 0,  len(v) - 2 , 3 ) ]
 
-        #For some reason, in this format vertices occur multiple times - we have to collapse that to get a clean mesh
-        final_faces = []
-        final_vertices = []
+            else:
+                print("Unknown volume type:", mesh_type)
+                print(mesh_string)                
+                osd.show("Export cancelled - unknown volume type" )
+                osd_timed = ClearOSDAfter(3)
+                osd_timed.start() 
+                return{'FINISHED'}
 
-        for t in faces:
-            this_faces = []
-            for v in t:
-                if vertices[v] not in final_vertices:
-                    final_vertices.append( vertices[v] )
-                    
-                this_faces.append( final_vertices.index( vertices[v] ) )
+            #For some reason, in this format vertices occur multiple times - we have to collapse that to get a clean mesh
+            final_faces = []
+            final_vertices = []
 
-            final_faces.append( this_faces )
+            for t in faces:
+                this_faces = []
+                for v in t:
+                    if vertices[v] not in final_vertices:
+                        final_vertices.append( vertices[v] )
+                        
+                    this_faces.append( final_vertices.index( vertices[v] ) )
 
-        print('Volume type:', mesh_type)
-        print('# of vertices after clean-up:' , len(final_vertices) )
-        print('# of faces after clean-up:' , len(final_faces) )     
+                final_faces.append( this_faces )
 
-        #Now bring vertices in Blender space
-        blender_verts = [ ( v[0] / conversion_factor, v[2] / conversion_factor , v[1] / - conversion_factor  ) for v in final_vertices ]
+            print('Volume name:', vol[1])
+            print('Volume type:', mesh_type)
+            print('# of vertices after clean-up:' , len(final_vertices) )
+            print('# of faces after clean-up:' , len(final_faces) )     
 
-        #Now create the mesh
-        me = bpy.data.meshes.new(mesh_name + '_mesh')
-        ob = bpy.data.objects.new(mesh_name, me)
+            #Now bring vertices in Blender space
+            blender_verts = [ ( v[0] / conversion_factor, v[2] / conversion_factor , v[1] / - conversion_factor  ) for v in final_vertices ]
 
-        scn = bpy.context.scene
-        scn.objects.link(ob)
-        scn.objects.active = ob
-        ob.select = True
+            #Now create the mesh
+            me = bpy.data.meshes.new(mesh_name + '_mesh')
+            ob = bpy.data.objects.new(mesh_name, me)
 
-        me.from_pydata(blender_verts, [], final_faces)
-        me.update()
+            scn = bpy.context.scene
+            scn.objects.link(ob)
+            scn.objects.active = ob
+            ob.select = True           
+
+            me.from_pydata(blender_verts, [], final_faces)
+            me.update()
+
+            bpy.ops.object.shade_smooth()
         
         return{'FINISHED'}
 
@@ -11259,6 +11286,10 @@ class ImportVolume(Operator):
         row.label(text="Reconnect to CATMAID server to refresh list") 
         row = layout.row()
         row.prop(self, "volume")    
+        row = layout.row()
+        row.prop(self, "by_name") 
+        row = layout.row()
+        row.prop(self, "allow_partial") 
     """
     def draw(self, context):
         layout = self.layout

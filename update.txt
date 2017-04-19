@@ -1,7 +1,7 @@
 #Provides current version, last stable version, 
 #recently added features and a message if need be
 
-current_version = {5.63}
+current_version = {5.71}
 last_stable = {4.1}
 new_features = {UI improvements; code clean-up}
 message = {}
