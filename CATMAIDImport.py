@@ -18,6 +18,9 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.72 19/04/2017:
+    - added import of tags
+
 ### V5.71 19/04/2017:
     - added import of volumes by name (enables import of multiple volumes at a time)
     - imported volumes are now smoothed
@@ -440,6 +443,10 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row.operator("retrieve.connectors", text = "Retrieve Connectors", icon = 'PMARKER_SEL')
         row.operator("display.help", text = "", icon ='QUESTION').entry = 'retrieve.connectors' 
 
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("retrieve.tags", text = "Retrieve Tags", icon = 'SYNTAX_OFF')        
+
         layout.label('Materials:')
 
         row = layout.row(align=True)
@@ -494,7 +501,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("analyze.statistics", text = 'Get Statistics', icon = 'BORDER_RECT')
+        row.operator("analyze.statistics", text = 'Get Statistics', icon = 'FILE_TICK')
 
 
         layout.label('Calculate Similarity:')
@@ -2134,6 +2141,119 @@ class RetrieveInVolume(Operator):
             return True
         else:
             return False    
+
+
+
+class RetrieveTags(Operator):      
+    """Retrieves Tags of active/selected/all Neuron from CATMAID database"""
+    bl_idname = "retrieve.tags"  
+    bl_label = "Retrieve Tags"
+
+    which_neurons = EnumProperty(   name = "For which Neuron(s)?", 
+                                    items = [('Selected','Selected','Selected'),('All','All','All')],
+                                    description = "Choose for which neurons to retrieve tags.")
+    color_prop = EnumProperty(      name = "Colors", 
+                                    items = [('Black','Black','Black'),('Mesh color','Mesh color','Mesh color'),('By tag','By tag','By Tag')],
+                                    default = 'By tag',
+                                    description = "How to color the tags.")    
+    basic_radius = FloatProperty(   name="Size", 
+                                    default = 0.03,
+                                    description = "Set size of spheres representing tags.")
+    layer = IntProperty(            name="Create in Layer", 
+                                    default = 2,
+                                    min = 0,
+                                    max = 19,
+                                    description = "Set layer in which to create tags.")
+    filter_str = StringProperty(   name="Filter Tags",
+                                    description='Filter tags.')
+    
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self, width = 800)
+
+    def execute(self, context):  
+        global remote_instance
+        
+        bpy.context.scene.layers[self.layer] = True
+        layers = [i == self.layer for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]]
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        
+        if self.which_neurons == 'All':
+            to_search = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_search = bpy.context.selected_objects
+        
+        filtered_skids = []
+        colormap = {}
+        for ob in to_search:
+            if ob.name.startswith('#'):
+                skid = re.search('#(.*?) -',ob.name).group(1)
+                filtered_skids.append(skid)
+                colormap[skid] = tuple( ob.active_material.diffuse_color )
+
+        if not filtered_skids:
+            print('Error - no neurons found! Cancelled')
+            self.report({'ERROR'},'No neurons found!')
+            return {'FINISHED'}
+        
+        start = time.clock()
+
+        print("Retrieving connector data for %i neurons" % len(filtered_skids))
+        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False )
+
+        if self.color_prop == 'By tag':            
+            all_tags = set( [ t for n in skdata for t in skdata[n][2] ] )
+            colors = ColorCreator.random_colors( len( all_tags )  )
+            colormap = { t : colors[i] for i,t in enumerate(all_tags)  }
+
+        for n in skdata:
+            coords = { n[0] : ( n[3]/self.conversion_factor, n[5]/self.conversion_factor, n[4]/-self.conversion_factor ) for n in skdata[n][0] }
+
+            if self.color_prop == 'Black':
+                    color = (0,0,0)
+            elif self.color_prop == 'Mesh color':
+                color = colormap[n]
+            
+            for tag in skdata[n][2]:
+                if self.filter_str and self.filter_str not in tag:
+                    continue               
+
+                if self.color_prop == 'By tag':
+                        color = colormap[tag]
+
+                for tn in skdata[n][2][tag]:
+                    tag_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=2, view_align=False, enter_editmode=False, \
+                                                                            location=coords[tn], size = self.basic_radius, \
+                                                                            layers=layers)               
+
+                    bpy.context.active_object.name = '%s (#%s)'  % ( tag, n )            
+                    bpy.ops.object.shade_smooth()     
+
+                    if self.color_prop == 'Black':
+                        mat_name = 'Tag_mat'
+                    elif self.color_prop == 'Mesh color':
+                        mat_name = 'Tag_mat of #%s' % n 
+                    elif self.color_prop == 'By tag':
+                        mat_name = 'Tag_mat for %s' % tag 
+                    
+                    Create_Mesh.assign_material (bpy.context.active_object, mat_name , color[0] , color[1] , color[2])
+
+        if errors is None:
+            self.report({'INFO'},'Import successfull. Look in layer %i' % self.layer)
+            osd.show("Done.")
+            osd_timed = ClearOSDAfter(3)
+            osd_timed.start()
+        else:
+            self.report({'ERROR'}, errors)                
+            
+        return {'FINISHED'}
+                    
 
 class RetrieveConnectors(Operator):      
     """Retrieves Connectors of active/selected/all Neuron from CATMAID database"""
