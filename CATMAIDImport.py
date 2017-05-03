@@ -18,6 +18,10 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.73 03/05/2017:
+    - bugfixes
+    - made plotting of dendrogram using pylab optional
+
 ### V5.72 19/04/2017:
     - added import of tags
 
@@ -355,7 +359,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 7, 1),
+ "version": (5, 7, 3),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -1767,7 +1771,7 @@ class UpdateNeurons(Operator):
         for skid in skdata:                        
             CATMAIDtoBlender.extract_nodes( skdata[skid], str(skid), 
                                             neuron_name = neuron_names[str(skid)], 
-                                            resampling = self.resampling, 
+                                            resampling = resampling_factors[skid], 
                                             import_synapses = self.import_synapses, 
                                             import_gap_junctions = self.import_gap_junctions,
                                             import_abutting = self.import_abutting,
@@ -2460,7 +2464,7 @@ class RetrieveConnectors(Operator):
                 for connector in connector_data_post:
                     number_of_targets[connector[0]] = len(connector[1]['postsynaptic_to'])              
 
-            print('Number of postsynapses/connector:', number_of_targets)
+            #print('Number of postsynapses/connector:', number_of_targets)
                 
             ### Create a sphere for every connector - presynapses will be scaled based on number of postsynaptic targets
             if self.color_prop == 'Black':
@@ -2526,8 +2530,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
     proximity_radius_for_density = FloatProperty(name="Proximity Threshold (Blender Units!)", 
                                                  default = 0.25,
                                                  description = "Maximum allowed distance between Connector and a Node")        
-    export_inputs = BoolProperty(name="Export Inputs", default = True)
-    export_outputs = BoolProperty(name="Export Outputs", default = True)
+    export_inputs = BoolProperty(name="Export Synaptic Inputs", default = True )
+    export_outputs = BoolProperty(name="Export Synaptic Outputs", default = True )
+    export_gaps = BoolProperty(name="Export Gap Junctions", default = True )
+    export_abutting = BoolProperty(name="Export Abutting Connectors", default = False )
     scale_outputs = BoolProperty(name="Scale Presynapses", default = False,
                                  description = "Size of Presynapses based on number of postsynaptically connected neurons")    
     basic_radius = FloatProperty(name="Base Radius", default = 0.5) 
@@ -2629,7 +2635,13 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         self.mesh_color[skid] =  neuron.active_material.diffuse_color
 
         print("Retrieving connector data for %i neurons" % len(skids_to_export)) 
-        skdata,errors = retrieveSkeletonData(skids_to_export, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False)
+        skdata,errors = retrieveSkeletonData( skids_to_export, 
+                                              time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                              skip_existing = False,
+                                              get_abutting = self.export_abutting
+                                            )
+
+        #Cndata is a dictionary containing details of all connectors
         cndata = self.get_all_connectors( skdata )
 
         if cndata is None:
@@ -2639,13 +2651,16 @@ class ConnectorsToSVG(Operator, ExportHelper):
             self.report({'ERROR'},errors)
 
         for skid in skids_to_export:
-            connector_data[skid] = self.get_connectors(skid,skdata[skid],cndata)
+            connector_data[skid] = self.get_connectors(skid, skdata[skid], cndata)
 
         if self.color_by_connections:
             #If outputs are exported then count only upstream connections (upstream sources of these outputs)
             #If inputs are exported then count only downstream connections (downstream targets of these inputs)
             #-> just use them invertedly for use_inputs/outputs when calling get_connectivity
-            self.connections_for_color = self.get_connectivity(skids_to_export,self.export_outputs,self.export_inputs)  
+            self.connections_for_color = self.get_connectivity( skids_to_export, 
+                                                                self.export_outputs,
+                                                                self.export_inputs
+                                                            )  
 
         if self.export_neuron is True:        
             neurons_svg_string = self.create_svg_for_neuron(neurons_to_export)                    
@@ -2667,6 +2682,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
 
     def get_all_connectors(self, skdata):
+        """ Get details for connectors for all neuronss
+        """
         connector_id_list = []
         connector_postdata = {}
 
@@ -2676,6 +2693,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     connector_id_list.append(c[1])
                 if self.export_inputs is True and c[2] == 1:
                     connector_id_list.append(c[1])
+                if self.export_gaps is True and c[2] == 2:
+                    connector_id_list.append(c[1])
+                if self.export_abutting is True and c[2] == 3:
+                    connector_id_list.append(c[1])
 
         if not connector_id_list:
             print('ERROR: no connectors found!')
@@ -2684,34 +2705,33 @@ class ConnectorsToSVG(Operator, ExportHelper):
 
         for i, c in enumerate( list( set( connector_id_list ) ) ):           
             connector_tag = 'connector_ids[%i]' % i
-            connector_postdata[connector_tag] = c
+            connector_postdata[ connector_tag ] = c
 
         remote_connector_url = remote_instance.get_connector_details_url( project_id )
 
+        """
+        Format of temp_data = [ [ cn_id, { 'connector_id' : int(), 
+                                            'presynaptic_to': skid, 
+                                            'postsynaptic_to' : [skid, skid, ...], 
+                                            'presynaptic_to_node' : tn_id, 
+                                            'postsynaptic_to_node': [tn_id, tn_id, ...] } 
+                                            ] ]
+        """
         temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )
 
         skids_to_check = []
-        cn_data = {}
-        print('TEMP DATA:',temp_data)
-        for c in temp_data:
-            cn_data[ c[0] ] = c[1] 
-
-            #print('C:',c)   
-
-            if c[1]['presynaptic_to'] != None:
-               skids_to_check.append(c[1]['presynaptic_to'])
-           
-            for target_skid in c[1]['postsynaptic_to']:
-                if target_skid != None:
-                    skids_to_check.append(target_skid)  
+        cn_data = { c[0] : c[1] for c in temp_data }  
+        skids_to_check = [ c[1]['presynaptic_to'] for c in temp_data if c[1]['presynaptic_to'] != None ] + [ s for c in temp_data for s in c['postsynaptic_to'] if s != None ]        
 
         self.check_ancestry ( list ( set( skids_to_check + list(skdata) ) ) )
 
+        #Format of cn_data = { connector_id : {} }
         return cn_data 
       
         
-    def get_connectors(self, active_skeleton, node_data, cndata):
-        connector_ids = []
+    def get_connectors(self, active_skeleton, node_data, cndata ):
+        """ Get a list of connectors for each neuron. Apply filters if necessary
+        """        
         
         if self.filter_connectors:
             filter_list = self.filter_connectors.split(',')
@@ -2723,59 +2743,54 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     filter_exclusion = True
                 else:
                     filter_inclusion = True
-
-        i = 0
-        connector_postdata_postsynapses = {}
-        connector_postdata_presynapses = {}
+             
         connector_post_coords = {}
-        connector_pre_coords = {}
-        nodes_list = {}
+        connector_pre_coords = {}        
 
         connector_data_post = []
         connector_data_pre = []
             
-        print('Extracting coordinates..')        
+        print('Extracting coordinates..')
         
         ### Convert coordinates to Blender
-        for node in node_data[0]:
-            
-            X = float(node[3])/self.conversion_factor
-            Y = float(node[4])/-self.conversion_factor
-            Z = float(node[5])/self.conversion_factor            
-            
-            nodes_list[node[0]] = (X,Z,Y)
+        nodes_list = { n[0] : (   float(node[3])/self.conversion_factor,
+                                 float(node[4])/-self.conversion_factor,
+                                 float(node[5])/self.conversion_factor 
+                             ) for n in node_data[0] }       
 
-        for connection in node_data[1]:
+        
+        connector_coords = { cn[1] : (cn[3]/self.conversion_factor,cn[5]/self.conversion_factor,cn[4]/-self.conversion_factor) for cn in node_data[1] }
+
+        for cn in node_data[1]:
                         
-            if connection[2] == 1 and self.export_inputs is True:
+            if cn[2] == 1 and self.export_inputs is True:
                 ### For Sources the Treenodes the Connector is connecting TO are listed
                 ### Reason: One connector can connector to the same neuron (at different treenodes) multiple times!!!
                 ### !!!Attention: Treenode can be connected to multiple connectors (up- and downstream)
                 
-                if connection[0] not in connector_pre_coords:
-                    connector_pre_coords[connection[0]] = {}
+                if cn[0] not in connector_pre_coords:
+                    connector_pre_coords[cn[0]] = {}
                     
                 #Format: connector_pre_coord[target_treenode_id][upstream_connector_id] = coords of target treenode
-                connector_pre_coords[connection[0]][connection[1]] = {} 
-                connector_pre_coords[connection[0]][connection[1]]['coords'] = nodes_list[connection[0]] #these are treenode coords, NOT connector coords                            
+                connector_pre_coords[cn[0]][cn[1]] = {} 
+                connector_pre_coords[cn[0]][cn[1]]['coords'] = nodes_list[cn[0]] #these are treenode coords, NOT connector coords                            
 
-                connector_data_pre.append( [ connection[1] , cndata[ connection[1] ] ] )
+                connector_data_pre.append( [ cn[1] , cndata[ cn[1] ] ] )
 
-            if connection[2] == 0 and self.export_outputs is True:
-                connector_post_coords[connection[1]] = {}
-                connector_post_coords[connection[1]]['id'] = connection[1]
-                connector_post_coords[connection[1]]['coords'] = (connection[3]/self.conversion_factor,connection[5]/self.conversion_factor,connection[4]/-self.conversion_factor)
+            if cn[2] == 0 and self.export_outputs is True:
+                connector_post_coords[cn[1]] = {}
+                connector_post_coords[cn[1]]['id'] = cn[1]
+                connector_post_coords[cn[1]]['coords'] = (cn[3]/self.conversion_factor,cn[5]/self.conversion_factor,cn[4]/-self.conversion_factor)
 
-                connector_data_post.append( [ connection[1] , cndata[ connection[1] ] ] )
-                
-            i += 1
+                connector_data_post.append( [ cn[1] , cndata[ cn[1] ] ] )               
+            
         
         print('%s Down- / %s Upstream connectors for skid %s found' % (len(connector_post_coords), len(connector_pre_coords), active_skeleton))
         remote_connector_url = remote_instance.get_connector_details_url( project_id )
 
         if connector_data_pre or connector_data_post:
             print("Connectors successfully retrieved")     
-            number_of_targets = {}
+            number_of_targets = {  }
             presynaptic_to = {}
             postsynaptic_to = {}
             
@@ -2797,8 +2812,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
                         
                 
                 print('Retrieving Ancestry of all downstream neurons...')
-                self.check_ancestry(skids_to_check) 
-                print('Done')                
+                self.check_ancestry( skids_to_check ) 
+                print('Done')              
 
                 neurons_included = []  
                 entries_to_delete = {}                
@@ -2815,7 +2830,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     if connector_id not in postsynaptic_to:
                         postsynaptic_to[connector_id] = []                        
                     
-                    entries_to_delete[connector_id] = True                     
+                    entries_to_delete[ connector_id ] = True                     
                     
                     if self.filter_connectors:
                         print('Filtering Connector %i (postsynaptic to: %s) for: < %s >' % (connector[0], str(connector[1]['postsynaptic_to']), self.filter_connectors))
@@ -2877,11 +2892,10 @@ class ConnectorsToSVG(Operator, ExportHelper):
                 
                 if self.filter_connectors:
                     print('Downstream Neurons remaining after filtering:')
-                    print(set(neurons_included))
-                      
+                    print(set(neurons_included))                      
             
             ### Only proceed if neuron actually has Inputs (e.g. sensory neurons)
-            if len(connector_pre_coords) > 0:
+            if len( connector_pre_coords ) > 0:
                 print('Total of %s connectors for %s inputs found: ' % (str(len(connector_data_pre)), str(len(connector_pre_coords))))                
                 
                 ### Retrieve Ancestry(= name for all upstream neurons):
@@ -2915,7 +2929,6 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     if treenode not in presynaptic_to:
                         presynaptic_to[treenode] = []
                     entries_to_delete[treenode] = True
-
                     
                     ### Connector_data_XXX is a list NOT a dictionary, so we have to cycle through it
                     for connector in connector_data_pre:                    
@@ -2979,8 +2992,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
                     print('Upstream Neurons remaining after filtering:')
                     print(set(neurons_included))
 
-
-            return((number_of_targets, connector_pre_coords, connector_post_coords, presynaptic_to))
+            return( ( number_of_targets, connector_pre_coords, connector_post_coords, presynaptic_to ) )
            
         else:
             print('No data retrieved')
@@ -3028,7 +3040,7 @@ class ConnectorsToSVG(Operator, ExportHelper):
         
         density_gradient = {'start_rgb': (0,255,0),
                             'end_rgb':(255,0,0)}
-        density_data = []        
+        density_data = []
 
         brain_shape_top_string = '<g id="brain shape top">\n <polyline points="28.3,-5.8 34.0,-7.1 38.0,-9.4 45.1,-15.5 50.8,-20.6 57.7,-25.4 59.6,-25.6 63.2,-22.8 67.7,-18.7 70.7,-17.2 74.6,-14.3 78.1,-12.8 84.3,-12.6 87.7,-15.5 91.8,-20.9 98.1,-32.4 99.9,-38.3 105.2,-48.9 106.1,-56.4 105.6,-70.1 103.2,-75.8 97.7,-82.0 92.5,-87.2 88.8,-89.1 82.6,-90.0 75.0,-89.9 67.4,-89.6 60.8,-85.6 55.3,-77.2 52.4,-70.2 51.9,-56.7 55.0,-47.0 55.9,-36.4 56.0,-32.1 54.3,-31.1 51.0,-33.4 50.7,-42.5 52.7,-48.6 49.9,-58.4 44.3,-70.8 37.4,-80.9 33.1,-84.0 24.7,-86.0 14.2,-83.9 8.3,-79.1 2.9,-68.3 1.3,-53.5 2.5,-46.9 3.0,-38.3 6.3,-28.2 10.9,-18.7 16.3,-9.7 22.2,-6.4 28.3,-5.8" \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="88.8,-89.1 90.9,-97.7 92.9,-111.3 95.6,-125.6 96.7,-139.4 95.9,-152.0 92.8,-170.2 89.4,-191.0 87.2,-203.7 80.6,-216.6 73.4,-228.3 64.5,-239.9 56.4,-247.3 48.8,-246.9 39.0,-238.3 29.6,-226.9 24.7,-212.0 22.9,-201.2 23.1,-186.9 18.7,-168.3 14.1,-150.4 12.6,-138.0 13.7,-121.5 16.3,-105.1 18.3,-84.8 " \n style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>' 
         brain_shape_front_string = '<g id="brain shape front"> \n <polyline points="51.5,24.0 52.0,21.3 52.0,17.6 50.2,11.2 46.8,6.5 40.5,2.5 33.8,1.1 25.4,3.4 18.8,8.0 13.2,12.5 8.3,17.9 4.3,23.8 1.8,29.3 1.4,35.6 1.6,42.1 4.7,48.3 7.9,52.5 10.8,56.9 13.1,64.3 14.3,73.2 12.8,81.0 16.2,93.6 20.9,101.5 28.2,107.5 35.3,112.7 42.2,117.0 50.8,119.3 57.9,119.3 67.1,118.0 73.9,114.1 79.0,110.4 91.1,102.7 96.3,94.2 96.3,85.3 94.0,81.4 95.4,74.8 96.6,68.3 97.5,64.7 100.9,59.7 103.8,52.5 105.4,46.7 106.1,38.8 105.4,32.4 103.1,26.4 98.9,21.0 94.1,16.3 88.3,11.1 82.0,6.5 74.8,3.3 67.8,3.1 61.7,5.1 56.8,9.6 53.4,15.2 52.2,19.7 52.3,25.3 51.4,24.1 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n <polyline points="46.6,34.0 45.5,36.1 43.2,38.6 41.1,43.3 39.7,48.7 39.7,51.0 42.6,55.2 51.4,59.5 54.9,60.9 60.8,60.8 62.9,58.2 62.9,52.6 60.3,47.6 57.7,43.9 56.1,40.2 55.1,35.9 55.1,34.4 51.8,33.6 49.1,33.5 46.6,34.0 " \n  style="fill:none;stroke:darkslategray;stroke-width:0.5;stroke-linecap:round;stroke-linejoin:round"/> \n </g>'         
@@ -4711,7 +4723,7 @@ class RetrievePartners(Operator):
         start = time.clock()
            
         skdata, errors = retrieveSkeletonData( filtered_partners , 
-                                              time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
+                                              time_out = bpy.context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
                                               get_abutting = self.import_abutting ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
@@ -9233,7 +9245,10 @@ class CalculateSimilarityModal(Operator):
         osd_timed.start()
         ahd.clear()
 
-        self.matplot_dendrogram()
+        try:
+            self.matplot_dendrogram()
+        except:
+            pass
 
         if self.save_dendrogram is True and os.path.exists ( os.path.normpath ( self.path_dendrogram ) ):
             print('Creating Dendrogram.svg')
