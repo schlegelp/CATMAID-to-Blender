@@ -18,6 +18,12 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.8 30/05/2017:
+    - added basic history plot (similar to CATMAID's 3D viewer)
+
+### V5.74 05/05/2017:
+    - added option to color connectors by neuron color
+
 ### V5.73 03/05/2017:
     - bugfixes
     - made plotting of dendrogram using pylab optional
@@ -330,16 +336,19 @@ import http.cookiejar as cj
 import threading
 import mathutils
 import sys
+
 try:
     import numpy as np
 except:
     print('Please install SciPy - this will speed up clustering more than 2-fold!')
+
 try:
     from scipy.spatial import distance        
     import pylab
     from scipy import cluster
 except:
     print('Unable to import SciPy. Some functions will not work!')
+
 try: 
     import matplotlib.pyplot as plt    
 except:
@@ -359,7 +368,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 7, 3),
+ "version": (5, 8, 0),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -527,6 +536,13 @@ class CATMAIDimportPanel(bpy.types.Panel):
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("import.volume", text = 'Import Volume', icon = 'IMPORT')
+
+        layout.label('Animate:')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("animate.history", text = 'History', icon = 'OUTLINER_DATA_CAMERA')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'animate.history'
         
         
 class VersionManager(bpy.types.PropertyGroup):
@@ -720,6 +736,11 @@ class CatmaidInstance:
     #Returns, in JSON, [[nodes], [connectors], [tags]], with connectors and tags being empty when 0 == with_connectors and 0 == with_tags, respectively
     def get_compact_skeleton_url(self, pid, skid, connector_flag = 1, tag_flag = 1):        
         return self.djangourl("/" + str(pid) + "/" + str(skid) + "/" + str(connector_flag) + "/" + str(tag_flag) + "/compact-skeleton")
+
+    def get_compact_details_url(self, pid, skid):        
+        """ Similar to compact-skeleton but if 'with_history':True is passed as GET request, returned data will include all positions a nodes/connector has ever occupied plus the creation time and last modified.        
+        """
+        return self.djangourl("/" + str(pid) + "/skeletons/" + str(skid) + "/compact-detail")
 
     #The difference between this function and the compact_skeleton function is that
     #the connectors contain the whole chain from the skeleton of interest to the
@@ -1203,7 +1224,7 @@ def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
     return list(skeletons)
 
 
-def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_abutting = False ):
+def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_abutting = False, with_history = False ):
     """ Retrieves 3D skeleton data from CATMAID server using threads
 
     Parameters:
@@ -1211,10 +1232,14 @@ def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_ab
     skid_list :     list of skeleton ids to retrieve
     time_out :      integer (optional, default is set in plugin properties)
                     Sometimes CATMAID server does not respond to request. Time out prevents infinite freeze.  
+    skip_existing : boolean (default = True)
+                    This prevents existing neurons to be reloaded.
     get_abutting :  boolean (default = False)
                     if True, will retrieve abutting connectors
                     For some reason they are not part of /compact-json/, so we have to retrieve them
                     via /connectors/ and add them to compact-json -> will give them connector type 3!
+    with_history :  boolean (default = False)
+                    If true, will retrieve skeleton data with timestamps
 
     Returns:
     -------
@@ -1246,12 +1271,13 @@ def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_ab
 
     #Generate and start threads
     print('Creating threads to retrieve skeleton data:')
-    for i,skid in enumerate(skid_list):
-        remote_compact_skeleton_url = remote_instance.get_compact_skeleton_url( project_id ,skid, 1 , 1 )
-        t = retrieveUrlThreaded ( remote_compact_skeleton_url )
+    for i,skid in enumerate(skid_list):        
+        remote_compact_skeleton_url = remote_instance.get_compact_details_url( project_id , skid )
+        remote_compact_skeleton_url += '?%s' % urllib.parse.urlencode( {'with_history': with_history , 'with_tags' : True , 'with_connectors' : True  , 'with_merge_history': False } )
+        t = retrieveUrlThreaded ( remote_compact_skeleton_url.lower() )
         t.start()
         threads[skid] = t
-        print('\r Threads: '+str(len(threads)),end='')      
+        print('\r Threads: '+str(len(threads)),end='')
 
     #Now keep trying to join threads as they finish until all threads are closed or time out
     print('\n Now joining threads.')
@@ -1428,6 +1454,10 @@ class RetrieveNeuron(Operator):
                                         default = False,
                                         description = "If true, neuron will use node radii for thickness. If false, radius is assumed to be 70nm (for visibility).")
 
+    neuron_mat_for_connectors =  BoolProperty( name="Connector color as neuron", 
+                                        default = False,
+                                        description = "If true, connectors will have the same color as the neuron.")
+
 
     def draw(self, context):
         layout = self.layout
@@ -1453,7 +1483,9 @@ class RetrieveNeuron(Operator):
         row = box.row(align=False)
         row.prop(self, "import_gap_junctions")
         row = box.row(align=False)
-        row.prop(self, "import_abutting")        
+        row.prop(self, "import_abutting") 
+        row = box.row(align=False)
+        row.prop(self, "neuron_mat_for_connectors")        
         row = box.row(align=False)        
         row.prop(self, "resampling")
         row = box.row(align=False)        
@@ -1579,7 +1611,8 @@ class RetrieveNeuron(Operator):
                                             truncate_value = self.truncate_value, 
                                             interpolate_virtual = self.interpolate_virtual, 
                                             conversion_factor = self.conversion_factor, 
-                                            use_radius = self.use_radius)    
+                                            use_radius = self.use_radius,
+                                            neuron_mat_for_connectors = self.neuron_mat_for_connectors)    
 
         print('Finished Import in', time.clock()-start, 's')
         if errors is None:
@@ -1662,21 +1695,31 @@ class UpdateNeurons(Operator):
     bl_options = {'UNDO'}    
     
     which_neurons =     EnumProperty(   name = "Which Neurons?", 
-                                        items = [('Active','Active','Active'),('Selected','Selected','Selected'),('All','All','All')],
+                                        items = [('Selected','Selected','Selected'),('All','All','All')],
                                         description = "Choose which neurons to reload." )
+
     keep_resampling =   BoolProperty(   name = "Keep Old Resampling?", default = True
                                     )
+
     new_resampling =    IntProperty(    name = "Else: New Downsampling Factor", default = 2, min = 1, max = 20,
                                         description = "Will reduce node count by given factor. Root, ends and forks are preserved!" )
+
     import_synapses = BoolProperty(   name="Import Synapses", 
                                         default = True,
                                         description = "Import chemical synapses (pre- and postsynapses), similarly to 3D Viewer in CATMAID")
+
     import_gap_junctions = BoolProperty(   name="Import Gap Junctions", 
                                         default = False,
                                         description = "Import gap junctions, similarly to 3D Viewer in CATMAID")
+    
     import_abutting = BoolProperty(   name="Import Abutting Connectors", 
                                         default = False,
                                         description = "Import abutting connectors.")
+
+    neuron_mat_for_connectors =  BoolProperty( name="Connector color as neuron", 
+                                        default = False,
+                                        description = "If true, connectors will have the same color as the neuron.")
+
     truncate_neuron =   EnumProperty(   name = "Truncate Neuron?",
                                         items =  (  ('none','No','Load full neuron'),
                                                     ('main_neurite','Main Neurite','Truncate Main Neurite'),
@@ -1690,6 +1733,7 @@ class UpdateNeurons(Operator):
                                         max =  10,
                                         default = 1,
                                         description = "Defines length of truncated neurite or steps in Strahler Index from root node!" ) 
+
     interpolate_virtual = BoolProperty( name = "Interpolate Virtual Nodes", 
                                         default = False,
                                         description = "If true virtual nodes will be interpolated. Only important if you want the resolution of all neurons to be the same. Will slow down import!" )
@@ -1779,7 +1823,8 @@ class UpdateNeurons(Operator):
                                             truncate_value = self.truncate_value, 
                                             interpolate_virtual = self.interpolate_virtual, 
                                             conversion_factor = self.conversion_factor, 
-                                            use_radius = self.use_radius)  
+                                            use_radius = self.use_radius,
+                                            neuron_mat_for_connectors = self.neuron_mat_for_connectors)  
 
         print('Finished Import in', time.clock()-start, 's') 
         if errors is None:
@@ -4842,7 +4887,8 @@ class CATMAIDtoBlender:
                         use_radius = False,
                         color_by_strahler = False,
                         white_background = False,
-                        radii_by_strahler = False):
+                        radii_by_strahler = False,
+                        neuron_mat_for_connectors = False):
         
         index = 1            
         cellname = str(skid) + ' - ' + neuron_name                
@@ -4974,7 +5020,7 @@ class CATMAIDtoBlender:
             strahler_indices = None
             
 
-        ob = Create_Mesh.make_curve_neuron (cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep, radii, strahler_indices)            
+        ob = Create_Mesh.make_curve_neuron(cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep, radii, strahler_indices)            
         ob['skeleton_id'] = skid
         ob['type'] = 'NEURON'
         ob['name'] = neuron_name                
@@ -5029,8 +5075,13 @@ class CATMAIDtoBlender:
             """
             #print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))
 
+        if neuron_mat_for_connectors:
+            material = ob.active_material.name
+        else:
+            material = None
+
         if connector_pre or connector_post or gap_junctions or abutting:
-            Create_Mesh.make_connectors(cellname, connector_pre, connector_post, gap_junctions, abutting)
+            Create_Mesh.make_connectors(cellname, connector_pre, connector_post, gap_junctions, abutting, material = material)
         
         return {'FINISHED'}
 
@@ -7038,9 +7089,11 @@ class Create_Mesh (Operator):
 
         #Spline indices always gives the first and the last node id of a spline
         spline_indices = []
-
+        node_ids = []
         for child in child_list[root_node]:
-            spline_indices = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices)
+            spline_indices, node_ids = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
+
+        ob['node_ids'] = node_ids
 
         #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s') 
         if not strahler_indices:       
@@ -7050,8 +7103,7 @@ class Create_Mesh (Operator):
             try:
                 bpy.context.space_data.viewport_shade = 'MATERIAL'
             except:
-                print('Unable to set viewport shade to material. Try manually!')
-            
+                print('Unable to set viewport shade to material. Try manually!')            
         
         if soma != (0,0,0,0):
             soma_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, size=soma[3], view_align=False, \
@@ -7078,13 +7130,15 @@ class Create_Mesh (Operator):
         return ob
         
 
-    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices):
+    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids):
         if start_node in nodes_to_keep or first_child in nodes_to_keep:
             newSpline = cu.splines.new('POLY')
+            node_ids.append([])
                 
             ### Create start node            
             newPoint = newSpline.points[-1]
             newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
+            node_ids[-1].append( start_node )
 
             if radii:
                 newPoint.radius = max ( 1, radii[ start_node ] )
@@ -7092,13 +7146,13 @@ class Create_Mesh (Operator):
         active_node = first_child
         number_of_childs = len(child_list[active_node])
         ### nodes_created is a failsafe for while loop
-        nodes_created = 0
-            
-        while nodes_created < 20000:
+        nodes_created = 0           
+        while nodes_created < 100000:
             if active_node in nodes_to_keep:
                 newSpline.points.add()
                 newPoint = newSpline.points[-1]
                 newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
+                node_ids[-1].append( active_node )
                 
                 if radii:
                     newPoint.radius = max ( 1, radii[ active_node ] )
@@ -7114,16 +7168,16 @@ class Create_Mesh (Operator):
             #print('Number of child of node %s: %i' % (active_node, len(child_list[active_node])) )
             number_of_childs = len(child_list[active_node])
 
-        if nodes_created >= 10000:
+        if nodes_created >= 100000:
             print('ERROR: Creation aborted - possible infinite loop detected!')
             self.report({'ERROR'},'Error(s) occurred: see console')
             
             ### If active node is branch point, start new splines for each child    
-        if number_of_childs  > 1:
+        if number_of_childs > 1:
             for child in child_list[active_node]:
-                spline_indices = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices)
+                spline_indices, node_ids = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
 
-        return spline_indices
+        return spline_indices, node_ids
     
     def make_neuron(neuron_name, index, XYZcoords, origin, edges, faces, convert_to_curve=True, soma = (0,0,0)): 
         ### Create mesh and object
@@ -7253,7 +7307,7 @@ class Create_Mesh (Operator):
         me.update(calc_edges=True)            
             
         
-    def make_connectors(neuron_name, connectors_pre, connectors_post, gap_junctions, connectors_abutting, origin = (0,0,0)):
+    def make_connectors(neuron_name, connectors_pre, connectors_post, gap_junctions, connectors_abutting, origin = (0,0,0), material = False ):
         ### Creates Mesh and Objects for Connectors (pre and post seperately)
         
         start_creation = time.clock()
@@ -7265,12 +7319,13 @@ class Create_Mesh (Operator):
             bpy.context.scene.objects.link(ob_pre)
             ob_pre.location = (0,0,0)
             ob_pre.show_name = True 
+            ob_pre['connector_ids'] = list( connectors_pre.keys() )
 
             cu_pre.dimensions = '3D'
             cu_pre['type'] = 'PRE_CONNECTORS'
             cu_pre.fill_mode = 'FULL'
             cu_pre.bevel_depth = 0.007
-            cu_pre.bevel_resolution = 5 
+            cu_pre.bevel_resolution = 5             
 
             for connector in connectors_pre:
                 newSpline = cu_pre.splines.new('POLY')                
@@ -7280,14 +7335,18 @@ class Create_Mesh (Operator):
                 newPoint = newSpline.points[-1]
                 newPoint.co = (connectors_pre[connector][1][0], connectors_pre[connector][1][1], connectors_pre[connector][1][2], 0)
 
-            Create_Mesh.assign_material (ob_pre, 'PreSynapses_Mat', 1 , 0 , 0)
+            if not material:
+                Create_Mesh.assign_material (ob_pre, 'PreSynapses_Mat', 1 , 0 , 0)
+            else:
+                Create_Mesh.assign_material (ob_pre, material, 0 , 0.8 , 0.8)
 
         if connectors_post:        
             cu_post = bpy.data.curves.new('Inputs of ' + neuron_name,'CURVE')
             ob_post= bpy.data.objects.new('Inputs of ' + neuron_name, cu_post)
             bpy.context.scene.objects.link(ob_post)
             ob_post.location = (0,0,0)
-            ob_post.show_name = True      
+            ob_post.show_name = True
+            ob_post['connector_ids'] = list( connectors_post.keys() )      
 
             cu_post.dimensions = '3D'
             cu_post['type'] = 'POST_CONNECTORS'
@@ -7303,7 +7362,10 @@ class Create_Mesh (Operator):
                 newPoint = newSpline.points[-1]
                 newPoint.co = (connectors_post[connector][1][0], connectors_post[connector][1][1], connectors_post[connector][1][2], 0)     
 
-            Create_Mesh.assign_material (ob_post, 'PostSynapses_Mat', 0 , 0.8 , 0.8)
+            if not material:
+                Create_Mesh.assign_material (ob_post, 'PostSynapses_Mat', 0 , 0.8 , 0.8)
+            else:
+                Create_Mesh.assign_material (ob_post, material, 0 , 0.8 , 0.8)
 
         if gap_junctions:
             cu_gap = bpy.data.curves.new('Gap junctions of ' + neuron_name,'CURVE')
@@ -7311,6 +7373,7 @@ class Create_Mesh (Operator):
             bpy.context.scene.objects.link(ob_gap)
             ob_gap.location = (0,0,0)
             ob_gap.show_name = True
+            ob_gap['connector_ids'] = list( gap_junction.keys() )
 
             cu_gap.dimensions = '3D'
             cu_gap['type'] = 'POST_CONNECTORS'
@@ -7326,7 +7389,10 @@ class Create_Mesh (Operator):
                 newPoint = newSpline.points[-1]
                 newPoint.co = (gap_junctions[connector][1][0], gap_junctions[connector][1][1], gap_junctions[connector][1][2], 0)     
 
-            Create_Mesh.assign_material (ob_gap, 'GapJunctions_Mat', 0 , 1 , 0)    
+            if not material:
+                Create_Mesh.assign_material (ob_gap, 'GapJunctions_Mat', 0 , 1 , 0)    
+            else:
+                Create_Mesh.assign_material (ob_gap, material, 0 , 0.8 , 0.8)
 
         if connectors_abutting:
             cu_ab = bpy.data.curves.new('Abutting connectors of ' + neuron_name,'CURVE')
@@ -7334,6 +7400,7 @@ class Create_Mesh (Operator):
             bpy.context.scene.objects.link(ob_ab)
             ob_ab.location = (0,0,0)
             ob_ab.show_name = True
+            ob_ab['connector_ids'] = list( connectors_abutting.keys() )
 
             cu_ab.dimensions = '3D'
             cu_ab['type'] = 'POST_CONNECTORS'
@@ -7349,7 +7416,10 @@ class Create_Mesh (Operator):
                 newPoint = newSpline.points[-1]
                 newPoint.co = (connectors_abutting[connector][1][0], connectors_abutting[connector][1][1], connectors_abutting[connector][1][2], 0)     
 
-            Create_Mesh.assign_material (ob_ab, 'Abutting_Mat', .5 , 0 , .5)         
+            if not material:
+                Create_Mesh.assign_material (ob_ab, 'Abutting_Mat', .5 , 0 , .5)         
+            else:
+                Create_Mesh.assign_material (ob_ab, material, 0 , 0.8 , 0.8)
         
         #print('Creating connectors done in ' + str(time.clock()-start_creation)+'s')
             
@@ -11531,10 +11601,237 @@ class DisplayHelp(Operator):
             box.label(text='Colors neurons by strahler index. Result may will look odd')
             box.label(text='in the viewport unless viewport shading is set to <render> or')
             box.label(text='<material>. In any case, if you render it will look awesome!')
-
+        elif self.entry == 'animate.history':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label (text='Animate history - Tooltip')
+            box = layout.box()
+            box.label(text='This works essentially like the corresponding function of CATMAIDs 3D viewer: nodes and connectors pop into existence ')
+            box.label(text='as they were traced originally. Attention: using the <Skip idle phases> option will compromise relation between neurons')
+            box.label(text='because idle phases are currently calculated for each neuron individually. The <Show timer> will also be affected!')
 
     def invoke(self, context, event):        
         return context.window_manager.invoke_popup(self,width=800)
+
+def set_date( scene ) : 
+    """ Helper function to update timer object of AnimateHistory
+    """    
+    try:        
+        scene.objects['timer'].data.body = scene['timestamps'][ scene.frame_current ]
+    except:
+        scene.objects['timer'].data.body = 'Out of bounds'
+
+class AnimateHistory(Operator):
+    """ Animates neuron(s) history: built-up over time
+    """
+    bl_idname = "animate.history"
+    bl_label = "Animate neuron(s) history over time" 
+    bl_options = {'UNDO'}   
+
+    which_neurons =     EnumProperty(   name = "Which Neurons?", 
+                                        items = [('Selected','Selected','Selected'),('All','All','All')],                                        
+                                        description = "Choose which neurons to animate." )
+    start_frame = IntProperty(  
+                                name= 'Start Frame',
+                                default = 1,
+                                description = 'Frame at which to start animation.'
+                                )
+    end_frame = IntProperty(    name= 'End Frame',
+                                default = 100,
+                                description = 'Frame at which to start animation.'
+                                )
+    skip_empty = BoolProperty(  name= 'Skip idle phases',
+                                default = False,
+                                description = 'Skip times of no progress. Warning: this will compromise the timing between neurons.'
+                                )
+    add_timer = BoolProperty(   name= 'Show timer',
+                                default = False,
+                                description = 'Adds text object showing the date/time. Using <skip idle phases> will mess this up!'
+                                )    
+
+    def execute(self,context):
+        neurons_to_load = set()
+        self.skid_to_obj = {}
+        resampling = 1
+        self.conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor
+        
+        ### Gather skeleton IDs
+        if self.which_neurons == 'All':
+            to_check = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            if not bpy.context.selected_objects:
+                self.report({'ERROR'},'No neurons selected!')
+                print('Error: no objects selected.')
+                return {'FINISHED'}
+            to_check = bpy.context.selected_objects        
+
+        for neuron in to_check:
+            if neuron.name.startswith('#'):
+                try:
+                    skid = re.search('#(.*?) -',neuron.name).group(1)
+                    neurons_to_load.add ( skid )  
+                    self.skid_to_obj[skid] = neuron                                    
+                except:
+                    print('Unable to process neuron', neuron.name)                        
+        
+        #Check if there are synapses to take care of
+        self.con_objects = { skid : [ ob for ob in bpy.data.objects if ob.name.startswith('Outputs of %s' % str(skid)) or ob.name.startswith('Inputs of %s' % str(skid)) or ob.name.startswith('Gap junctions of %s' % str(skid))  ] for skid in self.skid_to_obj }
+
+        ### Make sure neurons have the 'node_ids' stored as the respective property
+        for skid in self.skid_to_obj:
+            if 'node_ids' not in self.skid_to_obj[skid]:
+                self.report({'ERROR'},'Version conflict - please reload neurons!')
+                print('You have to reload this neuron: conflict with this script version!')
+                return{'FINISHED'}
+        
+        self.neuron_names = get_neuronnames( list(neurons_to_load) )        
+
+        self.skdata, errors = retrieveSkeletonData( list( neurons_to_load ), 
+                                                skip_existing = False,
+                                                with_history = True,
+                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out )
+
+        #Extract node timestamps        
+        self.node_timestamps = { s : [ datetime.datetime.strptime( n[8][:16] , '%Y-%m-%d %H:%M' ) for n in self.skdata[s][0] ] for s in self.skdata }        
+
+        #Extract connector timestamps
+        if [ ob for skid in self.con_objects for ob in self.con_objects[skid] ]:
+            self.con_timestamps = { s : [ datetime.datetime.strptime( c[6][:16] , '%Y-%m-%d %H:%M' ) for c in self.skdata[s][1] ] for s in self.skdata }        
+        else:
+            self.con_timestamps = { s : [] for s in self.skdata }        
+
+        self.first_date = sorted( [ d for n in self.node_timestamps for d in self.node_timestamps[n] ] + [ d for n in self.con_timestamps for d in self.con_timestamps[n] ] )[0]
+        self.last_date = sorted( [ d for n in self.node_timestamps for d in self.node_timestamps[n] ] + [ d for n in self.con_timestamps for d in self.con_timestamps[n] ] )[-1]       
+
+        self.delta = ( self.last_date - self.first_date ) / ( self.end_frame - self.start_frame )
+
+        print('Start date:', self.first_date )
+        print('End date:', self.last_date )
+
+        for n in self.skdata:
+            self.plot_history( n )
+
+        if self.add_timer:
+            if 'timer' not in bpy.data.objects:
+                font = bpy.data.curves.new('timer', 'FONT')
+                t_object = bpy.data.objects.new('timer', font)
+                t_object.rotation_euler = ( 1.5707963705062866, 0 ,0 )
+                bpy.context.scene.objects.link(t_object)
+                bpy.context.scene.update()
+            else:
+                t_object = bpy.data.objects['timer']
+
+            bpy.context.scene['timestamps'] = [ str( self.first_date + f * self.delta )[:-7] for f  in range( self.start_frame, self.end_frame )  ]
+
+            t_object.data.body = str( self.first_date + bpy.context.scene.frame_current * self.delta )[:-7]
+
+            bpy.app.handlers.frame_change_pre.clear()    
+            bpy.app.handlers.frame_change_pre.append( set_date ) 
+
+        return {'FINISHED'}
+    
+
+    def plot_history( self, neuron ):
+        #Now created groups of nodes per bin        
+        groups = []
+        this_date = self.first_date
+        while this_date <= self.last_date:
+            #Nodes
+            groups.append( [ n[0] for i, n in enumerate(self.skdata[neuron][0]) if this_date <= self.node_timestamps[neuron][i] < ( this_date + self.delta )  ] ) 
+            this_date += self.delta
+
+        con_groups = []
+        this_date = self.first_date
+        while this_date <= self.last_date:
+            #Connectors
+            con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] < ( this_date + self.delta )  ] ) 
+            this_date += self.delta
+
+        if self.skip_empty:
+            #Remove empty groups
+            groups = [ g for i, g in enumerate(groups) if len( groups[i] ) > 0 and len( con_groups[i] ) > 0 ]
+            con_groups = [ g for i, g in enumerate(con_groups) if len( groups[i] ) > 0 and len( con_groups[i] ) > 0 ]
+
+        #Node ids are stored in the 'node_ids' property of each object
+        #Format is [ [ spline1_node1, spline1_node2,... ], [ spline2_node1, ...] ]        
+        ob = self.skid_to_obj[ neuron ]        
+
+        #First clear all keyframes
+        ob.data.animation_data_clear()
+
+        #Now iterate over all nodes and animate the radius (0 = invisible)
+        for i,sp in enumerate( ob.data.splines ):
+            for k,p in enumerate ( sp.points ):                
+
+                #Get node id of this node 
+                node_id = ob['node_ids'][i][k]
+
+                #Check in which group this node would be and calculate the respective frame
+                #Please note: this should the FIRST group (i.e. the original creation date) 
+                #-> nodes can have multiple entry when with_history is True (one per edit)
+                group_index = [ i for i, g in enumerate(groups) if node_id in g ][0]
+                frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
+
+                p.radius = 0
+                p.keyframe_insert( 'radius', frame = frame )                
+                p.radius = 1
+                p.keyframe_insert( 'radius', frame = frame + 1)      
+
+        #Now take care of soma
+        soma_node = [ n[0] for n in self.skdata[neuron][0] if n[6] > 1000 ]
+        soma_ob = [ ob for ob in bpy.data.objects if ob.name.startswith('Soma of %s' % str( neuron ) ) ]
+        
+        if soma_node and soma_ob:
+            soma_ob[0].data.animation_data_clear()
+
+            group_index = [ i for i, g in enumerate(groups) if soma_node[0] in g ][0]
+            frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
+
+            soma_ob[0].hide = True
+            soma_ob[0].keyframe_insert( 'hide', frame = frame )                
+            soma_ob[0].hide = False
+            soma_ob[0].keyframe_insert( 'hide', frame = frame + 1)  
+
+            soma_ob[0].hide_render = True
+            soma_ob[0].keyframe_insert( 'hide_render', frame = frame )                
+            soma_ob[0].hide_render = False
+            soma_ob[0].keyframe_insert( 'hide_render', frame = frame + 1)  
+
+        #Now take care of the synapses (if present!)       
+
+        for ob in self.con_objects[ neuron ]:            
+            if 'connector_ids' not in ob:
+                self.report({'ERROR'},'Version conflict - please reload neurons!')
+                print('You have to reload this neuron: conflict with this script version!')
+
+            #Iterate over all spines (1 per connector) and animate the radius (0 = invisible)
+            for i,sp in enumerate( ob.data.splines ):
+                #Get node id of this node 
+                con_id = ob['connector_ids'][i]      
+                
+                #Check in which group this connector would be and calculate the respective frame
+                #Please note: this should the FIRST group (i.e. the original creation date) 
+                #-> nodes can have multiple entry when with_history is True (one per edit)
+                group_index = [ i for i, g in enumerate(con_groups) if con_id in g ][0]
+                frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
+
+                for k,p in enumerate ( sp.points ): 
+                    p.radius = 0
+                    p.keyframe_insert( 'radius', frame = frame )                
+                    p.radius = 1
+                    p.keyframe_insert( 'radius', frame = frame + 1) 
+
+        return
+
+    def invoke(self, context, event):        
+        return context.window_manager.invoke_props_dialog(self, width = 800)
+
+    @classmethod        
+    def poll(cls, context):
+        if connected:
+            return True
+        else:
+            return False                                              
     
 
 class ColorBySpatialDistribution(Operator):
