@@ -18,6 +18,9 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.81 31/05/2017:
+    - performance improvements and bug fixes for animate history
+
 ### V5.8 30/05/2017:
     - added basic history plot (similar to CATMAID's 3D viewer)
 
@@ -368,7 +371,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 8, 0),
+ "version": (5, 8, 1),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -11629,7 +11632,8 @@ class AnimateHistory(Operator):
     bl_options = {'UNDO'}   
 
     which_neurons =     EnumProperty(   name = "Which Neurons?", 
-                                        items = [('Selected','Selected','Selected'),('All','All','All')],                                        
+                                        items = [('Selected','Selected','Selected'),('All','All','All')],   
+                                        default = 'All',                                     
                                         description = "Choose which neurons to animate." )
     start_frame = IntProperty(  
                                 name= 'Start Frame',
@@ -11637,16 +11641,20 @@ class AnimateHistory(Operator):
                                 description = 'Frame at which to start animation.'
                                 )
     end_frame = IntProperty(    name= 'End Frame',
-                                default = 100,
+                                default = 200,
                                 description = 'Frame at which to start animation.'
                                 )
-    skip_empty = BoolProperty(  name= 'Skip idle phases',
+    individually = BoolProperty(  name= 'Time neurons individually',
                                 default = False,
-                                description = 'Skip times of no progress. Warning: this will compromise the timing between neurons.'
+                                description = 'Animation for each neuron starts with the first node placed and ends with the last node placed. Makes <Show timer> obsolete.'
+                                )
+    spread_even = BoolProperty(  name= 'Spread evenly',
+                                default = False,
+                                description = 'Spread out all action evenly. Essentially gives a smoothed representation of how the neuron was reconstruced. Warning: compromises timing between neurons and make <Show timer> obsolete! Automatically uses <Time neurons individually>'
                                 )
     add_timer = BoolProperty(   name= 'Show timer',
                                 default = False,
-                                description = 'Adds text object showing the date/time. Using <skip idle phases> will mess this up!'
+                                description = 'Adds text object showing the date/time. Using <Time neuron individually> or <Spread evenly> will mess this up!'
                                 )    
 
     def execute(self,context):
@@ -11694,7 +11702,7 @@ class AnimateHistory(Operator):
         #Extract node timestamps        
         self.node_timestamps = { s : [ datetime.datetime.strptime( n[8][:16] , '%Y-%m-%d %H:%M' ) for n in self.skdata[s][0] ] for s in self.skdata }        
 
-        #Extract connector timestamps
+        #Extract connector timestamps (if there are actually connectors)
         if [ ob for skid in self.con_objects for ob in self.con_objects[skid] ]:
             self.con_timestamps = { s : [ datetime.datetime.strptime( c[6][:16] , '%Y-%m-%d %H:%M' ) for c in self.skdata[s][1] ] for s in self.skdata }        
         else:
@@ -11708,10 +11716,14 @@ class AnimateHistory(Operator):
         print('Start date:', self.first_date )
         print('End date:', self.last_date )
 
-        for n in self.skdata:
+        osd.show("Processing neuron's history...")
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+        for i, n in enumerate( self.skdata ):
+            print('Processing history of neuron %s (%i of %i)' % ( str( n ), i+1 , len( self.skdata ) ) )       
             self.plot_history( n )
 
-        if self.add_timer:
+        if self.add_timer and not self.individually and not self.spread_even:
             if 'timer' not in bpy.data.objects:
                 font = bpy.data.curves.new('timer', 'FONT')
                 t_object = bpy.data.objects.new('timer', font)
@@ -11727,34 +11739,63 @@ class AnimateHistory(Operator):
 
             bpy.app.handlers.frame_change_pre.clear()    
             bpy.app.handlers.frame_change_pre.append( set_date ) 
+        elif self.add_timer:
+            self.report({'WARNING'},'Adding timer makes no sense with your settings!')
+            print('Adding a timer does not make sense with your settings - skipping.!')
+
+        self.report({'INFO'}, 'Done!')
+        osd.show("Done.")
+        osd_timed = ClearOSDAfter(3)
+        osd_timed.start()
 
         return {'FINISHED'}
     
 
     def plot_history( self, neuron ):
-        #Now created groups of nodes per bin        
-        groups = []
-        this_date = self.first_date
-        while this_date <= self.last_date:
-            #Nodes
-            groups.append( [ n[0] for i, n in enumerate(self.skdata[neuron][0]) if this_date <= self.node_timestamps[neuron][i] < ( this_date + self.delta )  ] ) 
-            this_date += self.delta
-
-        con_groups = []
-        this_date = self.first_date
-        while this_date <= self.last_date:
-            #Connectors
-            con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] < ( this_date + self.delta )  ] ) 
-            this_date += self.delta
-
-        if self.skip_empty:
-            #Remove empty groups
-            groups = [ g for i, g in enumerate(groups) if len( groups[i] ) > 0 and len( con_groups[i] ) > 0 ]
-            con_groups = [ g for i, g in enumerate(con_groups) if len( groups[i] ) > 0 and len( con_groups[i] ) > 0 ]
-
         #Node ids are stored in the 'node_ids' property of each object
         #Format is [ [ spline1_node1, spline1_node2,... ], [ spline2_node1, ...] ]        
-        ob = self.skid_to_obj[ neuron ]        
+        ob = self.skid_to_obj[ neuron ]             
+
+        #Extract timestamps for the nodes that this neuron actually still has
+        #Keep in mind that each node can have multiple entries!
+        existing_nodes = [ n for sp in ob['node_ids'] for n in sp ]
+        this_node_timestamps = [ ( n[0] , datetime.datetime.strptime( n[8][:16] , '%Y-%m-%d %H:%M' ) ) for n in self.skdata[neuron][0] if n[0] in existing_nodes ]       
+
+        #If we're skipping delta, make sure the time range is set for each neuron individually
+        if self.individually:
+            this_start = sorted( [ n[0] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[0]
+            this_end = sorted( [ n[0] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[-1]
+            this_delta = ( this_end - this_start ) / ( self.end_frame - self.start_frame )
+        else:
+            this_start = self.first_date
+            this_end = self.last_date
+            this_delta = self.delta
+        
+        if not self.spread_even:        
+            #Create groups for nodes
+            groups = []
+            this_date = this_start
+            while this_date <= this_end:                            
+                groups.append( [ n[0] for n in this_node_timestamps if this_date <= n[1] <= ( this_date + this_delta )  ] ) 
+                this_date += this_delta
+
+            #Create groups for connectors
+            con_groups = []
+            this_date = this_start
+            while this_date <= this_end:
+                con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] <= ( this_date + this_delta )  ] ) 
+                this_date += this_delta              
+        elif self.spread_even:
+            #Get all timestamps
+            all_timestamps = this_node_timestamps + [ ( cn[1] , datetime.datetime.strptime( cn[6][:16] , '%Y-%m-%d %H:%M' ) ) for cn in self.skdata[neuron][1] ]            
+
+            #Sort all IDs (connectors and treenodes) by their timestamps
+            all_IDs_sorted = [ n[0] for n in sorted ( all_timestamps , key = lambda x : x[1] ) ]
+
+            #Bin all IDs into groups (one group per frame)
+            n_groups = self.end_frame - self.start_frame
+            IDs_per_group = math.ceil( len(all_IDs_sorted)/n_groups )
+            groups = con_groups = [ all_IDs_sorted[ i * IDs_per_group : ( i + 1 ) * IDs_per_group ] for i in range( n_groups ) ]
 
         #First clear all keyframes
         ob.data.animation_data_clear()
@@ -11768,8 +11809,9 @@ class AnimateHistory(Operator):
 
                 #Check in which group this node would be and calculate the respective frame
                 #Please note: this should the FIRST group (i.e. the original creation date) 
-                #-> nodes can have multiple entry when with_history is True (one per edit)
+                #-> nodes can have multiple entry when with_history is True (one per edit)            
                 group_index = [ i for i, g in enumerate(groups) if node_id in g ][0]
+                
                 frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
 
                 p.radius = 0
@@ -11798,7 +11840,6 @@ class AnimateHistory(Operator):
             soma_ob[0].keyframe_insert( 'hide_render', frame = frame + 1)  
 
         #Now take care of the synapses (if present!)       
-
         for ob in self.con_objects[ neuron ]:            
             if 'connector_ids' not in ob:
                 self.report({'ERROR'},'Version conflict - please reload neurons!')
