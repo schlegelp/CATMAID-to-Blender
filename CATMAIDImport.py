@@ -18,6 +18,12 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.82 10/06/2017:
+    - added requests per second to addon-preferences: useful when getting errors while retrieving large numbers of neurons
+    - fixed bugs in animate.history
+    - made randomise color use color range
+    - fixed a bug with using .lower() at urlencoding 
+
 ### V5.81 31/05/2017:
     - performance improvements and bug fixes for animate history
 
@@ -461,7 +467,7 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("retrieve.tags", text = "Retrieve Tags", icon = 'SYNTAX_OFF')        
+        row.operator("retrieve.tags", text = "Retrieve Tags", icon = 'SYNTAX_OFF')
 
         layout.label('Materials:')
 
@@ -1227,7 +1233,7 @@ def get_neurons_in_volume ( left, right, top, bottom, z1, z2, remote_instance ):
     return list(skeletons)
 
 
-def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_abutting = False, with_history = False ):
+def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_abutting = False, with_history = False, requests_per_second = 1000 ):
     """ Retrieves 3D skeleton data from CATMAID server using threads
 
     Parameters:
@@ -1250,7 +1256,6 @@ def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_ab
                     { skid: [ [node_data], [connector_data], [tags] ], skid2: ...}
     errors :        string
                     Errors that occurred during import, if any
-
     """
 
     threads = {}
@@ -1276,11 +1281,12 @@ def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_ab
     print('Creating threads to retrieve skeleton data:')
     for i,skid in enumerate(skid_list):        
         remote_compact_skeleton_url = remote_instance.get_compact_details_url( project_id , skid )
-        remote_compact_skeleton_url += '?%s' % urllib.parse.urlencode( {'with_history': with_history , 'with_tags' : True , 'with_connectors' : True  , 'with_merge_history': False } )
-        t = retrieveUrlThreaded ( remote_compact_skeleton_url.lower() )
+        remote_compact_skeleton_url += '?%s' % urllib.parse.urlencode( {'with_history': str(with_history).lower() , 'with_tags' : 'true' , 'with_connectors' : 'true'  , 'with_merge_history': 'false' } )        
+        t = retrieveUrlThreaded ( remote_compact_skeleton_url )
         t.start()
         threads[skid] = t
         print('\r Threads: '+str(len(threads)),end='')
+        time.sleep( 1/requests_per_second )
 
     #Now keep trying to join threads as they finish until all threads are closed or time out
     print('\n Now joining threads.')
@@ -1301,7 +1307,7 @@ def retrieveSkeletonData( skid_list, time_out = 20, skip_existing = True, get_ab
 
     #If we went overtime, check which skeletons failed to load in time
     if cur_time > (start + time_out):
-        errors = 'Timeout while joining threads. Retrieved only %i of %i skeletons' % (len(skdata),len(threads))
+        errors = 'Timeout while joining threads. Retrieved only %i of %i skeletons' % (len( [ n for n in skdata if skdata[n] != None ] ),len(threads))
         print('\n !WARNING: Timeout while joining threads. Retrieved only %i of %i skeletons' % (len(skdata),len(threads)))  
         for skid in threads:
             if skid not in threads_closed:
@@ -1359,7 +1365,7 @@ class retrieveUrlThreaded(threading.Thread):
             self.post_data = post_data 
             threading.Thread.__init__(self)
         except:
-            print('!Error initiating thread for',self.kids)
+            print('!Error initiating thread for ',self.kids)
 
     def run(self):
         """ Retrieve data from single url.
@@ -1378,7 +1384,7 @@ class retrieveUrlThreaded(threading.Thread):
             threading.Thread.join(self)
             return self.data
         except:
-            print('!ERROR joining thread for',self.url)
+            print('!ERROR joining thread for ',self.url)
             return None
 
 class RetrieveNeuron(Operator):      
@@ -1595,12 +1601,13 @@ class RetrieveNeuron(Operator):
 
         self.count = 1
 
-        print("Collection skeleton data...:")
+        print("Collecting skeleton data...")
         start = time.clock()       
 
         skdata,errors = retrieveSkeletonData( skeletons_to_retrieve , 
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                              get_abutting = self.import_abutting )         
+                                              get_abutting = self.import_abutting,
+                                              requests_per_second = context.user_preferences.addons['CATMAIDImport'].preferences.rqs )         
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -1812,7 +1819,8 @@ class UpdateNeurons(Operator):
 
         skdata, errors = retrieveSkeletonData( skids_to_reload , 
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                              get_abutting = self.import_abutting )
+                                              get_abutting = self.import_abutting,
+                                              requests_per_second = context.user_preferences.addons['CATMAIDImport'].preferences.rqs )
 
         print("Creating new meshes for %i neurons" % len(skdata))
         for skid in skdata:                        
@@ -1992,7 +2000,8 @@ class RetrievePairs (Operator):
         start = time.clock()        
         skdata, errors = retrieveSkeletonData( paired,
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                              get_abutting = self.import_abutting ) 
+                                              get_abutting = self.import_abutting,
+                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -2124,7 +2133,8 @@ class RetrieveInVolume(Operator):
         start = time.clock()                              
         skdata, errors = retrieveSkeletonData( skid_list , 
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                              get_abutting = self.import_abutting ) 
+                                              get_abutting = self.import_abutting,
+                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:            
@@ -2257,7 +2267,10 @@ class RetrieveTags(Operator):
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_skids))
-        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False )
+        skdata, errors = retrieveSkeletonData(  filtered_skids, 
+                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                                skip_existing = False, 
+                                                requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs )
 
         if self.color_prop == 'By tag':            
             all_tags = set( [ t for n in skdata for t in skdata[n][2] ] )
@@ -2373,7 +2386,10 @@ class RetrieveConnectors(Operator):
         start = time.clock()
 
         print("Retrieving connector data for %i neurons" % len(filtered_ob_list))
-        skdata, errors = retrieveSkeletonData( filtered_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False )               
+        skdata, errors = retrieveSkeletonData(  filtered_skids, 
+                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                                skip_existing = False,
+                                                requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs )               
         cndata, neuron_names = self.get_all_connectors( skdata )
 
         for i,neuron in enumerate(filtered_ob_list):
@@ -2686,7 +2702,8 @@ class ConnectorsToSVG(Operator, ExportHelper):
         skdata,errors = retrieveSkeletonData( skids_to_export, 
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
                                               skip_existing = False,
-                                              get_abutting = self.export_abutting
+                                              get_abutting = self.export_abutting,
+                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs
                                             )
 
         #Cndata is a dictionary containing details of all connectors
@@ -4772,7 +4789,8 @@ class RetrievePartners(Operator):
            
         skdata, errors = retrieveSkeletonData( filtered_partners , 
                                               time_out = bpy.context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                              get_abutting = self.import_abutting ) 
+                                              get_abutting = self.import_abutting,
+                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -4802,33 +4820,53 @@ class RetrievePartners(Operator):
 
             
 class ColorCreator():
-    """Class used to create distinctive colors"""  
+    """Class used to create distinctive colors""" 
 
-    def random_colors (color_count,color_range='RGB'):
+    def random_colors ( color_count, color_range='RGB', start_rgb = None, end_rgb = None ):
         ### Make count_color an even number
         if color_count % 2 != 0:
             color_count += 1
+
+        if start_rgb and end_rgb and start_rgb != end_rgb:
+            #Convert RGBs to HSVs
+            start_hsv = colorsys.rgb_to_hsv(start_rgb[0],start_rgb[1],start_rgb[2])[0]
+            end_hsv = colorsys.rgb_to_hsv(end_rgb[0],end_rgb[1],end_rgb[2])[0]
+            start_hue  = start_hsv #min ( start_hsv, end_hsv )
+            end_hue  = end_hsv #max ( start_hsv, end_hsv )
+        else:
+            start_hue = 0
+            end_hue = 1
              
         colormap = []
-        interval = 2/color_count  
-        runs = int(color_count/2)   
+        interval =  ( end_hue - start_hue ) /  color_count 
+        runs = color_count # int( color_count / 2 )
+
+        brightness = 1
        
         ### Create first half with low brightness; second half with high brightness and slightly shifted hue
         if color_range == 'RGB':
             for i in range(runs):
                 ### High brightness
-                h = interval * i
+                h = start_hue + ( interval * i )
                 s = 1
-                v =  1
+                v =  brightness
                 hsv = colorsys.hsv_to_rgb(h,s,v)
                 colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))             
                 
+                if brightness == 1:
+                    brightness = .5
+                else:
+                    brightness = 1
+
+                """
                 ### Lower brightness, but shift hue by half an interval
-                h = interval * (i+0.5)
+                h = start_hue + ( interval * (i+0.5) )
                 s = 1
                 v =  0.5
                 hsv = colorsys.hsv_to_rgb(h,s,v)
-                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))                       
+                colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))  
+                """
+
         elif color_range == 'Grayscale':
             h = 0
             s = 0
@@ -4836,7 +4874,6 @@ class ColorCreator():
                 v = 1/color_count * i
                 hsv = colorsys.hsv_to_rgb(h,s,v)
                 colormap.append((int(hsv[0]*255),int(hsv[1]*255),int(hsv[2]*255)))
-                
 
         print(len(colormap),' random colors created')
 
@@ -4941,12 +4978,12 @@ class CATMAIDtoBlender:
                     ### Polylines need 4 coords (don't know what the fourth does)
                 
                 if entry[1] not in list_of_childs:
-                    list_of_childs[entry[1]] = []
+                    list_of_childs[ entry[1] ] = []
 
                 if entry[0] not in list_of_childs:
-                    list_of_childs[entry[0]] = []
+                    list_of_childs[ entry[0] ] = []
                            
-                list_of_childs[entry[1]].append(entry[0])            
+                list_of_childs[ entry[1] ].append( entry[0] )            
                 
                 ### Search for soma
                 if entry[6] > 1000:                
@@ -4959,7 +4996,7 @@ class CATMAIDtoBlender:
                     #make sure to set radius of soma node to -1 -> will look funky others (sphere will be added instead)
         except:
             print('Error reading data of skid', skid, neuron_name)
-            print('Node data:', node_data[0])
+            print('Node data:', node_data)
             return {'FINISHED'}
 
         #if no soma is found, then search for nerve ending (for sensory neurons)
@@ -4973,7 +5010,7 @@ class CATMAIDtoBlender:
         
         ### Root node's entry is called 'None' because it has no parent
         ### This will be starting point for creation of the curves
-        root_node = list_of_childs[None][0]
+        root_node = list_of_childs[ None ][0]
 
         if truncate_neuron != 'none' and soma_node is None:
             print('WARNING: Unable to truncate main neurite - no soma or nerve exit found! Neuron skipped!')
@@ -4982,7 +5019,7 @@ class CATMAIDtoBlender:
         if resampling > 1:            
             new_child_list = nodes_to_keep = CATMAIDtoBlender.resample_child_list(list_of_childs, root_node, soma_node, resampling)
         else:
-            new_child_list = nodes_to_keep = list_of_childs                 
+            new_child_list = nodes_to_keep = list_of_childs                  
 
         #print('Before Trunc',new_child_list)
 
@@ -5020,8 +5057,7 @@ class CATMAIDtoBlender:
                 radii = { n: strahler_indices[n] / max_strahler_index * 100 for n in strahler_indices }
 
         else:
-            strahler_indices = None
-            
+            strahler_indices = None      
 
         ob = Create_Mesh.make_curve_neuron(cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep, radii, strahler_indices)            
         ob['skeleton_id'] = skid
@@ -5033,7 +5069,7 @@ class CATMAIDtoBlender:
         ob['use_radius'] = use_radius
 
         ### Search through connectors and create a list with coordinates
-        if import_synapses is True:    
+        if import_synapses is True:
             connector_pre = { e[1]: ( nodes_list[ e[0] ], 
                                     ( float(e[3])/conversion_factor , float(e[5])/conversion_factor, float(e[4])/-conversion_factor ) ) 
                             for e in node_data[1] if e[2] == 0 }
@@ -5057,26 +5093,6 @@ class CATMAIDtoBlender:
         else:
             abutting = {}
 
-            """
-            connector_pre = {}
-            connector_post = {}
-            for connector in node_data[1]:
-                connector_id = connector[1]                           
-                        
-                ### Get connector coordinates
-                X_cn = float(connector[3])/conversion_factor
-                Y_cn = float(connector[4])/-conversion_factor
-                Z_cn = float(connector[5])/conversion_factor 
-                
-                connector_coords = (X_cn, Z_cn, Y_cn)
-    
-                if connector[2] is 0: ### = presynaptic connection    
-                    connector_pre[connector_id] = (nodes_list[connector[0]], connector_coords)     
-    
-                elif connector[2] is 1: ### = postsynaptic connection    
-                    connector_post[connector_id] = (nodes_list[connector[0]], connector_coords)    
-            """
-            #print('%i Pre-/ %i Postsynaptic Connections Found' % (len(connector_pre), len(connector_post)))
 
         if neuron_mat_for_connectors:
             material = ob.active_material.name
@@ -5140,61 +5156,71 @@ class CATMAIDtoBlender:
 
         return (list_of_childs,nodes_list)  
     
-    def resample_child_list( list_of_childs, root_node ,soma_node, resampling_factor ):
-        
+    def resample_child_list( list_of_childs, root_node, soma_node, resampling_factor ):        
         #print('Resampling Child List (Factor: %i)' % resampling_factor)        
-        new_child_list = {}
-        new_child_list[None] = [root_node]
+        new_child_list = { None: [ root_node ] }        
         
         #Collect root node, end nodes and branching points in list: fix_nodes
-        fix_nodes = []
-        fix_nodes.append(root_node)
-        fix_nodes.append(soma_node)
+        fix_nodes = [ root_node, soma_node ]        
         for node in list_of_childs:
-            if len(list_of_childs[node]) == 0:
-                fix_nodes.append(node)
-            if len(list_of_childs[node]) > 1:
-                fix_nodes.append(node)                
+            if len( list_of_childs[node] ) == 0:
+                fix_nodes.append( node )
+            if len( list_of_childs[ node ] ) > 1:
+                fix_nodes.append( node )
+
+        fix_nodes = list ( set(fix_nodes) )
         
         #Start resampling with every single fix node until you hit the next fix node
-        for fix_node in fix_nodes:
+        for fix_node in fix_nodes:            
             new_child_list[fix_node] = []
             #Cycle through childs of fix nodes (end nodes will thus be skipped)
-            for child in list_of_childs[fix_node]:                
-                new_child = CATMAIDtoBlender.get_new_child(child, list_of_childs,resampling_factor)
-                new_child_list[fix_node].append(new_child)
+            for child in list_of_childs[ fix_node ]:                
+                new_child = CATMAIDtoBlender.get_new_child( child, list_of_childs,resampling_factor, fix_nodes )
+                new_child_list[ fix_node ].append( new_child )
+
                 #Continue resampling until you hit a fix node
-                while new_child not in fix_nodes:
+                while new_child not in fix_nodes:                    
                     old_child = new_child
-                    new_child = CATMAIDtoBlender.get_new_child(old_child, list_of_childs,resampling_factor)
+                    new_child = CATMAIDtoBlender.get_new_child( old_child, list_of_childs, resampling_factor, fix_nodes )
+
+                    if old_child == 1063806:
+                        print(fix_node, old_child, new_child )
                     
-                    new_child_list[old_child] = []
-                    new_child_list[old_child].append(new_child)
+                    if old_child not in new_child_list:
+                        new_child_list[ old_child ] = []
+                    new_child_list[ old_child ].append( new_child )
                     
         #print('Resampled child list. Node Count: %i/%i (new/old)' % (len(new_child_list),len(list_of_childs)))
                     
         return new_child_list  
         
                 
-    def get_new_child(old_child, list_of_childs,  resampling_factor):
-        not_branching = True  
-        not_end = True
+    def get_new_child( old_child, list_of_childs, resampling_factor, fix_nodes ):
+        #not_branching = True  
+        #not_end = True        
         skipped = 0                
         new_child = old_child 
+
+        """
         #Check if old child is an end node or a branching point
         if len(list_of_childs[new_child]) == 0:
             not_end = False
         if len(list_of_childs[new_child]) > 1:
             not_branching = False                              
+        """
             
-        while not_branching is True and not_end is True and skipped < resampling_factor:
+        #while not_branching is True and not_end is True and skipped < resampling_factor:
+        while new_child not in fix_nodes and skipped < resampling_factor:
             new_child = list_of_childs[new_child][0]
             skipped += 1
+
+            """
             #Check if new_child is an end node or a branching point                
             if len(list_of_childs[new_child]) == 0:
                 not_end = False
             if len(list_of_childs[new_child]) > 1:
                 not_branching = False 
+            """
 
         return new_child    
 
@@ -5513,16 +5539,15 @@ class ConnectToCATMAID(Operator):
     bl_idname = "connect.to_catmaid"  
     bl_label = "Enter Credentials and press OK"    
     
-    local_http_user = StringProperty(name="HTTP User")
+    local_http_user =   StringProperty(     name="HTTP User")
     #subtype = 'PASSWORD' seems to be buggy in Blender 2.71 -> works fine in 2.77    
-    local_http_pw = StringProperty( name="HTTP Password",
-                                    subtype='PASSWORD')
-    local_token = StringProperty(name="Token",
-                                description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")    
-    local_server_url = StringProperty(name="Server Url")    
-    local_project_id = IntProperty(name='Project ID', default = 0)
-
-    #save_prefs = BoolProperty(name='Save credentials', default = True, description = 'Saves credentials in addon preferences: User Preferences -> Add-ons -> CATMAIDImport -> Preferences')
+    local_http_pw =     StringProperty(     name="HTTP Password",
+                                            subtype='PASSWORD')
+    local_token =       StringProperty(     name="Token",
+                                            description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")    
+    local_server_url =  StringProperty(     name="Server Url")
+    local_project_id =  IntProperty(        name='Project ID', default = 0)
+    
 
     #Old settings from before API token was introduced
     #local_catmaid_user = StringProperty(name="CATMAID User")
@@ -5536,11 +5561,12 @@ class ConnectToCATMAID(Operator):
         addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences        
         
         print('Connecting to CATMAID server')
+        print('URL: %s' % self.local_server_url)
         print('HTTP user: %s' % self.local_http_user)
         #print('CATMAID user: %s' % self.local_catmaid_user)        
         print('Token: %s' % self.local_token)        
 
-        #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, \                                           self.local_http_pw )          
+        #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, self.local_http_pw )          
         remote_instance = CatmaidInstance( self.local_server_url, self.local_http_user, self.local_http_pw, self.local_token )      
 
         #Check for latest version of the Script
@@ -5846,7 +5872,10 @@ class ExportAllToSVG(Operator, ExportHelper):
                 skid = re.search('#(.*?) ',neuron.name).group(1)                  
                 to_process_skids.append(skid)            
 
-            skdata,errors = retrieveSkeletonData( to_process_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False)
+            skdata,errors = retrieveSkeletonData(   to_process_skids, 
+                                                    time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                                    skip_existing = False,
+                                                    requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs)
 
         for neuron in to_process_sorted:            
             ### Create List of Lines
@@ -7093,8 +7122,9 @@ class Create_Mesh (Operator):
         #Spline indices always gives the first and the last node id of a spline
         spline_indices = []
         node_ids = []
+
         for child in child_list[root_node]:
-            spline_indices, node_ids = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
+            spline_indices, node_ids = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)        
 
         ob['node_ids'] = node_ids
 
@@ -7130,28 +7160,27 @@ class Create_Mesh (Operator):
  
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
-        return ob
-        
+        return ob        
 
-    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids):
-        if start_node in nodes_to_keep or first_child in nodes_to_keep:
-            newSpline = cu.splines.new('POLY')
-            node_ids.append([])
-                
-            ### Create start node            
-            newPoint = newSpline.points[-1]
-            newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
-            node_ids[-1].append( start_node )
+    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids):        
+        #if start_node in nodes_to_keep or first_child in nodes_to_keep:
+        newSpline = cu.splines.new( 'POLY' )
+        node_ids.append( [ ] )
+            
+        ### Create start node            
+        newPoint = newSpline.points[-1]
+        newPoint.co = (nodes_dic[start_node][0], nodes_dic[start_node][1], nodes_dic[start_node][2], 0)
+        node_ids[-1].append( start_node )
 
-            if radii:
-                newPoint.radius = max ( 1, radii[ start_node ] )
+        if radii:
+            newPoint.radius = max ( 1, radii[ start_node ] )
 
         active_node = first_child
         number_of_childs = len(child_list[active_node])
         ### nodes_created is a failsafe for while loop
-        nodes_created = 0           
-        while nodes_created < 100000:
-            if active_node in nodes_to_keep:
+        nodes_created = 0
+        while nodes_created < 100000:            
+            if active_node in nodes_to_keep:                
                 newSpline.points.add()
                 newPoint = newSpline.points[-1]
                 newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
@@ -7176,7 +7205,7 @@ class Create_Mesh (Operator):
             self.report({'ERROR'},'Error(s) occurred: see console')
             
             ### If active node is branch point, start new splines for each child    
-        if number_of_childs > 1:
+        if number_of_childs > 1:            
             for child in child_list[active_node]:
                 spline_indices, node_ids = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
 
@@ -7524,7 +7553,7 @@ class Create_Mesh (Operator):
         for i,sp in enumerate(spline_indices):
             this_str_index = strahler_indices[ sp[1] ]
 
-            print(i,sp,this_str_index)
+            #print(i,sp,this_str_index)
 
             mat_name = '#%s StrahlerMat %i' % (skid,this_str_index)
 
@@ -7548,11 +7577,25 @@ class RandomMaterial (Operator):
                                       description = "Choose which neurons to give random color.",
                                       default = 'All')    
     color_range = EnumProperty(name="Range",
-                                   items = (('RGB','RGB','RGB'),
+                                   items = (('RGB','RGB','RGB'),                                            
                                             ("Grayscale","Grayscale","Grayscale"),                                            
                                             ),
                                     default =  "RGB",
                                     description = "Choose mode of randomizing colors")
+    start_color = FloatVectorProperty(name = "Color range start", 
+                                description = "Set start of color range (for RGB). Keep start and end the same to use full range.", 
+                                default = ( 1 , 0.0 , 0.0 ), 
+                                min = 0.0,
+                                max = 1.0,
+                                subtype = 'COLOR'
+                                )  
+    end_color = FloatVectorProperty(name = "Color range end", 
+                                description = "Set end of color range (for RGB). Keep start and end the same to use full range.", 
+                                default = ( 1 , 1 , 0.0 ), 
+                                min = 0.0,
+                                max = 1.0,
+                                subtype = 'COLOR'
+                                )  
 
     def execute(self, context):        
         neuron_count = 0        
@@ -7561,7 +7604,7 @@ class RandomMaterial (Operator):
             if neuron.name.startswith('#'):
                 neuron_count += 1
         
-        colormap = ColorCreator.random_colors(neuron_count,self.color_range)    
+        colormap = ColorCreator.random_colors(neuron_count,self.color_range, start_rgb = self.start_color, end_rgb = self.end_color)    
         #print(colormap)
 
         if self.which_neurons == 'All':
@@ -7801,12 +7844,14 @@ class ColorByStrahler (Operator):
             except:
                 resampling_factors[skid] = 1
 
-            try:     
+            try:
                 use_radius[skid] = neurons_to_reload[n]['use_radius']
             except:
                 use_radius[skid] = False
 
-        skdata, errors = retrieveSkeletonData( skids_to_reload , context.user_preferences.addons['CATMAIDImport'].preferences.time_out)         
+        skdata, errors = retrieveSkeletonData(  skids_to_reload , 
+                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
+                                                requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs)
 
         print("Creating new, colored meshes for %i neurons" % len(skdata))
         for skid in skdata:            
@@ -9167,7 +9212,10 @@ class CalculateSimilarityModal(Operator):
 
             print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
 
-            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False) 
+            skdata,errors = retrieveSkeletonData(   missing_skids, 
+                                                    time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                                    skip_existing = False,
+                                                    requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs) 
 
             for skid in skdata:
                 synapse_data[str(skid)] = skdata[skid][1]
@@ -9970,7 +10018,10 @@ class ColorBySimilarity(Operator):
 
             print('Retrieving missing skeleton data for %i neurons' % len(missing_skids))         
 
-            skdata,errors = retrieveSkeletonData(missing_skids, time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, skip_existing = False) 
+            skdata,errors = retrieveSkeletonData(   missing_skids, 
+                                                    time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out, 
+                                                    skip_existing = False,
+                                                    requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs) 
 
             for skid in skdata:
                 synapse_data[str(skid)] = skdata[skid][1]
@@ -11391,15 +11442,15 @@ class ImportVolume(Operator):
 
         if self.by_name:
             if self.allow_partial:
-                volumes_to_retrieve += [ v for v in available_volumes if self.by_name.lower() in v[1].lower() ]
+                volumes_to_retrieve += [ v[0] for v in available_volumes if self.by_name.lower() in v[1].lower() ]
             else:
-                volumes_to_retrieve += [ v for v in available_volumes if self.by_name.lower() == v[1].lower() ]
+                volumes_to_retrieve += [ v[0] for v in available_volumes if self.by_name.lower() == v[1].lower() ]
 
         conversion_factor = context.user_preferences.addons['CATMAIDImport'].preferences.conversion_factor        
 
         for vol in volumes_to_retrieve:
 
-            url = remote_instance.get_volume_details( project_id, vol[0] )
+            url = remote_instance.get_volume_details( project_id, vol )
 
             response = remote_instance.fetch(url)
 
@@ -11622,7 +11673,8 @@ def set_date( scene ) :
     try:        
         scene.objects['timer'].data.body = scene['timestamps'][ scene.frame_current ]
     except:
-        scene.objects['timer'].data.body = 'Out of bounds'
+        scene.objects['timer'].data.body = scene['timestamps'][ scene.frame_current ][-1]
+        #scene.objects['timer'].data.body = 'Out of bounds'
 
 class AnimateHistory(Operator):
     """ Animates neuron(s) history: built-up over time
@@ -11656,6 +11708,11 @@ class AnimateHistory(Operator):
                                 default = False,
                                 description = 'Adds text object showing the date/time. Using <Time neuron individually> or <Spread evenly> will mess this up!'
                                 )    
+    keyframe_interval = IntProperty(   name= 'Keyframe every N',
+                                default = 1,
+                                min = 1,                                
+                                description = 'Having less keyframes will increase performance!'
+                                )
 
     def execute(self,context):
         neurons_to_load = set()
@@ -11697,21 +11754,23 @@ class AnimateHistory(Operator):
         self.skdata, errors = retrieveSkeletonData( list( neurons_to_load ), 
                                                 skip_existing = False,
                                                 with_history = True,
-                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out )
+                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
+                                                requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs )
 
+        print('Extracting all timestamps...' )
         #Extract node timestamps        
-        self.node_timestamps = { s : [ datetime.datetime.strptime( n[8][:16] , '%Y-%m-%d %H:%M' ) for n in self.skdata[s][0] ] for s in self.skdata }        
+        self.node_timestamps = { s : [ datetime.datetime.strptime( n[9][:16] , '%Y-%m-%d %H:%M' ) for n in self.skdata[s][0] ] for s in self.skdata }        
 
         #Extract connector timestamps (if there are actually connectors)
         if [ ob for skid in self.con_objects for ob in self.con_objects[skid] ]:
-            self.con_timestamps = { s : [ datetime.datetime.strptime( c[6][:16] , '%Y-%m-%d %H:%M' ) for c in self.skdata[s][1] ] for s in self.skdata }        
+            self.con_timestamps = { s : [ datetime.datetime.strptime( c[7][:16] , '%Y-%m-%d %H:%M' ) for c in self.skdata[s][1] ] for s in self.skdata }        
         else:
             self.con_timestamps = { s : [] for s in self.skdata }        
 
         self.first_date = sorted( [ d for n in self.node_timestamps for d in self.node_timestamps[n] ] + [ d for n in self.con_timestamps for d in self.con_timestamps[n] ] )[0]
         self.last_date = sorted( [ d for n in self.node_timestamps for d in self.node_timestamps[n] ] + [ d for n in self.con_timestamps for d in self.con_timestamps[n] ] )[-1]       
 
-        self.delta = ( self.last_date - self.first_date ) / ( self.end_frame - self.start_frame )
+        self.delta = ( self.last_date - self.first_date ) / ( ( self.end_frame - self.start_frame ) / self.keyframe_interval )
 
         print('Start date:', self.first_date )
         print('End date:', self.last_date )
@@ -11720,7 +11779,7 @@ class AnimateHistory(Operator):
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
 
         for i, n in enumerate( self.skdata ):
-            print('Processing history of neuron %s (%i of %i)' % ( str( n ), i+1 , len( self.skdata ) ) )       
+            print('Processing history of neuron %s (%i of %i, %i nodes)' % ( str( n ), i+1 , len( self.skdata ), len( self.skdata[n][0] ) ) )                   
             self.plot_history( n )
 
         if self.add_timer and not self.individually and not self.spread_even:
@@ -11757,15 +11816,15 @@ class AnimateHistory(Operator):
         ob = self.skid_to_obj[ neuron ]             
 
         #Extract timestamps for the nodes that this neuron actually still has
-        #Keep in mind that each node can have multiple entries!
+        #Keep in mind that each node can have multiple entries reflecting changes in their position!
         existing_nodes = [ n for sp in ob['node_ids'] for n in sp ]
-        this_node_timestamps = [ ( n[0] , datetime.datetime.strptime( n[8][:16] , '%Y-%m-%d %H:%M' ) ) for n in self.skdata[neuron][0] if n[0] in existing_nodes ]       
+        this_node_timestamps = [ ( n[0] , datetime.datetime.strptime( n[9][:16] , '%Y-%m-%d %H:%M' ) ) for n in self.skdata[neuron][0] if n[0] in existing_nodes ]       
 
         #If we're skipping delta, make sure the time range is set for each neuron individually
         if self.individually:
-            this_start = sorted( [ n[0] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[0]
-            this_end = sorted( [ n[0] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[-1]
-            this_delta = ( this_end - this_start ) / ( self.end_frame - self.start_frame )
+            this_start = sorted( [ n[1] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[0]
+            this_end = sorted( [ n[1] for n in this_node_timestamps ] + self.con_timestamps[neuron] )[-1]
+            this_delta = ( this_end - this_start ) / ( ( self.end_frame - self.start_frame ) / self.keyframe_interval )
         else:
             this_start = self.first_date
             this_end = self.last_date
@@ -11779,12 +11838,13 @@ class AnimateHistory(Operator):
                 groups.append( [ n[0] for n in this_node_timestamps if this_date <= n[1] <= ( this_date + this_delta )  ] ) 
                 this_date += this_delta
 
-            #Create groups for connectors
-            con_groups = []
-            this_date = this_start
-            while this_date <= this_end:
-                con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] <= ( this_date + this_delta )  ] ) 
-                this_date += this_delta              
+            if self.con_objects[ neuron ]:
+                #Create groups for connectors
+                con_groups = []
+                this_date = this_start
+                while this_date <= this_end:
+                    con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] <= ( this_date + this_delta )  ] ) 
+                    this_date += this_delta              
         elif self.spread_even:
             #Get all timestamps
             all_timestamps = this_node_timestamps + [ ( cn[1] , datetime.datetime.strptime( cn[6][:16] , '%Y-%m-%d %H:%M' ) ) for cn in self.skdata[neuron][1] ]            
@@ -11793,7 +11853,7 @@ class AnimateHistory(Operator):
             all_IDs_sorted = [ n[0] for n in sorted ( all_timestamps , key = lambda x : x[1] ) ]
 
             #Bin all IDs into groups (one group per frame)
-            n_groups = self.end_frame - self.start_frame
+            n_groups = int( ( self.end_frame - self.start_frame ) / self.keyframe_interval )
             IDs_per_group = math.ceil( len(all_IDs_sorted)/n_groups )
             groups = con_groups = [ all_IDs_sorted[ i * IDs_per_group : ( i + 1 ) * IDs_per_group ] for i in range( n_groups ) ]
 
@@ -11824,9 +11884,15 @@ class AnimateHistory(Operator):
         soma_ob = [ ob for ob in bpy.data.objects if ob.name.startswith('Soma of %s' % str( neuron ) ) ]
         
         if soma_node and soma_ob:
+            #print('Soma:', soma_node, soma_node[0] in existing_nodes, soma_node[0] in [ n[0] for n in this_node_timestamps ], soma_node[0] in [ n[0] for n in  self.skdata[neuron][0] ] )
             soma_ob[0].data.animation_data_clear()
 
-            group_index = [ i for i, g in enumerate(groups) if soma_node[0] in g ][0]
+            try:
+                group_index = [ i for i, g in enumerate(groups) if soma_node[0] in g ][0]
+            except:
+                #If a treenode has been deleted between getting the history and loading the neuron object, just assume that it was created in the last group
+                group_index = len( groups )
+
             frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
 
             soma_ob[0].hide = True
@@ -11840,7 +11906,7 @@ class AnimateHistory(Operator):
             soma_ob[0].keyframe_insert( 'hide_render', frame = frame + 1)  
 
         #Now take care of the synapses (if present!)       
-        for ob in self.con_objects[ neuron ]:            
+        for ob in self.con_objects[ neuron ]:                      
             if 'connector_ids' not in ob:
                 self.report({'ERROR'},'Version conflict - please reload neurons!')
                 print('You have to reload this neuron: conflict with this script version!')
@@ -11848,12 +11914,17 @@ class AnimateHistory(Operator):
             #Iterate over all spines (1 per connector) and animate the radius (0 = invisible)
             for i,sp in enumerate( ob.data.splines ):
                 #Get node id of this node 
-                con_id = ob['connector_ids'][i]      
+                con_id = ob['connector_ids'][i]                      
                 
                 #Check in which group this connector would be and calculate the respective frame
                 #Please note: this should the FIRST group (i.e. the original creation date) 
                 #-> nodes can have multiple entry when with_history is True (one per edit)
-                group_index = [ i for i, g in enumerate(con_groups) if con_id in g ][0]
+                try:
+                    group_index = [ i for i, g in enumerate(con_groups) if con_id in g ][0]
+                except:
+                    #If a connector has been deleted between getting the history and loading the synapse object, just assume that it was created in the last group
+                    group_index = len( groups )
+
                 frame = round( self.start_frame + ( ( self.end_frame - self.start_frame ) / len( groups ) * group_index ) )
 
                 for k,p in enumerate ( sp.points ): 
@@ -12085,55 +12156,6 @@ def calc_color (value, max_value, start_rgb, end_rgb,take_longest_route):
     rgb = colorsys.hsv_to_rgb(h,s,v)
     
     return rgb
-        
-
-def calc_hue (value, max_value, lut):
-    """
-    Tagged for removal
-    """
-    
-    #Make sure value is capped at max_value
-    if value > max_value:
-        value = max_value
-
-    #Get number of intervals
-    n_intervals = (len(lut)-1)
-
-    #Get interval for this value
-    interval = math.ceil(n_intervals/max_value * value)
-
-    #Set hue range based on interval
-    if interval != 0:
-        min_hue = lut[interval-1]
-        max_hue = lut[interval]
-    #Make sure that if value == 0 the first interval is choosen
-    else:
-        interval = 1
-        min_hue = lut[0]
-        max_hue = lut[1]
-
-    this_interval_max_value = interval/n_intervals * max_value    
-    
-    #Hue range is always calculated as the shortest distance between the values    
-    hue_range_cw = math.fabs(max_hue - min_hue)
-    hue_range_cww = 360 - hue_range_cw
-    
-    if hue_range_cw < hue_range_cww:
-        hue_range = max_hue - min_hue
-    elif max_hue > min_hue:
-        hue_range = 360 - max_hue + min_hue
-    elif max_hue < min_hue:
-        hue_range = -1 * (360 - max_hue + min_hue)
-    
-    hue = min_hue + (hue_range/this_interval_max_value * value)
-    if hue < 0:
-        hue = 360 - hue
-    if hue > 360:
-        hue = hue - 360
-
-    #print('N_Intervals: %i; Interval: %i; Min/Max Hue: %i/%i; Value: %f;max_value: %f; Hue: %f/%f' % (n_intervals,interval,min_hue,max_hue,value,this_interval_max_value,hue_test,hue))
-
-    return hue/360
 
 class AreaMsg():
     """ Hackish area message -> shows up to the right of render selection in top bar.
@@ -12261,6 +12283,12 @@ class CATMAIDAddonPreferences(AddonPreferences):
             default=20,
             description = 'Server requests will be timed out after this duration to prevent Blender from freezing indefinitely.'
             )
+    rqs = IntProperty(
+            name="Requests per second",
+            default=100,
+            min = 1,
+            description = 'Restricting the number of requests per second can help if you get errors when loading loads of neurons.'
+            )
 
     def draw(self, context):
         layout = self.layout
@@ -12272,6 +12300,7 @@ class CATMAIDAddonPreferences(AddonPreferences):
         layout.prop(self, "token")
         layout.prop(self, "conversion_factor")
         layout.prop(self, "time_out")
+        layout.prop(self, "rqs")
 
 osd = OnScreenMsg()
 ahd = AreaMsg()
