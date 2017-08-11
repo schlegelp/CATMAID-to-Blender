@@ -18,7 +18,11 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.83 11/08/2017:
+    - added option to restrict to specific sources and targets when importing connectors for a set of neurons
+
 ### V5.82 10/06/2017:
+    - added option to filter minimum node contribution if loading neurons by user
     - added requests per second to addon-preferences: useful when getting errors while retrieving large numbers of neurons
     - fixed bugs in animate.history
     - made randomise color use color range
@@ -377,7 +381,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (5, 8, 1),
+ "version": (5, 8, 3),
  "for_catmaid_version": '2017.01.19-3-g1e99030',
  "blender": (2, 7, 8),
  "location": "Properties > Scene > CATMAID Import",
@@ -787,6 +791,60 @@ class CatmaidInstance:
         """
         return self.djangourl("/" + str(pid) + "/skeletons/")
 
+def eval_skids(x):
+    """ Wrapper to evaluate parameters passed as skeleton IDs. Will turn
+    annotations and neuron names into skeleton IDs.
+
+    Parameters
+    ----------
+    x :             {int, str, CatmaidNeuron, CatmaidNeuronList, DataFrame}
+                    Your options are either::
+                    1. int or list of ints will be assumed to be skeleton IDs
+                    2. str or list of str:
+                        - if convertible to int, will be interpreted as x
+                        - elif start with 'annotation:' will be assumed to be 
+                          annotations
+                        - else, will be assumed to be neuron names
+                    3. For CatmaidNeuron/List or pandas.DataFrames will try
+                       to extract skeleton_id parameter
+    remote_instance : CatmaidInstance, optional
+
+    Returns
+    -------
+    list of str
+                    list containing skeleton IDs as strings
+    """
+
+    if ',' in x:
+        x = x.split(',')
+
+    if isinstance(x, (int, np.int64, np.int32, np.int)):
+        return [ str(x) ]
+    elif isinstance(x, (str, np.str)):
+        try:
+            int(x)
+            return [ str(x) ]
+        except:
+            if x.startswith('annotation:'):
+                return search_annotations(x[11:])
+            elif x.startswith('name:'):
+                return search_neuron_names(x[5:],allow_partial=False).skeleton_id.tolist()
+            else:
+                return search_neuron_names(x, allow_partial=False).skeleton_id.tolist()
+    elif isinstance(x, (list, np.ndarray)):
+        skids = []
+        for e in x:
+            temp = eval_skids(e)
+            if isinstance(temp, (list, np.ndarray)):
+                skids += temp
+            else:
+                skids.append(temp)
+        return list(set(skids))
+    else:
+        remote_instance.logger.error(
+            'Unable to extract x from type %s' % str(type(x)))
+        raise TypeError('Unable to extract x from type %s' % str(type(x)))
+
 def search_neuron_names(tag, allow_partial = True):
     """ Searches for neuron names. Returns a list of skeleton ids.
     """
@@ -803,6 +861,57 @@ def search_neuron_names(tag, allow_partial = True):
             match += e['skeleton_ids']
 
     return list( set(match) )    
+
+def search_annotations(annotations_to_retrieve, allow_partial=False, intersect=False):  
+        """ Searches for annotations, returns list of skeleton IDs
+        """
+         ### Get annotation IDs
+        osd.show("Looking for Annotations...")
+        print('Looking for Annotations:', annotations_to_retrieve)
+        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
+
+        print('Retrieving list of Annotations...')
+        an_list = remote_instance.fetch( remote_instance.get_annotation_list( project_id ) )    
+
+        print('List of %i annotations retrieved.' % len(an_list['annotations']))
+
+        annotation_ids = []
+        annotation_names = []
+        if not allow_partial:
+            annotation_ids = [ x['id'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
+            annotation_names = [ x['name'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
+        else:
+            annotation_ids = [ x['id'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
+            annotation_names = [ x['name'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
+        
+        if not annotation_ids:            
+            return []
+
+        #Now retrieve annotated skids
+        print('Looking for Annotation(s) | %s | (id: %s)' % ( str(annotation_names), str(annotation_ids) ) )
+        #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
+        if intersect:
+            annotation_post = { 'rangey_start': 0, 'range_length':500, 'with_annotations':False }            
+            for i,e in enumerate(annotation_ids):
+                key = 'annotated_with[%i]' % i
+                annotation_post[key] = e
+
+            remote_annotated_url = remote_instance.get_annotated_url( project_id )
+            neuron_list = [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
+
+        else:
+            neuron_list = []
+            for e in annotation_ids:
+                annotation_post = { 'annotated_with[0]': e, 'rangey_start': 0, 'range_length':500, 'with_annotations':False }   
+                remote_annotated_url = remote_instance.get_annotated_url( project_id )
+                neuron_list += [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
+
+        annotated_skids = list(set(neuron_list))  
+        
+        print('Annotation(s) found for %i neurons' % len(annotated_skids))  
+        neuron_names = get_neuronnames(annotated_skids)            
+
+        return annotated_skids    
 
 def retrieve_skeleton_list( user=None, node_count=1, start_date=[], end_date=[], reviewed_by = None ):
     """ Wrapper to retrieves a list of all skeletons that fit given parameters (see variables). If no parameters are provided, all existing skeletons are returned.
@@ -1061,7 +1170,7 @@ def get_user_ids(users):
             user = [ us['id'] for us in user_list if us['last_name'] == u ]
 
             if len(user) > 1:
-                print('Multiple/no users with lastname %s found. Adding all:' % u)
+                print('Multiple/no users with lastname %s found. Adding all.' % u)
                 user_ids += user                
             elif len(user) == 0:
                 print('No match found for', u)
@@ -1416,6 +1525,10 @@ class RetrieveNeuron(Operator):
     by_user = StringProperty(name="User(s)",
                                  description = "Search by user lastnames or user_ids. Multiple users comma-separated!"
                                 )
+    minimum_cont = IntProperty(name="Minimum contribution", 
+                             default = 1, 
+                             min = 1,                             
+                             description = "Minimum node contribution per user to be loaded.")     
 
     minimum_nodes = IntProperty(name="Minimum node count", 
                              default = 1, 
@@ -1478,6 +1591,7 @@ class RetrieveNeuron(Operator):
         row.prop(self, "annotations")
         row = box.row(align=False)  
         row.prop(self, "by_user")
+        row.prop(self, "minimum_cont")
         row = box.row(align=False)  
         row.prop(self, "skeleton_ids")
         row = box.row(align=False)          
@@ -1538,7 +1652,7 @@ class RetrieveNeuron(Operator):
 
         if self.annotations:
             annotations_to_retrieve = [x.strip() for x in self.annotations.split(',')]
-            retrieve_by_annotations = self.retrieve_annotated( annotations_to_retrieve )
+            retrieve_by_annotations = search_annotations(annotations_to_retrieve, allow_partial=self.partial_match, intersect=self.intersect ) 
 
             if not retrieve_by_annotations:
                 print('ERROR: No matching anotation(s) found! Import stopped')
@@ -1607,7 +1721,14 @@ class RetrieveNeuron(Operator):
         skdata,errors = retrieveSkeletonData( skeletons_to_retrieve , 
                                               time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
                                               get_abutting = self.import_abutting,
-                                              requests_per_second = context.user_preferences.addons['CATMAIDImport'].preferences.rqs )         
+                                              requests_per_second = context.user_preferences.addons['CATMAIDImport'].preferences.rqs )     
+
+        if self.minimum_cont > 1 and self.by_user:
+            above_threshold = {}
+            for n in skdata:
+                if len([ n for n in skdata[n][0] if n[2] in user_ids ]) > self.minimum_cont:
+                    above_threshold[n] = skdata[n]
+            skdata = above_threshold
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -1634,57 +1755,8 @@ class RetrieveNeuron(Operator):
         else:
             self.report({'ERROR'}, errors)
                         
-        return {'FINISHED'}   
-   
-
-    def retrieve_annotated(self, annotations_to_retrieve):  
-         ### Get annotation IDs
-        osd.show("Looking for Annotations...")
-        print('Looking for Annotations:', annotations_to_retrieve)
-        bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
-
-        print('Retrieving list of Annotations...')
-        an_list = remote_instance.fetch( remote_instance.get_annotation_list( project_id ) )    
-
-        print('List of %i annotations retrieved.' % len(an_list['annotations']))
-
-        annotation_ids = []
-        annotation_names = []
-        if not self.partial_match:
-            annotation_ids = [ x['id'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
-            annotation_names = [ x['name'] for x in an_list['annotations'] if x['name'] in annotations_to_retrieve ]
-        else:
-            annotation_ids = [ x['id'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
-            annotation_names = [ x['name'] for x in an_list['annotations'] if True in [ y.lower() in x['name'].lower() for y in annotations_to_retrieve  ] ]
-        
-        if not annotation_ids:            
-            return []
-
-        #Now retrieve annotated skids
-        print('Looking for Annotation(s) | %s | (id: %s)' % ( str(annotation_names), str(annotation_ids) ) )
-        #annotation_post = {'neuron_query_by_annotation': annotation_id, 'display_start': 0, 'display_length':500}
-        if self.intersect:
-            annotation_post = { 'rangey_start': 0, 'range_length':500, 'with_annotations':False }            
-            for i,e in enumerate(annotation_ids):
-                key = 'annotated_with[%i]' % i
-                annotation_post[key] = e
-
-            remote_annotated_url = remote_instance.get_annotated_url( project_id )
-            neuron_list = [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
-
-        else:
-            neuron_list = []
-            for e in annotation_ids:
-                annotation_post = { 'annotated_with[0]': e, 'rangey_start': 0, 'range_length':500, 'with_annotations':False }   
-                remote_annotated_url = remote_instance.get_annotated_url( project_id )
-                neuron_list += [ str(n['skeleton_ids'][0]) for n in remote_instance.fetch( remote_annotated_url, annotation_post )['entities'] if n['type'] == 'neuron' ]
-
-        annotated_skids = list(set(neuron_list))  
-        
-        print('Annotation(s) found for %i neurons' % len(annotated_skids))  
-        neuron_names = get_neuronnames(annotated_skids)            
-
-        return annotated_skids    
+        return {'FINISHED'}
+    
     
     def invoke(self, context, event):        
         return context.window_manager.invoke_props_dialog(self, width = 500)    
@@ -1999,9 +2071,9 @@ class RetrievePairs (Operator):
         print("Collection skeleton data for:", paired)        
         start = time.clock()        
         skdata, errors = retrieveSkeletonData( paired,
-                                              time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
+                                              time_out = bpy.context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
                                               get_abutting = self.import_abutting,
-                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
+                                              requests_per_second =  bpy.context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -2325,30 +2397,32 @@ class RetrieveConnectors(Operator):
     bl_idname = "retrieve.connectors"  
     bl_label = "Retrieve Connectors"
 
-    which_neurons = EnumProperty(name = "For which Neuron(s)?", 
-                                      items = [('Selected','Selected','Selected'),('All','All','All')],
-                                      description = "Choose for which neurons to retrieve connectors.")
-    color_prop = EnumProperty(name = "Colors", 
-                                      items = [('Black','Black','Black'),('Mesh-color','Mesh-color','Mesh-color'),('Random','Random','Random')],
-                                      description = "How to color the connectors.")    
-    create_as = EnumProperty(name = "Create as", 
-                                      items = [('Spheres','Spheres','Spheres'),('Curves','Curves','Curves')],
-                                      description = "As what to create them. Curves suggested for large numbers.")
+    which_neurons = EnumProperty(   name = "For which Neuron(s)?", 
+                                    items = [('Selected','Selected','Selected'),('All','All','All')],
+                                    description = "Choose for which neurons to retrieve connectors.")
+    color_prop = EnumProperty(      name = "Colors", 
+                                    items = [('Black','Black','Black'),('Mesh-color','Mesh-color','Mesh-color'),('Random','Random','Random')],
+                                    description = "How to color the connectors.")    
+    create_as = EnumProperty(       name = "Create as", 
+                                    items = [('Spheres','Spheres','Spheres'),('Curves','Curves','Curves')],
+                                    description = "As what to create them. Curves suggested for large numbers.")
     basic_radius = FloatProperty(   name="Basic Radius", 
                                     default = 0.01,
                                     description = "Set to -1 to not weigh connectors")
-    layer = IntProperty(   name="Create in Layer", 
+    layer = IntProperty(            name="Create in Layer", 
                                     default = 2,
                                     min = 0,
                                     max = 19,
                                     description = "Set layer in which to create connectors")
-    get_inputs = BoolProperty(name="Retrieve Inputs", default = True)
-    get_outputs = BoolProperty(name="Retrieve Ouputs", default = True)
-    weight_outputs = BoolProperty(  name="Weight Ouputs", 
-                                    description = "If true, presynaptic sites will be scaled relative to the number of postsynaptically connected neurons.",
+    get_inputs = BoolProperty(      name="Retrieve Inputs", default = True)
+    get_outputs = BoolProperty(     name="Retrieve Outputs", default = True)
+    weight_outputs = BoolProperty(  name="Weight Outputs", 
+                                    description = "If True, presynaptic sites will be scaled relative to the number of postsynaptically connected neurons.",
                                     default = True)
-    filter = StringProperty(name="Filter Connectors",
-                            description='Filter neuron names pre/postsynaptic of connectors')
+    restr_sources = StringProperty( name="Restrict to sources",
+                                    description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those that target this set of neurons')
+    restr_targets = StringProperty( name="Restrict to targets",
+                                    description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those coming from this set of neurons')
     
     @classmethod        
     def poll(cls, context):
@@ -2369,6 +2443,11 @@ class RetrieveConnectors(Operator):
             to_search = bpy.data.objects
         elif self.which_neurons == 'Selected':
             to_search = bpy.context.selected_objects
+
+        if self.restr_sources:
+            self.source_skids = eval_skids(self.restr_sources)
+        if self.restr_targets:
+            self.target_skids = eval_skids(self.restr_targets)
 
         filtered_ob_list = []
         filtered_skids = []
@@ -2494,34 +2573,36 @@ class RetrieveConnectors(Operator):
             number_of_targets = {}
             neurons_included = []
             
-            if self.filter:
+            if self.restr_targets:
                 #Filter Downstream Targets
                 connectors_to_delete = {}
                 for connector in connector_data_post:
                     connectors_to_delete[connector[0]] = True
                     for target_skid in connector[1]['postsynaptic_to']:
-                        if self.filter in neuron_names[str(target_skid)]:
+                        if str(target_skid) in self.target_skids:
                             connectors_to_delete[connector[0]] = False
                             neurons_included.append(neuron_names[str(target_skid)])
                 
                 for connector_id in connectors_to_delete:
                     if connectors_to_delete[connector_id] is True:
-                        connector_post_coords.pop(connector_id)                        
-                
+                        connector_post_coords.pop(connector_id)       
+
+                print('Postsynaptic neurons remaining after filtering: ',list(set(neurons_included)))                 
+            
+            if self.restr_sources: 
                 #Filter Upstream Targets
                 connectors_to_delete = {}
                 for connector in connector_data_pre:
                     connectors_to_delete[connector[0]] = True
-                    if connector[1]['presynaptic_to'] != None:
-                        if self.filter in neuron_names[str(connector[1]['presynaptic_to'])]:
-                            connectors_to_delete[connector[0]] = False
-                            neurons_included.append(neuron_names[str(connector[1]['presynaptic_to'])])
+                    if str(connector[1]['presynaptic_to']) in self.source_skids:
+                        connectors_to_delete[connector[0]] = False
+                        neurons_included.append(neuron_names[str(connector[1]['presynaptic_to'])])
                 
                 for connector_id in connectors_to_delete:
                     if connectors_to_delete[connector_id] is True:                        
                         connector_pre_coords.pop(connector_id)                                                   
                         
-                print('Neurons remaining after filtering: ',list(set(neurons_included)))
+                print('Presynaptic neurons remaining after filtering: ',list(set(neurons_included)))
             
             if len(connector_post_coords) > 0:
                 ### Extract number of postsynaptic targets for connectors    
@@ -4790,7 +4871,7 @@ class RetrievePartners(Operator):
         skdata, errors = retrieveSkeletonData( filtered_partners , 
                                               time_out = bpy.context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
                                               get_abutting = self.import_abutting,
-                                              requests_per_second =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
+                                              requests_per_second =  bpy.context.user_preferences.addons['CATMAIDImport'].preferences.rqs ) 
 
         print("Creating meshes for %i neurons" % len(skdata))
         for skid in skdata:
@@ -7138,12 +7219,11 @@ class Create_Mesh (Operator):
             except:
                 print('Unable to set viewport shade to material. Try manually!')            
         
-        if soma != (0,0,0,0):
+        if soma != (0,0,0,0):            
             soma_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, size=soma[3], view_align=False, \
                                                             enter_editmode=False, location=(soma[0],soma[1],soma[2]), rotation=(0, 0, 0), \
-                                                            layers=(True, False, False, False, False, False, False, \
-                                                            False, False, False, False, False, False, False, False, \
-                                                            False, False, False, False, False))
+                                                            layers=[ l for l in bpy.context.scene.layers ]
+                                                            )
             bpy.ops.object.shade_smooth()
             bpy.context.active_object.name = 'Soma of ' + neuron_name
             bpy.context.active_object['Soma of'] = skid
@@ -7591,7 +7671,7 @@ class RandomMaterial (Operator):
                                 )  
     end_color = FloatVectorProperty(name = "Color range end", 
                                 description = "Set end of color range (for RGB). Keep start and end the same to use full range.", 
-                                default = ( 1 , 1 , 0.0 ), 
+                                default = ( 1 , 0.0 , 0.0 ), 
                                 min = 0.0,
                                 max = 1.0,
                                 subtype = 'COLOR'
