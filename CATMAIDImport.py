@@ -18,6 +18,9 @@
 
 ### CATMAID to Blender Import Script - Version History:
 
+### V5.84 28/08/2017:
+    - added option to filter connectivity when calculating connectivity similarity
+
 ### V5.83 11/08/2017:
     - added option to restrict to specific sources and targets when importing connectors for a set of neurons
 
@@ -817,6 +820,8 @@ def eval_skids(x):
 
     if ',' in x:
         x = x.split(',')
+    elif ';' in x:
+        x = x.split(';')
 
     if isinstance(x, (int, np.int64, np.int32, np.int)):
         return [ str(x) ]
@@ -865,6 +870,9 @@ def search_neuron_names(tag, allow_partial = True):
 def search_annotations(annotations_to_retrieve, allow_partial=False, intersect=False):  
         """ Searches for annotations, returns list of skeleton IDs
         """
+        if not isinstance(annotations_to_retrieve, (list, np.ndarray)):
+            annotations_to_retrieve = [ annotations_to_retrieve ]
+
          ### Get annotation IDs
         osd.show("Looking for Annotations...")
         print('Looking for Annotations:', annotations_to_retrieve)
@@ -873,7 +881,7 @@ def search_annotations(annotations_to_retrieve, allow_partial=False, intersect=F
         print('Retrieving list of Annotations...')
         an_list = remote_instance.fetch( remote_instance.get_annotation_list( project_id ) )    
 
-        print('List of %i annotations retrieved.' % len(an_list['annotations']))
+        #print('List of %i annotations retrieved.' % len(an_list['annotations']))
 
         annotation_ids = []
         annotation_names = []
@@ -992,14 +1000,14 @@ def get_annotations_from_list (skids, remote_instance):
    
     return(annotation_list)
 
-def retrieve_connectivity (skids, remote_instance = None, threshold = 1):
+def retrieve_connectivity (skids, remote_instance = None, threshold = 1, filter=None):
     """ Wrapper to retrieve the synaptic partners to neurons of interest
 
     Parameters:
     ----------
     skids :             list of skeleton ids
     remote_instance :   CATMAID instance; either pass directly to function or define globally as 'remote_instance'
-    threshold :         does not seem to have any effect on CATMAID API and is therefore filtered afterwards. This threshold is applied to the total number of synapses. (optional, default = 1)
+    threshold :         does not seem to have any effect on CATMAID API and is therefore filtered afterwards. This threshold is applied to the total number of synapses. (optional, default = 1)    
 
     Returns:
     ------- 
@@ -1040,7 +1048,6 @@ def retrieve_connectivity (skids, remote_instance = None, threshold = 1):
 
         for n in pop:
             connectivity_data[direction].pop(n)
-
         
     return(connectivity_data)
 
@@ -8547,6 +8554,11 @@ class CalculateSimilarityModalHelper(Operator):
                                 default = True,
                                 description = 'Use outputs for calculation of connectivity matching/pairing'
                                 )
+    filter_connectivity = StringProperty (
+                                name='Filter connectivity',
+                                default = '',
+                                description = 'Use only these neurons to calculated connectivity matching. Accepts skids ("12345;67890;") or annotations (e.g. "annotation:PN right")'
+                                )
     calc_thresh = IntProperty (
                                 name='Calculation Threshold',
                                 default = 0,
@@ -8611,7 +8623,9 @@ class CalculateSimilarityModalHelper(Operator):
         col = row.column()
         col.prop(self, "use_outputs") 
         row = box.row(align=False)
-        row.prop(self, "calc_thresh")       
+        row.prop(self, "calc_thresh") 
+        row = box.row(align=False)
+        row.prop(self, "filter_connectivity")       
         
 
     def invoke(self, context, event):        
@@ -8631,7 +8645,8 @@ class CalculateSimilarityModalHelper(Operator):
                                     'path_dendrogram': self.path_dendrogram,
                                     'use_inputs'  : self.use_inputs ,
                                     'use_outputs': self.use_outputs ,
-                                    'calc_thresh' :self.calc_thresh
+                                    'calc_thresh' :self.calc_thresh,
+                                    'filter_connectivity' :self.filter_connectivity,
                                     }
 
         return{'FINISHED'}
@@ -8656,10 +8671,9 @@ class CalcScoreThreaded(threading.Thread):
         self.number_of_partners = number_of_partners  
         self.conversion_factor = conversion_factor
         self.sigma = sigma
-        self.omega = omega
+        self.omega = omega       
 
-        threading.Thread.__init__(self)
-            
+        threading.Thread.__init__(self)            
 
     def run(self):
         """
@@ -9110,7 +9124,7 @@ class CalculateSimilarityModal(Operator):
                                             self.number_of_partners,
                                             self.conversion_factor,
                                             self.sigma,
-                                            self.omega
+                                            self.omega,                                            
                                         )
                     t.start()
                     self.threads.append(t)
@@ -9194,7 +9208,8 @@ class CalculateSimilarityModal(Operator):
             self.path_dendrogram = similarity_scores_options['path_dendrogram']
             self.use_inputs  = similarity_scores_options['use_inputs']
             self.use_outputs  = similarity_scores_options['use_outputs']
-            self.calc_thresh = similarity_scores_options['calc_thresh'] 
+            self.calc_thresh = similarity_scores_options['calc_thresh']
+            self.filter_connectivity = similarity_scores_options['filter_connectivity']
         except:
             self.report({'ERROR'},'Make sure to click <Settings> first!') 
             osd.show('Go to <Settings> first!') 
@@ -9308,6 +9323,14 @@ class CalculateSimilarityModal(Operator):
                 return{'CANCELLED'}
 
             self.connectivity = retrieve_connectivity(self.skids,remote_instance)
+
+            if self.filter_connectivity:                
+                filter_skids = eval_skids (self.filter_connectivity)                
+                print('Filtering connectivity...')
+                print('Neurons before filtering: %i' % len( set( list(self.connectivity['incoming']) + list(self.connectivity['outgoing']) )) )                 
+                self.connectivity['incoming'] = { n : self.connectivity['incoming'][n] for n in self.connectivity['incoming'] if n in filter_skids }
+                self.connectivity['outgoing'] = { n : self.connectivity['outgoing'][n] for n in self.connectivity['outgoing'] if n in filter_skids }
+                print('Neurons after filtering: %i' % len( set( list(self.connectivity['incoming']) + list(self.connectivity['outgoing']) )) )
 
             if self.compare == 'Paired-Connectivity':
                 all_partners = list( set( list(self.connectivity['incoming']) + list(self.connectivity['outgoing']) ) )
