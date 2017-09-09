@@ -17,15 +17,16 @@ First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CA
 1. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
 2. Activate by ticking check box and click **Save User Setting**
 
-#### Required Python packages:
-[Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python distribution. 
+#### Dependencies:
+None! [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python distribution and the plugin is written such that it works (mostly) without any external libraries.
 
+#### Optional Python packages:
 On Windows/MacOs: 
-- [scipy](https://www.scipy.org/) (optional, will increase performance for clustering). 
+- [scipy](https://www.scipy.org/) (will increase performance for clustering). 
 
 On Linux: 
 - [numpy](http://www.numpy.org/) (without numpy, functionality will be limited).
-- [scipy](https://www.scipy.org/) (optional, will increase performance for clustering).
+- [scipy](https://www.scipy.org/) (will increase performance for clustering).
 
 There are several ways to install additional packages for Blender's built-in Python. The easiest way is probably this:
 
