@@ -75,14 +75,14 @@ Please check out the Github [Wiki](https://github.com/schlegelp/CATMAID-to-Blend
 
 ## Examples:
 
-####1. Color neurons by similarity and export to vector graphic (SVG)
+#### 1. Color neurons by similarity and export to vector graphic (SVG)
 <img src="https://cloud.githubusercontent.com/assets/7161148/14020628/465496f4-f1d8-11e5-899b-5bb1f6baf8b0.png" width="650">
 
 
-####2. Group postsynaptic sites based on what presynaptic neuron they connect to
+#### 2. Group postsynaptic sites based on what presynaptic neuron they connect to
 <img src="https://cloud.githubusercontent.com/assets/7161148/14020676/7df96468-f1d8-11e5-9f04-aba115112890.png" width="650">
 
-####3. Check out [Schlegel et al., 2016 (eLife)](https://elifesciences.org/content/5/e16799) for more examples.
+#### 3. Check out [Schlegel et al., 2016 (eLife)](https://elifesciences.org/content/5/e16799) for more examples.
 
 ## Using Python to manipulate data within Blender:
 
