@@ -6712,160 +6712,184 @@ class ExportAllToSVG(Operator, ExportHelper):
         """
 
 def fibonacci_sphere(samples=1,randomize=True):
-        """ Calculates points on a sphere
-        """
-        rnd = 1.
-        if randomize:
-         rnd = random.random() * samples
+    """ Calculates points on a sphere
+    """
+    rnd = 1.
+    if randomize:
+     rnd = random.random() * samples
 
-        points = []
-        offset = 2./samples
-        increment = math.pi * (3. - math.sqrt(5.));
+    points = []
+    offset = 2./samples
+    increment = math.pi * (3. - math.sqrt(5.));
 
-        for i in range(samples):
-         y = ((i * offset) - 1) + (offset / 2);
-         r = math.sqrt(1 - pow(y,2))
+    for i in range(samples):
+     y = ((i * offset) - 1) + (offset / 2);
+     r = math.sqrt(1 - pow(y,2))
 
-         phi = ((i + rnd) % samples) * increment
+     phi = ((i + rnd) % samples) * increment
 
-         x = math.cos(phi) * r
-         z = math.sin(phi) * r
+     x = math.cos(phi) * r
+     z = math.sin(phi) * r
 
-         points.append([x,y,z])
+     points.append([x,y,z])
 
-        return points
+    return points
+
+def CalcSphere(radius, nrPolar, nrAzimuthal):
+    dPolar = math.pi / (nrPolar - 1)
+    dAzimuthal = 2.0 * math.pi / (nrAzimuthal)
+
+
+    # 1/2: vertices
+    verts = []
+    currV = mathutils.Vector((0.0, 0.0, radius))        # top vertex
+    verts.append(currV)
+    for iPolar in range(1, nrPolar - 1):                # regular vertices
+        currPolar = dPolar * float(iPolar)
+
+        currCosP = math.cos(currPolar)
+        currSinP = math.sin(currPolar)
+
+        for iAzimuthal in range(nrAzimuthal):
+            currAzimuthal = dAzimuthal * float(iAzimuthal)
+
+            currCosA = math.cos(currAzimuthal)
+            currSinA = math.sin(currAzimuthal)
+
+            currV = mathutils.Vector((currSinP * currCosA, currSinP * currSinA, currCosP)) * radius
+            verts.append(currV)
+    currV = mathutils.Vector((0.0, 0.0, - radius))        # bottom vertex
+    verts.append(currV)
+
+
+    # 2/2: faces
+    faces = []
+    for iAzimuthal in range(nrAzimuthal):                # top faces
+        iNextAzimuthal = iAzimuthal + 1
+        if iNextAzimuthal >= nrAzimuthal: iNextAzimuthal -= nrAzimuthal
+        faces.append([0, iAzimuthal + 1, iNextAzimuthal + 1])
+
+    for iPolar in range(nrPolar - 3):                    # regular faces
+        iAzimuthalStart = iPolar * nrAzimuthal + 1
+
+        for iAzimuthal in range(nrAzimuthal):
+            iNextAzimuthal = iAzimuthal + 1
+            if iNextAzimuthal >= nrAzimuthal: iNextAzimuthal -= nrAzimuthal
+            faces.append([iAzimuthalStart + iAzimuthal, iAzimuthalStart + iAzimuthal + nrAzimuthal, iAzimuthalStart + iNextAzimuthal + nrAzimuthal, iAzimuthalStart + iNextAzimuthal])
+
+    iLast = len(verts) - 1
+    iAzimuthalStart = iLast - nrAzimuthal
+    for iAzimuthal in range(nrAzimuthal):                # bottom faces
+        iNextAzimuthal = iAzimuthal + 1
+        if iNextAzimuthal >= nrAzimuthal: iNextAzimuthal -= nrAzimuthal
+        faces.append([iAzimuthalStart + iAzimuthal, iLast, iAzimuthalStart + iNextAzimuthal])
+
+
+    return np.vstack(verts), faces
 
 class Create_Mesh (Operator):
     """Class used to instance neurons"""
     bl_idname = "create.new_neuron"
     bl_label = "Create New Neuron"
 
-    def make_connector_objects ( neuron_name, connectors_post, connectors_pre, node_data, connectors_weight, connector_color, create_as ,basic_radius, layer, weight_outputs, conversion_factor, unify_materials = True):
-        ### Takes Connector data and create spheres in layer 3!!!
+    def make_connector_objects ( neuron_name, connectors_post, connectors_pre, node_data, connectors_weight, connector_color, create_as, basic_radius, layer, weight_outputs, conversion_factor, unify_materials = True):
         ### For Downstream targets: sphere radius refers to # of targets
         print('Creating connectors: %i/%i (pre/post)' % ( len(connectors_pre),len(connectors_post) ))
         start_creation = time.clock()
-        layers = [i == layer for i in [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]]
+        layers = [i == layer for i in range(20)]
 
-        if create_as == 'Curves':
-            node_list = { n[0]:n[3:6] for n in node_data[0] }
-        elif create_as == 'Spheres':
-            points = fibonacci_sphere( 10 )
-
-        for i,connector in enumerate( connectors_post ):
-            if round(i/len(connectors_post)*100,2) % 10 == 0:
-                print ( 'Connectors_post:', round(i/len(connectors_post)*100), '%' )
-            if basic_radius != -1 and weight_outputs is True:
-                co_size = basic_radius * connectors_weight[connectors_post[connector]['id']]
-            elif basic_radius != -1 and weight_outputs is False:
-                co_size = basic_radius
-            else:
-                co_size = 0.01
-
-            co_loc = connectors_post[connector]['coords']
-            co_parent = connectors_post[connector]['parent_node']
-
-            if create_as == 'Spheres':
-                connector_post_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
-                                                                            location=co_loc, size = co_size, \
-                                                                            layers=layers)
-
-                bpy.context.active_object.name = 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name)
-                bpy.ops.object.shade_smooth()
-
-                if unify_materials is False:
-                    Create_Mesh.assign_material (bpy.context.active_object, 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])
-                else:
-                    Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])
-
-            elif create_as == 'Curves':
-                co_parent_coords = (
-                                    node_list[ co_parent ][0] / conversion_factor,
-                                    node_list[ co_parent ][2] / conversion_factor,
-                                    node_list[ co_parent ][1] / -conversion_factor
-                                )
-
-                cu_post = bpy.data.curves.new( 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name) , 'CURVE')
-                ob_post = bpy.data.objects.new( 'Post_Connector %s of %s'  % (connectors_post[connector]['id'], neuron_name) , cu_post)
-                bpy.context.scene.objects.link(ob_post)
-                ob_post.location = (0,0,0)
-                ob_post.layers = layers
-                ob_post.show_name = False
-
-                cu_post.dimensions = '3D'
-                cu_post['type'] = 'POST_CONNECTORS'
-                cu_post.fill_mode = 'FULL'
-                cu_post.bevel_depth = co_size
-                cu_post.bevel_resolution = 0
-                cu_post.resolution_u = 0
-
-                newSpline = cu_post.splines.new('POLY')
-                newPoint = newSpline.points[-1]
-                newPoint.co = (co_loc[0], co_loc[1], co_loc[2] , 0)
-                newSpline.points.add()
-                newPoint = newSpline.points[-1]
-                newPoint.co = ( co_parent_coords[0], co_parent_coords[1], co_parent_coords[2] , 0)
-
-                if unify_materials is False:
-                    Create_Mesh.assign_material ( ob_post , 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])
-                else:
-                    Create_Mesh.assign_material ( ob_post , None , connector_color[0] , connector_color[1] , connector_color[2])
-
-        for i, connector in enumerate( connectors_pre ):
-            if round(i/len(connectors_pre)*100,2) % 10 == 0:
-                print ( 'Connectors_pre:', round(i/len(connectors_pre)*100), '%' )
+        if create_as == 'Spheres':
             if basic_radius != -1:
-                co_size = basic_radius
+                base_verts, base_faces = CalcSphere(basic_radius, 7, 7)
             else:
-                co_size = 0.01
-            co_loc = connectors_pre[connector]['coords']
-            co_parent = connectors_pre[connector]['parent_node']
+                base_verts, base_faces = CalcSphere(0.01, 7, 7)
+            n_verts = base_verts.shape[0]
 
-            if create_as == 'Spheres':
-                connector_pre_ob = bpy.ops.mesh.primitive_ico_sphere_add( subdivisions=1, view_align=False, enter_editmode=False, \
-                                                                            location=co_loc, size = co_size, \
-                                                                            layers=layers)
+            for connectors, cn_name in zip( [connectors_post, connectors_pre], ['Post', 'Pre'] ):
+                if not connectors:
+                    continue
 
-                bpy.context.active_object.name = 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name)
+                sp_verts = []
+                sp_faces = []
+                for i,cn in enumerate(connectors):
+                    this_loc = np.array( connectors[cn]['coords'] )
+                    this_verts = base_verts.copy()
+                    if weight_outputs and cn_name =='Pre':
+                        this_verts *= connectors_weight[ connectors[cn]['id'] ]
+                    # Offset spatially
+                    this_verts += this_loc
+                    # Offset face indices
+                    this_faces = [ [ ix + i * n_verts for ix in f ] for f in base_faces ]
+
+                    sp_verts.append(this_verts)
+                    sp_faces += this_faces
+
+                sp_verts = np.concatenate( sp_verts, axis=0 )
+
+                mesh = bpy.data.meshes.new('{0}_Connectors_mesh of {1}'.format(cn_name,neuron_name) )
+                mesh.from_pydata(sp_verts, [], sp_faces)
+                obj = bpy.data.objects.new('{0}_Connectors of {1}'.format(cn_name,neuron_name), mesh)
+                bpy.context.scene.objects.link(obj)
                 bpy.ops.object.shade_smooth()
+                obj.layers = layers
 
                 if unify_materials is False:
-                    Create_Mesh.assign_material (bpy.context.active_object, 'PostSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])
+                    Create_Mesh.assign_material (obj, '{0}Synapses_Mat of {1}'.format(cn_name,neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
                 else:
-                    Create_Mesh.assign_material (bpy.context.active_object, None , connector_color[0] , connector_color[1] , connector_color[2])
+                    Create_Mesh.assign_material (obj, None , connector_color[0] , connector_color[1] , connector_color[2])
+        elif create_as == 'Curves':
+            # Collect node positions
+            node_list = { n[0]:n[3:6] for n in node_data[0] }
 
-            elif create_as == 'Curves':
-                co_parent_coords = (
-                                    node_list[ co_parent ][0] / conversion_factor,
-                                    node_list[ co_parent ][2] / conversion_factor,
-                                    node_list[ co_parent ][1] / -conversion_factor
-                                )
+            for connectors, cn_name in zip( [connectors_post, connectors_pre], ['Post', 'Pre'] ):
+                if not connectors:
+                    continue
 
-                cu_pre = bpy.data.curves.new( 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name) , 'CURVE')
-                ob_pre = bpy.data.objects.new( 'Pre_Connector %s of %s'  % (connectors_pre[connector]['id'], neuron_name) , cu_pre)
-                bpy.context.scene.objects.link(ob_pre)
-                ob_pre.location = (0,0,0)
-                ob_pre.layers = layers
-                ob_pre.show_name = False
+                bdepth = basic_radius
+                if bdepth == -1:
+                    bdepth = 0.01
 
-                cu_pre.dimensions = '3D'
-                cu_pre['type'] = 'POST_CONNECTORS'
-                cu_pre.fill_mode = 'FULL'
-                cu_pre.bevel_depth = co_size
-                cu_pre.bevel_resolution = 0
-                cu_pre.resolution_u = 0
+                cu = bpy.data.curves.new( '{0}_Connectors_curve of {1}'.format(cn_name, neuron_name) , 'CURVE')
+                ob = bpy.data.objects.new( '{0}_Connectors of {1}'.format(cn_name, neuron_name) , cu)
+                bpy.context.scene.objects.link(ob)
+                ob.location = (0,0,0)
+                ob.layers = layers
+                ob.show_name = False
 
-                newSpline = cu_pre.splines.new('POLY')
-                newPoint = newSpline.points[-1]
-                newPoint.co = (co_loc[0], co_loc[1], co_loc[2] , 0)
-                newSpline.points.add()
-                newPoint = newSpline.points[-1]
-                newPoint.co = ( co_parent_coords[0], co_parent_coords[1], co_parent_coords[2] , 0)
+                cu.dimensions = '3D'
+                cu['type'] = 'POST_CONNECTORS'
+                cu.fill_mode = 'FULL'
+                cu.bevel_depth = bdepth
+                cu.bevel_resolution = 0
+                cu.resolution_u = 0
+
+                for i,cn in enumerate( connectors ):
+                    co_loc = connectors[cn]['coords']
+                    co_parent = connectors[cn]['parent_node']
+
+                    co_parent_coords = (
+                                        node_list[ co_parent ][0] / conversion_factor,
+                                        node_list[ co_parent ][2] / conversion_factor,
+                                        node_list[ co_parent ][1] / -conversion_factor
+                                    )
+
+                    newSpline = cu.splines.new('POLY')
+                    newPoint = newSpline.points[-1]
+                    newPoint.co = (co_loc[0], co_loc[1], co_loc[2] , 0)
+                    newSpline.points.add()
+                    newPoint = newSpline.points[-1]
+                    newPoint.co = ( co_parent_coords[0], co_parent_coords[1], co_parent_coords[2] , 0)
+
+                    if basic_radius != -1 and weight_outputs is True and cn_name == 'Pre':
+                        newSpline.points[0].radius *= ( connectors_weight[connectors[cn]['id']] / 10 )
+                        newSpline.points[1].radius *= ( connectors_weight[connectors[cn]['id']] / 10 )
 
                 if unify_materials is False:
-                    Create_Mesh.assign_material ( ob_pre , 'PreSynapses_Mat of' + neuron_name, connector_color[0] , connector_color[1] , connector_color[2])
+                    Create_Mesh.assign_material ( ob , '{0}Synapses_Mat of {1}'.format(cn_name, neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
                 else:
-                    Create_Mesh.assign_material ( ob_pre , None , connector_color[0] , connector_color[1] , connector_color[2])
+                    Create_Mesh.assign_material ( ob , None , connector_color[0] , connector_color[1] , connector_color[2])
+        else:
+            raise ValueError('Can not create connectors as "{0}"'.format(create_as))
 
         print('Done in ' + str(time.clock()-start_creation)+'s')
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
@@ -7035,7 +7059,6 @@ class Create_Mesh (Operator):
         time_elapsed = time.clock() - start_creation
         print('Done in ' + str(time_elapsed) + 's')
         bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
-
 
     def create_hull(XYZcoords, edges):
         ### Input is vert and edge list - Outputs neuron hull (8 edged circle)
