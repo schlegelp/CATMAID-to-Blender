@@ -2159,7 +2159,7 @@ class RetrieveConnectors(Operator):
         for i,neuron in enumerate(filtered_ob_list):
             print('Creating Connectors for Neuron %i [of %i]' % ( i, len(filtered_ob_list) ) )
             skid = re.search('#(.*?) -',neuron.name).group(1)
-            self.get_connectors(skid,skdata[skid], cndata, neuron_names ,neuron.active_material.diffuse_color[0:3])
+            self.get_connectors(skid, skdata[skid], cndata, neuron_names, neuron.active_material.diffuse_color[0:3])
             bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
         if errors is None:
@@ -2173,23 +2173,28 @@ class RetrieveConnectors(Operator):
         return {'FINISHED'}
 
     def get_all_connectors(self, skdata):
-        connector_id_list = []
-        connector_postdata = {}
+        connector_id_list = set()
 
         for skid in skdata:
             for c in skdata[skid][1]:
                 if self.get_outputs is True and c[2] == 0:
-                    connector_id_list.append(c[1])
+                    connector_id_list.add(c[1])
                 if self.get_inputs is True and c[2] == 1:
-                    connector_id_list.append(c[1])
+                    connector_id_list.add(c[1])
+        connector_id_list = list(connector_id_list)
 
-        for i, c in enumerate( list( set( connector_id_list ) ) ):
-            connector_tag = 'connector_ids[%i]' % i
-            connector_postdata[connector_tag] = c
+        # Retrieve connectors in chunks
+        chunk_size = 5000
+        temp_data = []
+        for k, ch in enumerate( range(0,len(connector_id_list), chunk_size)):
+            connector_postdata = {}
+            print('Retrieving connectors chunk {0} of {1}'.format( k+1, math.floor( len(connector_id_list)/chunk_size ) ))
+            for i, c in enumerate( connector_id_list[ch:ch+chunk_size] ):
+                connector_tag = 'connector_ids[%i]' % i
+                connector_postdata[connector_tag] = c
 
-        remote_connector_url = remote_instance.get_connector_details_url( project_id )
-
-        temp_data = remote_instance.fetch( remote_connector_url , connector_postdata )
+            remote_connector_url = remote_instance.get_connector_details_url( project_id )
+            temp_data += remote_instance.fetch( remote_connector_url , connector_postdata )
 
         skids_to_check = []
         cn_data = {}
