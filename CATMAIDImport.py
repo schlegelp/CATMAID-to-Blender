@@ -2229,7 +2229,7 @@ class RetrieveConnectors(Operator):
 
         ### Get coordinates, divide into pre-/postsynapses and bring them into Blender space: switch y and z, divide by 10.000/10.000/-10.000
         for connection in node_data[1]:
-            if connection[2] == 1 and self.get_inputs is True:
+            if connection[2] == 0 and self.get_inputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
                 connector_pre_coords[connection[1]]['parent_node'] = connection[0]
@@ -2242,7 +2242,7 @@ class RetrieveConnectors(Operator):
 
                 connector_data_pre.append ( [connection[1] ,  cndata[ connection[ 1 ] ] ] )
 
-            if connection[2] == 0 and self.get_outputs is True:
+            if connection[2] == 1 and self.get_outputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
                 connector_post_coords[connection[1]]['parent_node'] = connection[0]
@@ -2266,7 +2266,7 @@ class RetrieveConnectors(Operator):
             if self.restr_targets:
                 #Filter Downstream Targets
                 connectors_to_delete = {}
-                for connector in connector_data_post:
+                for connector in connector_data_pre:
                     connectors_to_delete[connector[0]] = True
                     for target_skid in connector[1]['postsynaptic_to']:
                         if str(target_skid) in self.target_skids:
@@ -2282,7 +2282,7 @@ class RetrieveConnectors(Operator):
             if self.restr_sources:
                 #Filter Upstream Targets
                 connectors_to_delete = {}
-                for connector in connector_data_pre:
+                for connector in connector_data_post:
                     connectors_to_delete[connector[0]] = True
                     if str(connector[1]['presynaptic_to']) in self.source_skids:
                         connectors_to_delete[connector[0]] = False
@@ -2294,10 +2294,10 @@ class RetrieveConnectors(Operator):
 
                 print('Presynaptic neurons remaining after filtering: ',list(set(neurons_included)))
 
-            if len(connector_post_coords) > 0:
+            if len(connector_data_pre) > 0:
                 ### Extract number of postsynaptic targets for connectors
-                for connector in connector_data_post:
-                    number_of_targets[connector[0]] = len(connector[1]['postsynaptic_to'])
+                for connector in connector_data_pre:
+                    number_of_targets[connector[0]] = max( 1, len(connector[1]['postsynaptic_to']) )
 
             #print('Number of postsynapses/connector:', number_of_targets)
 
