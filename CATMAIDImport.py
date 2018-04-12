@@ -2108,6 +2108,10 @@ class RetrieveConnectors(Operator):
                                     description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those that target this set of neurons')
     restr_targets = StringProperty( name="Restrict to targets",
                                     description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those coming from this set of neurons')
+    separate_connectors = BoolProperty(
+                                    name="Separate connectors (slow!)",
+                                    description = "If True, each connector will be generate as separate object. Beware: this is very slow.",
+                                    default = False )
 
     @classmethod
     def poll(cls, context):
@@ -2309,7 +2313,11 @@ class RetrieveConnectors(Operator):
             elif self.color_prop == 'Mesh-color':
                 connector_color = mesh_color
 
-            Create_Mesh.make_connector_objects (active_skeleton, connector_post_coords, connector_pre_coords, node_data, number_of_targets, connector_color, self.create_as ,self.basic_radius, self.layer, self.weight_outputs, self.conversion_factor)
+            Create_Mesh.make_connector_objects (active_skeleton, connector_post_coords, connector_pre_coords,
+                                                node_data, number_of_targets, connector_color,
+                                                self.create_as ,self.basic_radius, self.layer,
+                                                self.weight_outputs, self.conversion_factor,
+                                                self.separate_connectors)
 
         else:
             print('No connector data for presnypases retrieved')
@@ -6790,7 +6798,11 @@ class Create_Mesh (Operator):
     bl_idname = "create.new_neuron"
     bl_label = "Create New Neuron"
 
-    def make_connector_objects ( neuron_name, connectors_post, connectors_pre, node_data, connectors_weight, connector_color, create_as, basic_radius, layer, weight_outputs, conversion_factor, unify_materials = True):
+    def make_connector_objects (neuron_name, connectors_post, connectors_pre,
+                                node_data, connectors_weight, connector_color,
+                                create_as, basic_radius, layer, weight_outputs,
+                                conversion_factor, separate_connectors,
+                                unify_materials = True):
         ### For Downstream targets: sphere radius refers to # of targets
         print('Creating connectors: %i/%i (pre/post)' % ( len(connectors_pre),len(connectors_post) ))
         start_creation = time.clock()
@@ -6822,19 +6834,34 @@ class Create_Mesh (Operator):
                     sp_verts.append(this_verts)
                     sp_faces += this_faces
 
-                sp_verts = np.concatenate( sp_verts, axis=0 )
+                ob_created = []
+                if not separate_connectors:
+                    verts = np.concatenate( sp_verts, axis=0 )
 
-                mesh = bpy.data.meshes.new('{0}_Connectors_mesh of {1}'.format(cn_name,neuron_name) )
-                mesh.from_pydata(sp_verts, [], sp_faces)
-                obj = bpy.data.objects.new('{0}_Connectors of {1}'.format(cn_name,neuron_name), mesh)
-                bpy.context.scene.objects.link(obj)
-                bpy.ops.object.shade_smooth()
-                obj.layers = layers
+                    mesh = bpy.data.meshes.new('{0}_Connectors_mesh of {1}'.format(cn_name,neuron_name) )
+                    mesh.from_pydata(verts, [], sp_faces)
+                    obj = bpy.data.objects.new('{0}_Connectors of {1}'.format(cn_name,neuron_name), mesh)
+                    bpy.context.scene.objects.link(obj)
+                    bpy.ops.object.shade_smooth()
+                    ob_created.append( obj )
 
-                if unify_materials is False:
-                    Create_Mesh.assign_material (obj, '{0}Synapses_Mat of {1}'.format(cn_name,neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
                 else:
-                    Create_Mesh.assign_material (obj, None , connector_color[0] , connector_color[1] , connector_color[2])
+                    for cn, verts in zip( connectors, sp_verts):
+                        cn_id = connectors[cn]['id']
+                        mesh = bpy.data.meshes.new('{0}_Connectors_mesh of {1} ({2})'.format(cn_name,neuron_name, cn_id) )
+                        mesh.from_pydata(verts, [], base_faces)
+                        obj = bpy.data.objects.new('{0}_Connectors of {1} ({2})'.format(cn_name,neuron_name, cn_id), mesh)
+                        bpy.context.scene.objects.link(obj)
+                        bpy.ops.object.shade_smooth()
+                        ob_created.append( obj )
+
+                for ob in ob_created:
+                    obj.layers = layers
+                    if unify_materials is False:
+                        Create_Mesh.assign_material (obj, '{0}Synapses_Mat of {1}'.format(cn_name,neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
+                    else:
+                        Create_Mesh.assign_material (obj, None , connector_color[0] , connector_color[1] , connector_color[2])
+
         elif create_as == 'Curves':
             # Collect node positions
             node_list = { n[0]:n[3:6] for n in node_data[0] }
@@ -6847,21 +6874,38 @@ class Create_Mesh (Operator):
                 if bdepth == -1:
                     bdepth = 0.01
 
-                cu = bpy.data.curves.new( '{0}_Connectors_curve of {1}'.format(cn_name, neuron_name) , 'CURVE')
-                ob = bpy.data.objects.new( '{0}_Connectors of {1}'.format(cn_name, neuron_name) , cu)
-                bpy.context.scene.objects.link(ob)
-                ob.location = (0,0,0)
-                ob.layers = layers
-                ob.show_name = False
+                ob_created = []
+                if not separate_connectors:
+                    cu = bpy.data.curves.new( '{0}_Connectors_curve of {1}'.format(cn_name, neuron_name) , 'CURVE')
+                    ob = bpy.data.objects.new( '{0}_Connectors of {1}'.format(cn_name, neuron_name) , cu)
+                    bpy.context.scene.objects.link(ob)
+                    ob.show_name = False
 
-                cu.dimensions = '3D'
-                cu['type'] = 'POST_CONNECTORS'
-                cu.fill_mode = 'FULL'
-                cu.bevel_depth = bdepth
-                cu.bevel_resolution = 0
-                cu.resolution_u = 0
+                    cu.dimensions = '3D'
+                    cu['type'] = 'POST_CONNECTORS'
+                    cu.fill_mode = 'FULL'
+                    cu.bevel_depth = bdepth
+                    cu.bevel_resolution = 0
+                    cu.resolution_u = 0
 
-                for i,cn in enumerate( connectors ):
+                    ob_created.append(ob)
+
+                for i, cn in enumerate( connectors ):
+                    if separate_connectors:
+                        cn_id = connectors[cn]['id']
+                        cu = bpy.data.curves.new( '{0}_Connectors_curve of {1} ({2})'.format(cn_name, neuron_name, cn_id ), 'CURVE')
+                        ob = bpy.data.objects.new( '{0}_Connectors of {1} ({2})'.format(cn_name, neuron_name, cn_id) , cu)
+                        bpy.context.scene.objects.link(ob)
+
+                        cu.dimensions = '3D'
+                        cu['type'] = 'POST_CONNECTORS'
+                        cu.fill_mode = 'FULL'
+                        cu.bevel_depth = bdepth
+                        cu.bevel_resolution = 0
+                        cu.resolution_u = 0
+
+                        ob_created.append(ob)
+
                     co_loc = connectors[cn]['coords']
                     co_parent = connectors[cn]['parent_node']
 
@@ -6882,10 +6926,14 @@ class Create_Mesh (Operator):
                         newSpline.points[0].radius *= ( connectors_weight[connectors[cn]['id']] / 10 )
                         newSpline.points[1].radius *= ( connectors_weight[connectors[cn]['id']] / 10 )
 
-                if unify_materials is False:
-                    Create_Mesh.assign_material ( ob , '{0}Synapses_Mat of {1}'.format(cn_name, neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
-                else:
-                    Create_Mesh.assign_material ( ob , None , connector_color[0] , connector_color[1] , connector_color[2])
+                for ob in ob_created:
+                    ob.location = (0,0,0)
+                    ob.layers = layers
+                    ob.show_name = False
+                    if unify_materials is False:
+                        Create_Mesh.assign_material ( ob , '{0}Synapses_Mat of {1}'.format(cn_name, neuron_name), connector_color[0] , connector_color[1] , connector_color[2])
+                    else:
+                        Create_Mesh.assign_material ( ob , None , connector_color[0] , connector_color[1] , connector_color[2])
         else:
             raise ValueError('Can not create connectors as "{0}"'.format(create_as))
 
