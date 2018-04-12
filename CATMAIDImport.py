@@ -2188,7 +2188,7 @@ class RetrieveConnectors(Operator):
         temp_data = []
         for k, ch in enumerate( range(0,len(connector_id_list), chunk_size)):
             connector_postdata = {}
-            print('Retrieving connectors chunk {0} of {1}'.format( k+1, math.floor( len(connector_id_list)/chunk_size ) ))
+            print('Retrieving connectors chunk {0} of {1}'.format( k+1, math.ceil( len(connector_id_list)/chunk_size ) ))
             for i, c in enumerate( connector_id_list[ch:ch+chunk_size] ):
                 connector_tag = 'connector_ids[%i]' % i
                 connector_postdata[connector_tag] = c
@@ -2229,7 +2229,7 @@ class RetrieveConnectors(Operator):
 
         ### Get coordinates, divide into pre-/postsynapses and bring them into Blender space: switch y and z, divide by 10.000/10.000/-10.000
         for connection in node_data[1]:
-            if connection[2] == 0 and self.get_inputs is True:
+            if connection[2] == 0 and self.get_outputs is True:
                 connector_pre_coords[connection[1]] = {}
                 connector_pre_coords[connection[1]]['id'] = connection[1]
                 connector_pre_coords[connection[1]]['parent_node'] = connection[0]
@@ -2242,7 +2242,7 @@ class RetrieveConnectors(Operator):
 
                 connector_data_pre.append ( [connection[1] ,  cndata[ connection[ 1 ] ] ] )
 
-            if connection[2] == 1 and self.get_outputs is True:
+            if connection[2] == 1 and self.get_inputs is True:
                 connector_post_coords[connection[1]] = {}
                 connector_post_coords[connection[1]]['id'] = connection[1]
                 connector_post_coords[connection[1]]['parent_node'] = connection[0]
@@ -2309,9 +2309,7 @@ class RetrieveConnectors(Operator):
             elif self.color_prop == 'Mesh-color':
                 connector_color = mesh_color
 
-
             Create_Mesh.make_connector_objects (active_skeleton, connector_post_coords, connector_pre_coords, node_data, number_of_targets, connector_color, self.create_as ,self.basic_radius, self.layer, self.weight_outputs, self.conversion_factor)
-
 
         else:
             print('No connector data for presnypases retrieved')
