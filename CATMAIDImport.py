@@ -70,8 +70,8 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (6, 0, 0),
- "for_catmaid_version": '2018.04.15-231-g300b90d',
+ "version": (6, 1, 0),
+ "for_catmaid_version": '2018.07.19-1ad1035b96',
  "blender": (2, 7, 9),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
