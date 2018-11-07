@@ -11174,7 +11174,8 @@ def get_volume_list(project_id):
 
     global available_volumes
 
-    available_volumes = [ ('None' , 'None', 'Do not import volume from this list') ] + [ ( str( e['id'] ) , e['name'], str( e['comment'] ) ) for e in response ]
+    available_volumes = [('None', 'None', 'Do not import volume from this list')]
+    available_volumes += [(str(e[0]), e[1], str(e[2])) for e in response['data']]
 
     return sorted( available_volumes, key = lambda x : x[1] )
 
