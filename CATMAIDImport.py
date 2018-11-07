@@ -1228,7 +1228,6 @@ class RetrieveNeuron(Operator):
                                  description = "Search by skeleton IDs. Multiple annotations comma-sparated."
                                 )
 
-
     intersect = BoolProperty(   name="Intersect",
                                     default = False,
                                     description = "If true, all identifiers (e.g. two annotations or name + annotation) have to be true for a neuron to be loaded")
@@ -1294,6 +1293,13 @@ class RetrieveNeuron(Operator):
     neuron_mat_for_connectors =  BoolProperty( name="Connector color as neuron",
                                         default = False,
                                         description = "If true, connectors will have the same color as the neuron.")
+    color_by_user =  BoolProperty( name="Color by user",
+                                        default = False,
+                                        description = "If True, color neuron by relevant users.")
+
+    skip_existing =  BoolProperty( name="Skip existing",
+                                        default = True,
+                                        description = "If True, will not add neurons that are already in the scene.")
 
     # ATTENTION:
     # using check() in an operator that uses threads, will lead to segmentation faults!
@@ -1328,9 +1334,7 @@ class RetrieveNeuron(Operator):
         box = layout.box()
         row = box.row(align=False)
         row.prop(self, "import_synapses")
-        row = box.row(align=False)
         row.prop(self, "import_gap_junctions")
-        row = box.row(align=False)
         row.prop(self, "import_abutting")
 
         if self.import_synapses or self.import_gap_junctions or self.import_abutting:
@@ -1349,6 +1353,8 @@ class RetrieveNeuron(Operator):
         row = box.row(align=False)
         row.prop(self, "interpolate_virtual")
         row.prop(self, "use_radius")
+        row.prop(self, "skip_existing")
+        row.prop(self, "color_by_user")
 
     def execute(self, context):
         global remote_instance
@@ -1451,6 +1457,7 @@ class RetrieveNeuron(Operator):
         skdata, errors = retrieveSkeletonData( list(skeletons_to_retrieve),
                                                time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
                                                get_abutting = bool(self.import_abutting),
+                                               skip_existing=self.skip_existing,
                                                max_threads = context.user_preferences.addons['CATMAIDImport'].preferences.rqs)
 
         if self.minimum_cont > 1 and self.by_user:
@@ -1474,7 +1481,8 @@ class RetrieveNeuron(Operator):
                                             interpolate_virtual = self.interpolate_virtual,
                                             conversion_factor = self.conversion_factor,
                                             use_radius = self.use_radius,
-                                            neuron_mat_for_connectors = self.neuron_mat_for_connectors)
+                                            neuron_mat_for_connectors = self.neuron_mat_for_connectors,
+                                            color_by_user = self.color_by_user)
 
         print('Finished Import in', time.clock()-start, 's')
 
@@ -4692,7 +4700,8 @@ class CATMAIDtoBlender:
                         color_by_strahler = False,
                         white_background = False,
                         radii_by_strahler = False,
-                        neuron_mat_for_connectors = False):
+                        neuron_mat_for_connectors = False,
+                        color_by_user=False):
 
         index = 1
         cellname = str(skid) + ' - ' + neuron_name
@@ -4708,7 +4717,11 @@ class CATMAIDtoBlender:
         child_count = {}
         nodes_list = {}
         radii = {}
-        list_of_childs = {}
+
+        list_of_childs = {n[0]:[] for n in node_data[0]}
+        list_of_childs[None] = []
+
+        node_users = {n[0]:'NA' for n in node_data[0]}
 
         #Truncate object name is necessary
         if len(cellname) >= 60:
@@ -4721,47 +4734,34 @@ class CATMAIDtoBlender:
             print('WARNING: Neuron %s already exists!' % cellname)
             return{'FINISHED'}
 
-        #print('Reading node data..')
-        #print(node_data[0])
+        for entry in node_data[0]:
+            ### entry = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
+            ### Find and convert CATMAID coordinates to Blender
+            X = float(entry[3])/conversion_factor
+            Y = float(entry[4])/-conversion_factor
+            Z = float(entry[5])/conversion_factor
+            ### Z-axis in Blender is Y-axis in CATMAID!
+            XYZcoords.append((X,Z,Y))
 
-        try:
-            for entry in node_data[0]:
-                ### entry = [treenode_id, parent_treenode_id, creator , X, Y, Z, radius, confidence]
-                ### Find and convert CATMAID coordinates to Blender
-                X = float(entry[3])/conversion_factor
-                Y = float(entry[4])/-conversion_factor
-                Z = float(entry[5])/conversion_factor
-                ### Z-axis in Blender is Y-axis in CATMAID!
-                XYZcoords.append((X,Z,Y))
+            if use_radius:
+                radii[entry[0]] = entry[6]
 
-                if use_radius:
-                    radii[ entry[0] ] = entry[6]
+            if color_by_user:
+                node_users[entry[0]] = entry[2]
 
-                if entry[0] not in nodes_list:
-                    nodes_list[entry[0]] = (X,Z,Y)
-                    ### Polylines need 4 coords (don't know what the fourth does)
+            nodes_list[entry[0]] = (X, Z, Y)
+            ### Polylines need 4 coords (don't know what the fourth does)
 
-                if entry[1] not in list_of_childs:
-                    list_of_childs[ entry[1] ] = []
+            list_of_childs[entry[1]].append(entry[0])
 
-                if entry[0] not in list_of_childs:
-                    list_of_childs[ entry[0] ] = []
+            ### Search for soma
+            if entry[6] > 1000:
+                soma_node = entry[0]
 
-                list_of_childs[ entry[1] ].append( entry[0] )
-
-                ### Search for soma
-                if entry[6] > 1000:
-                    soma_node = entry[0]
-
-                    if use_radius is False:
-                        soma = (X,Z,Y,round(entry[6]/conversion_factor,2),entry[0])
-                    #print('Soma found')
-
-                    #make sure to set radius of soma node to -1 -> will look funky others (sphere will be added instead)
-        except:
-            print('Error reading data of skid', skid, neuron_name)
-            print('Node data:', node_data)
-            return {'FINISHED'}
+                if use_radius is False:
+                    soma = (X,Z,Y,round(entry[6]/conversion_factor,2),entry[0])
+                # make sure to set radius of soma node to -1
+                # -> will look funky otherwise. We will use a sphere instaed
 
         #if no soma is found, then search for nerve ending (for sensory neurons)
         #print(node_data[2])
@@ -4770,7 +4770,7 @@ class CATMAIDtoBlender:
 
         if interpolate_virtual is True:
             print('Interpolating Virtual Nodes')
-            list_of_childs,nodes_list = CATMAIDtoBlender.insert_virtual_nodes(list_of_childs,nodes_list)
+            list_of_childs, nodes_list = CATMAIDtoBlender.insert_virtual_nodes(list_of_childs,nodes_list)
 
         ### Root node's entry is called 'None' because it has no parent
         ### This will be starting point for creation of the curves
@@ -4823,7 +4823,13 @@ class CATMAIDtoBlender:
         else:
             strahler_indices = None
 
-        ob = Create_Mesh.make_curve_neuron(cellname, root_node, nodes_list, new_child_list, soma, skid, neuron_name, resampling, nodes_to_keep, radii, strahler_indices)
+        ob = Create_Mesh.make_curve_neuron(cellname, root_node, nodes_list,
+                                           new_child_list, soma, skid,
+                                           neuron_name, resampling,
+                                           nodes_to_keep, radii,
+                                           strahler_indices,
+                                           color_by_user=color_by_user,
+                                           node_users=node_users)
         ob['skeleton_id'] = skid
         ob['type'] = 'NEURON'
         ob['name'] = neuron_name
@@ -6836,7 +6842,12 @@ class Create_Mesh (Operator):
         print('Done in ' + str(time.clock()-start_creation)+'s')
         #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP',iterations = 1)
 
-    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list, soma, skid = '', name = '', resampling = 1, nodes_to_keep = [], radii = {}, strahler_indices = None):
+    def make_curve_neuron (neuron_name, root_node, nodes_dic, child_list,
+                           soma, skid = '', name = '', resampling = 1,
+                           nodes_to_keep = [], radii = {},
+                           strahler_indices = None,
+                           color_by_user=False,
+                           node_users = None):
         ### Creates Neuron from Curve data that was imported from CATMAID
         #start_creation = time.clock()
         now = datetime.datetime.now()
@@ -6866,13 +6877,19 @@ class Create_Mesh (Operator):
         node_ids = []
 
         for child in child_list[root_node]:
-            spline_indices, node_ids = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
+            spline_indices, node_ids = Create_Mesh.create_spline(root_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids,
+                                                                 break_by_user=color_by_user, node_users=node_users)
 
         ob['node_ids'] = node_ids
 
         #print('Creating mesh done in ' + str(time.clock()-start_creation)+'s')
-        if not strahler_indices:
-            Create_Mesh.assign_material (ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
+        if color_by_user:
+            Create_Mesh.assign_user_colors(ob, node_users)
+
+            # Set neuron material to root node creator
+            neuron_material_name = str(node_users[root_node])
+        elif not strahler_indices:
+            Create_Mesh.assign_material(ob, neuron_material_name, random.randrange(0,100)/100 , random.randrange(0,100)/100 , random.randrange(0,100)/100)
         else:
             Create_Mesh.assign_strahler_materials ( ob, skid, spline_indices, strahler_indices )
             try:
@@ -6881,9 +6898,9 @@ class Create_Mesh (Operator):
                 print('Unable to set viewport shade to material. Try manually!')
 
         if soma != (0,0,0,0):
-            soma_ob = bpy.ops.mesh.primitive_uv_sphere_add(segments=16, ring_count=8, size=soma[3], view_align=False, \
+            soma_ob = bpy.ops.mesh.primitive_uv_sphere_add( segments=16, ring_count=8, size=soma[3], view_align=False, \
                                                             enter_editmode=False, location=(soma[0],soma[1],soma[2]), rotation=(0, 0, 0), \
-                                                            layers=[ l for l in bpy.context.scene.layers ]
+                                                            layers=[l for l in bpy.context.scene.layers]
                                                             )
             bpy.ops.object.shade_smooth()
             bpy.context.active_object.name = 'Soma of ' + neuron_name
@@ -6903,10 +6920,12 @@ class Create_Mesh (Operator):
 
         return ob
 
-    def create_spline (start_node, first_child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids):
+    def create_spline (start_node, first_child, nodes_dic, child_list, cu,
+                       nodes_to_keep, radii, spline_indices, node_ids,
+                       break_by_user=False, node_users=None):
         #if start_node in nodes_to_keep or first_child in nodes_to_keep:
         newSpline = cu.splines.new( 'POLY' )
-        node_ids.append( [ ] )
+        node_ids.append([ ])
 
         ### Create start node
         newPoint = newSpline.points[-1]
@@ -6917,23 +6936,28 @@ class Create_Mesh (Operator):
             newPoint.radius = max ( 1, radii[ start_node ] )
 
         active_node = first_child
+
+        if break_by_user:
+            first_user = node_users[active_node]
+
         number_of_childs = len(child_list[active_node])
         ### nodes_created is a failsafe for while loop
-        nodes_created = 0
-        while nodes_created < 100000:
+        while True:
             if active_node in nodes_to_keep:
                 newSpline.points.add()
                 newPoint = newSpline.points[-1]
                 newPoint.co = (nodes_dic[active_node][0], nodes_dic[active_node][1], nodes_dic[active_node][2], 0)
-                node_ids[-1].append( active_node )
+                node_ids[-1].append(active_node)
 
                 if radii:
                     newPoint.radius = max ( 1, radii[ active_node ] )
 
-            nodes_created += 1
-
             ### Stop after creation of leaf or branch node
             if number_of_childs == 0 or number_of_childs > 1:
+                spline_indices.append( ( start_node, active_node ))
+                break
+
+            if break_by_user and node_users[child_list[active_node][0]] != first_user:
                 spline_indices.append( ( start_node, active_node ))
                 break
 
@@ -6941,14 +6965,11 @@ class Create_Mesh (Operator):
             #print('Number of child of node %s: %i' % (active_node, len(child_list[active_node])) )
             number_of_childs = len(child_list[active_node])
 
-        if nodes_created >= 100000:
-            print('ERROR: Creation aborted - possible infinite loop detected!')
-            self.report({'ERROR'},'Error(s) occurred: see console')
-
-            ### If active node is branch point, start new splines for each child
-        if number_of_childs > 1:
-            for child in child_list[active_node]:
-                spline_indices, node_ids = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu, nodes_to_keep, radii, spline_indices, node_ids)
+        ### If active node is not a termina (0 childs), start new splines for each child
+        for child in child_list[active_node]:
+            spline_indices, node_ids = Create_Mesh.create_spline(active_node, child, nodes_dic, child_list, cu,
+                                                                 nodes_to_keep, radii, spline_indices, node_ids,
+                                                                 break_by_user, node_users)
 
         return spline_indices, node_ids
 
@@ -7108,9 +7129,9 @@ class Create_Mesh (Operator):
                 newPoint.co = (connectors_pre[connector][1][0], connectors_pre[connector][1][1], connectors_pre[connector][1][2], 0)
 
             if not material:
-                Create_Mesh.assign_material (ob_pre, 'PreSynapses_Mat', 1 , 0 , 0)
+                Create_Mesh.assign_material(ob_pre, 'PreSynapses_Mat', 1 , 0 , 0)
             else:
-                Create_Mesh.assign_material (ob_pre, material, 0 , 0.8 , 0.8)
+                Create_Mesh.assign_material(ob_pre, material, 0 , 0.8 , 0.8)
 
         if connectors_post:
             cu_post = bpy.data.curves.new('Inputs of ' + neuron_name,'CURVE')
@@ -7236,10 +7257,38 @@ class Create_Mesh (Operator):
                 new_mat.diffuse_color[1] = diff_2
                 new_mat.diffuse_color[2] = diff_3
 
-
         bpy.context.scene.objects.active = ob
         ob.select = True
         bpy.context.active_object.active_material = new_mat
+
+    def assign_user_colors(ob, node_users):
+        # Generate a colormap for all users
+        unique_users = [str(u) for u in set(node_users.values())]
+
+        user_cmap = {u: colorsys.hsv_to_rgb(1/len(unique_users)*i, 1, 1) for
+                     i, u in enumerate(unique_users)}
+
+        # Generate materials
+        for u in unique_users:
+            if u not in bpy.data.materials:
+                mat = bpy.data.materials.new(u)
+                mat.diffuse_color[0] = user_cmap[u][0]
+                mat.diffuse_color[1] = user_cmap[u][1]
+                mat.diffuse_color[2] = user_cmap[u][2]
+            else:
+                mat = bpy.data.materials[u]
+
+            # Assign materials to this object
+            if u not in ob.data.materials:
+                ob.data.materials.append(mat)
+
+        all_mats = [m.name for m in ob.data.materials]
+
+        # Assign materials to splines
+        for i, sp in enumerate(ob.data.splines):
+            tn_id = ob['node_ids'][i][0]
+            this_user = node_users[tn_id]
+            sp.material_index = all_mats.index(str(this_user))
 
     def prepare_strahler_mats (skid, max_strahler_index, color_by, white_background = False):
         """ Creates a set of strahler indices for this neuron """
@@ -8521,7 +8570,7 @@ class CalcScoreThreaded(threading.Thread):
 
         #Use SciPy if available (about 2fold faster)
         if 'scipy.spatial.distance' in sys.modules:
-            all_by_all_distances = distance.cdist(nA,nB)
+            all_by_all_distances = distance.cdist(nA, nB)
 
             for i,a in enumerate(nA):
                 #Get final distance
@@ -11558,7 +11607,7 @@ class AnimateHistory(Operator):
                                                     skip_existing = False,
                                                     with_history = True,
                                                     time_out = context.user_preferences.addons['CATMAIDImport'].preferences.time_out,
-                                                    max_threads =  context.user_preferences.addons['CATMAIDImport'].preferences.rqs )
+                                                    max_threads = context.user_preferences.addons['CATMAIDImport'].preferences.rqs )
         else:
             self.skdata = {s: [[],[]] for s in neurons_to_load }
 
@@ -11603,8 +11652,8 @@ class AnimateHistory(Operator):
         #bpy.ops.wm.redraw_timer(type='DRAW_WIN_SWAP', iterations=1)
 
         for i, n in enumerate( self.skdata ):
-            print('Processing history of neuron %s (%i of %i, %i nodes)' % ( str( n ), i+1 , len( self.skdata ), len( self.skdata[n][0] ) ) )
-            self.plot_history( n )
+            print('Processing history of neuron %s (%i of %i, %i nodes)' % (str(n), i+1, len(self.skdata), len(self.skdata[n][0])))
+            self.plot_history(n)
 
         if self.add_timer and not self.individually and not self.spread_even:
             if 'timer' not in bpy.data.objects:
@@ -11672,7 +11721,7 @@ class AnimateHistory(Operator):
                 rev_groups.append( [ n[0] for n in self.rev_timestamps[neuron] if this_date <= n[1] <= ( this_date + this_delta )  ] )
                 this_date += this_delta
 
-            if self.con_objects[ neuron ]:
+            if self.con_objects[neuron]:
                 #Create groups for connectors
                 con_groups = []
                 this_date = this_start
@@ -11681,17 +11730,12 @@ class AnimateHistory(Operator):
                     #con_groups.append( [ n[1] for i, n in enumerate( self.skdata[neuron][1] ) if this_date <= self.con_timestamps[neuron][i] <= ( this_date + this_delta )  ] )
                     this_date += this_delta
         elif self.spread_even:
-            #Sort all IDs (connectors and treenodes) by their timestamps
-            #Keep track of review vs creation by adding an 'r' prefix to review timestamps
-            all_IDs_sorted = [ n[0] for n in all_timestamps if n[2] != 'review' ] + \
-                             [ 'r' + n[0] for n in all_timestamps if n[2] == 'review' ]
-
             #Bin all IDs into groups (one group per frame)
             n_groups = int( ( self.end_frame - self.start_frame ) / self.keyframe_interval )
             IDs_per_group = math.ceil( len(all_timestamps)/n_groups )
 
-            temp_groups = [ all_timestamps[ i * IDs_per_group : ( i + 1 ) * IDs_per_group ] for i in range( n_groups ) ]
-            crea_groups = [ [n[0] for n in g if n[2] == 'node'] for g in temp_groups]
+            temp_groups = [all_timestamps[ i * IDs_per_group : ( i + 1 ) * IDs_per_group ] for i in range(n_groups)]
+            crea_groups = [[n[0] for n in g if n[2] == 'creation'] for g in temp_groups]
             con_groups = [[n[0] for n in g if n[2] == 'connector'] for g in temp_groups]
             rev_groups = [[n[0] for n in g if n[2] == 'review'] for g in temp_groups]
 
