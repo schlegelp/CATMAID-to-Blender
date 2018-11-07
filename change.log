@@ -1,5 +1,8 @@
 ### CATMAID to Blender Import Script - Version History:
 
+### V6.1.0 07/11/2018:
+    - followed a change in CATMAID's volume API
+
 ### V5.84 28/02/2018:
     - fixed a bug in export connectors that caused only the first export of connectors to svg to succeed
 
