@@ -1250,15 +1250,15 @@ class RetrieveNeuron(Operator):
                              min = 1,
                              description = "Neurons with fewer nodes will be ignored.")
 
-    import_synapses = BoolProperty(   name="Import Synapses",
+    import_synapses = BoolProperty(   name="Synapses",
                                         default = True,
                                         description = "Import chemical synapses (pre- and postsynapses), similarly to 3D Viewer in CATMAID")
 
-    import_gap_junctions = BoolProperty(   name="Import Gap Junctions",
+    import_gap_junctions = BoolProperty(   name="Gap Junctions",
                                         default = False,
                                         description = "Import gap junctions, similarly to 3D Viewer in CATMAID")
 
-    import_abutting = BoolProperty(   name="Import Abutting Connectors",
+    import_abutting = BoolProperty(   name="Abutting Connectors",
                                         default = False,
                                         description = "Import abutting connectors.")
 
@@ -11123,11 +11123,13 @@ class ExportVolume(Operator):
             if 'success' in response and response['success'] is True:
                 print("{0} of {1}: Export of mesh '{2}' successful".format(i, len(objects), vol_name))
                 osd.show("Export successful" )
+                self.report({'INFO'},'Success!')
                 osd_timed = ClearOSDAfter(3)
                 osd_timed.start()
             else:
                 print("{0} of {1}: Export of mesh '{2}' failed:".format(i, len(objects), vol_name))
                 osd.show("Something went wrong - see console." )
+                self.report({'ERROR'},'See console!')
                 print(response)
                 osd_timed = ClearOSDAfter(3)
                 osd_timed.start()
