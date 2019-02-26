@@ -21,6 +21,8 @@ import ssl
 
 # Uncomment this if you're having problems with SSL certificate of your CATMAID server
 # NOT recommended!
+safe_ssl = ssl._create_default_https_context
+unsafe_ssl = ssl._create_unverified_context
 #ssl._create_default_https_context = ssl._create_unverified_context
 
 import bpy, blf
@@ -29,13 +31,12 @@ import re
 import random
 import time
 import datetime
-import urllib
 import json
 import math
 import colorsys
 import copy
 import http.cookiejar as cj
-
+import urllib
 import threading
 import concurrent.futures
 import asyncio
@@ -43,6 +44,14 @@ import asyncio
 import mathutils
 import sys
 import numpy as np
+
+# Use requests if possible
+try:
+    import requests
+    print('requests library found')
+except:
+    requests = None
+    print('requests library not found - falling back to urllib')
 
 try:
     from scipy.spatial import distance
@@ -324,6 +333,12 @@ class CatmaidInstance:
         self.authtoken = authtoken
         self.opener = urllib.request.build_opener(urllib.request.HTTPRedirectHandler())
 
+        self._session = None
+        if requests:
+            self._session = requests.Session()
+            self._session.headers['X-Authorization'] = 'Token ' + authtoken
+            self._session.auth = (authname, authpassword)
+
     def djangourl(self, path):
         """ Expects the path to lead with a slash '/'. """
         return self.server + path
@@ -336,21 +351,31 @@ class CatmaidInstance:
             request.add_header("X-Authorization", "Token {}".format(self.authtoken))
 
     def fetch(self, url, post=None):
-        """ Requires the url to connect to and the variables for POST, if any, in a dictionary. """
-        if post:
-            data = urllib.parse.urlencode(post)
-            data = data.encode('utf-8')
-            #If experiencing issue with [SSL: CERTIFICATE_VERIFY_FAILED] -> set unverifiable to True
-            #Warning: This makes the connection insecure!
-            request = urllib.request.Request(url, data = data, unverifiable = False)
+        """ Requires the url to connect to and the variables for POST, if any, in a dictionary."""
+        if self._session:
+            if post:
+                r = self._session.post(url, data=post)
+            else:
+                r = self._session.get(url)
+
+            r.raise_for_status()
+
+            return r.json()
         else:
-            request = urllib.request.Request(url)
+            if post:
+                data = urllib.parse.urlencode(post)
+                data = data.encode('utf-8')
+                #If experiencing issue with [SSL: CERTIFICATE_VERIFY_FAILED] -> set unverifiable to True
+                #Warning: This makes the connection insecure!
+                r = urllib.request.Request(url, data=data, unverifiable=False)
+            else:
+                r = urllib.request.Request(url)
 
-        self.auth(request)
+            self.auth(r)
 
-        response = self.opener.open(request)
+            response = self.opener.open(r)
 
-        return json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
 
     #Use to parse url for retrieving stack infos
     def get_stack_info_url(self, pid, sid):
