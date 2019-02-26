@@ -5342,6 +5342,9 @@ class ConnectToCATMAID(Operator):
                                             description="How to retrieve Token: http://catmaid.github.io/dev/api.html#api-token")
     local_server_url =  StringProperty(     name="Server Url")
     local_project_id =  IntProperty(        name='Project ID', default = 0)
+    allow_unsafe =  BoolProperty(           name='Disable SSL', default = False,
+                                            description="Disables SSL. Might help if you get SSL errors when connecting. Use"
+                                                         "this with extreme caution!")
 
 
     #Old settings from before API token was introduced
@@ -5351,7 +5354,7 @@ class ConnectToCATMAID(Operator):
 
 
     def execute(self, context):
-        global remote_instance, connected, project_id
+        global remote_instance, connected, project_id, safe_ssl, unsafe_ssl
 
         addon_prefs = context.user_preferences.addons['CATMAIDImport'].preferences
 
@@ -5360,6 +5363,11 @@ class ConnectToCATMAID(Operator):
         print('HTTP user: %s' % self.local_http_user)
         #print('CATMAID user: %s' % self.local_catmaid_user)
         print('Token: %s' % self.local_token)
+
+        if self.allow_unsafe:
+            ssl._create_default_https_context = unsafe_ssl
+        else:
+            ssl._create_default_https_context = safe_ssl
 
         #remote_instance = CatmaidInstance( server_url, self.local_catmaid_user, self.local_catmaid_pw, self.local_http_user, self.local_http_pw )
         remote_instance = CatmaidInstance(self.local_server_url, self.local_http_user, self.local_http_pw, self.local_token)
@@ -5400,6 +5408,8 @@ class ConnectToCATMAID(Operator):
         row.prop(self, "local_project_id")
         row = layout.row(align=True)
         row.prop(self, "local_server_url")
+        row = layout.row(align=True)
+        row.prop(self, "allow_unsafe")
         #row = layout.row(align=True)
         #row.prop(self, "save_prefs")
 
