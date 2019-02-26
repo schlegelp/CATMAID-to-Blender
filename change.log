@@ -1,5 +1,9 @@
 ### CATMAID to Blender Import Script - Version History:
 
+### V6.1.1 26/02/2018:
+    - use requests library if possible to prevent SSL handshake errors due to outdated OpenSSL version in Blender 2.79
+    - add option to disable SSL (untested and won't help with handshake)
+
 ### V6.1.0 07/11/2018:
     - followed a change in CATMAID's volume API
 

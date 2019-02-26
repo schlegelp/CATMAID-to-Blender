@@ -79,7 +79,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (6, 1, 0),
+ "version": (6, 1, 1),
  "for_catmaid_version": '2018.07.19-1ad1035b96',
  "blender": (2, 7, 9),
  "location": "Properties > Scene > CATMAID Import",
