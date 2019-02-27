@@ -79,7 +79,7 @@ bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
  "version": (6, 2, 0),
- "for_catmaid_version": '2018.07.19-1ad1035b96',
+ "for_catmaid_version": '2018.11.09-254-g70f32ec',
  "blender": (2, 7, 9),
  "location": "Properties > Scene > CATMAID Import",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
@@ -102,11 +102,11 @@ class CATMAIDimportPanel(bpy.types.Panel):
 
         #Version check panel
         config = bpy.data.scenes[0].CONFIG_VersionManager
-        layout.label(text="Your Blender Script Version: %s" % str(round(config.current_version,3)))
-        if config.latest_version == 0:
+        layout.label(text="Your Blender Script Version: %s" % config.current_version)
+        if config.latest_version == 'NA':
             layout.label(text="On Github: Please Connect...")
         else:
-            layout.label(text="On Github: %s" % str(round(config.latest_version,3)))
+            layout.label(text="On Github: %s" % config.latest_version)
 
         layout.label(text="Tested for CATMAID Version: %s" % config.tested_catmaid_version)
         if config.your_catmaid_server == "":
@@ -114,13 +114,13 @@ class CATMAIDimportPanel(bpy.types.Panel):
         else:
             layout.label(text="Your CATMAID Server: %s" % config.your_catmaid_server)
 
-        if config.last_stable_version > config.current_version:
+        if not compare_version(config.current_version, config.last_stable_version):
             layout.label(text="Your are behind the last working", icon = 'ERROR')
             layout.label(text="       version of the Script!")
             layout.label(text="Please Download + Replace with the")
             layout.label(text="latest Version of CATMAIDImport.py:")
             layout.label(text="https://github.com/schlegelp/CATMAID-to-Blender")
-        elif config.latest_version > config.current_version and config.new_features != '':
+        elif not compare_version(config.current_version, config.latest_version) and config.new_features != '':
             layout.label(text="New Features in Latest Version: %s" % config.new_features)
 
         if config.your_catmaid_server != 'Please connect...' and config.your_catmaid_server != config.tested_catmaid_version:
@@ -258,14 +258,49 @@ class CATMAIDimportPanel(bpy.types.Panel):
 class VersionManager(bpy.types.PropertyGroup):
     """Class to hold version related properties
     """
-    current_version = bpy.props.FloatProperty(name="Your Script Version", default=0,min=0, description="Current Version of the Script you are using")
-    latest_version = bpy.props.FloatProperty(name="Latest Version", default=0,min=0, description="Latest Version on Github")
-    last_stable_version = bpy.props.FloatProperty(name="Last Stable Version", default=0,min=0, description="Last Stable Version of the Script")
+    current_version = bpy.props.StringProperty(name="Your Script Version", default="NA", description="Current Version of the Script you are using")
+    latest_version = bpy.props.StringProperty(name="Latest Version", default="NA", description="Latest Version on Github")
+    last_stable_version = bpy.props.StringProperty(name="Last Stable Version", default="NA", description="Last Stable Version of the Script")
     message = bpy.props.StringProperty(name="Message", default="", description="Message from Github")
     new_features = bpy.props.StringProperty(name="New Features", default="", description="New features in latest Version of the Script on Github")
 
     your_catmaid_server = bpy.props.StringProperty(name="Your CATMAID Server Version", default='', description="Your CATMAID Server's Version")
     tested_catmaid_version = bpy.props.StringProperty(name="Last tested CATMAID Version", default='', description="Last Version confirmed to Work with this Blender")
+
+
+def compare_version(A, B):
+    """ Compare versions A and B. Returns True if version A >= B.
+    """
+
+    # If any version is "NA" or None or "None", return False
+    if A in ['NA', None, 'None', ''] or B in ['NA', None, 'None', '']:
+        return False
+
+    try:
+        # Extract numerical versions from strings
+        if isinstance(A, str):
+            A = [int(v) for v in A.split('.')]
+        if isinstance(B, str):
+            B = [int(v) for v in B.split('.')]
+    except:
+        print('Version comparison failed:', A, B)
+        return False
+
+    # Make sure A and B match in length
+    A += [0] * max((len(B)-len(A)), 0)
+    B += [0] * max((len(A)-len(B)), 0)
+
+    for a,b in zip(A, B):
+        if a > b:
+            return True
+        elif a == b:
+            continue
+        elif a < b:
+            return False
+
+    # If they match exactly return True
+    return True
+
 
 class get_version_info(Operator):
     """
@@ -282,10 +317,7 @@ class get_version_info(Operator):
     def check_version(context):
         #Read current version from bl_info and convert from tuple into float
         print('Checking Version on Github...')
-        current_version = str(bl_info['version'][0]) + '.'
-        for i in range(len(bl_info['version'])-1):
-            current_version += str(bl_info['version'][i+1])
-        current_version = float(current_version)
+        current_version = '.'.join([str(v) for v in bl_info['version']])
         print('Current version of the Script: ', current_version)
         try:
             update_url = 'https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/update.txt'
@@ -296,15 +328,16 @@ class get_version_info(Operator):
             new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)
             message = re.search('message.*?{(.*?)}',file_content).group(1)
             print('Latest version on Github: ', latest_version)
+            print('Last stable version: ', last_stable)
         except:
             print('Error fetching info on latest version')
             self.report({'ERROR'},'Error fetching latest info')
-            latest_version = 0
-            last_stable = 0
+            latest_version = 'NA'
+            last_stable = 'NA'
             new_features = ''
             message = ''
 
-        tested_catmaid_version = str(bl_info['for_catmaid_version'])
+        tested_catmaid_version = bl_info['for_catmaid_version']
         print('This Script was tested with CATMAID Server Version: ', tested_catmaid_version)
         try:
             your_catmaid_server = remote_instance.fetch( remote_instance.djangourl('/version') )['SERVER_VERSION']
@@ -314,8 +347,8 @@ class get_version_info(Operator):
 
         config = bpy.data.scenes[0].CONFIG_VersionManager
         config.current_version = current_version
-        config.latest_version = float(latest_version)
-        config.last_stable_version = float(last_stable)
+        config.latest_version = latest_version
+        config.last_stable_version = last_stable
         config.message = message
         config.new_features = new_features
         config.tested_catmaid_version = tested_catmaid_version
