@@ -25,25 +25,27 @@ safe_ssl = ssl._create_default_https_context
 unsafe_ssl = ssl._create_unverified_context
 #ssl._create_default_https_context = ssl._create_unverified_context
 
-import bpy, blf
-import os
-import re
-import random
-import time
-import datetime
-import json
-import math
+import asyncio
+import base64
+import bpy
+import blf
 import colorsys
 import copy
-import http.cookiejar as cj
-import urllib
-import threading
 import concurrent.futures
-import asyncio
-
+import datetime
+import http.cookiejar as cj
+import json
+import math
 import mathutils
-import sys
 import numpy as np
+import os
+import random
+import re
+import statistics
+import sys
+import threading
+import time
+import urllib
 
 # Use requests if possible
 try:
@@ -65,9 +67,6 @@ try:
 except:
     print('Unable to import matplotlib. Some functions will not work!')
 
-import base64
-import statistics
-
 from bpy.types import Operator, AddonPreferences
 from bpy_extras.io_utils import ImportHelper, ExportHelper
 from bpy.props import FloatVectorProperty, FloatProperty, StringProperty, BoolProperty, EnumProperty, IntProperty, CollectionProperty
@@ -79,7 +78,7 @@ connected = False
 bl_info = {
  "name": "CATMAIDImport",
  "author": "Philipp Schlegel",
- "version": (6, 1, 1),
+ "version": (6, 2, 0),
  "for_catmaid_version": '2018.07.19-1ad1035b96',
  "blender": (2, 7, 9),
  "location": "Properties > Scene > CATMAID Import",
