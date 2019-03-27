@@ -2417,12 +2417,14 @@ class RetrieveConnectors(Operator):
                         if str(target_skid) in self.target_skids:
                             connectors_to_delete[connector[0]] = False
                             neurons_included.append(neuron_names[str(target_skid)])
-
                 for connector_id in connectors_to_delete:
                     if connectors_to_delete[connector_id] is True:
-                        connector_post_coords.pop(connector_id)
+                        try:
+                            connector_pre_coords.pop(connector_id)
+                        except:
+                            print('Error filtering connector "{}"'.format(connector_id))
 
-                print('Postsynaptic neurons remaining after filtering: ',list(set(neurons_included)))
+                print('Postsynaptic neurons remaining after filtering: ', list(set(neurons_included)))
 
             if self.restr_sources:
                 #Filter Upstream Targets
@@ -2435,9 +2437,12 @@ class RetrieveConnectors(Operator):
 
                 for connector_id in connectors_to_delete:
                     if connectors_to_delete[connector_id] is True:
-                        connector_pre_coords.pop(connector_id)
+                        try:
+                            connector_post_coords.pop(connector_id)
+                        except:
+                            print('Error filtering connector "{}"'.format(connector_id))
 
-                print('Presynaptic neurons remaining after filtering: ',list(set(neurons_included)))
+                print('Presynaptic neurons remaining after filtering: ', list(set(neurons_included)))
 
             if len(connector_data_pre) > 0:
                 ### Extract number of postsynaptic targets for connectors
