@@ -11229,26 +11229,24 @@ class ExportVolume(Operator):
             verts = [ [ round( v[0] * conversion_factor), round( v[2] * -conversion_factor ) , round ( v[1] * conversion_factor ) ] for v in verts ]
             faces = [ list(p.vertices) for p in obj.data.polygons ]
 
-            mesh = [ verts, faces ]
-
             postdata = {'title':  vol_name,
                         'type': 'trimesh',
-                        'mesh': mesh,
+                        'mesh': json.dumps([verts, faces]),
                         'comment': self.comment
                         }
 
-            add_volume_url = remote_instance.add_volume( project_id )
+            add_volume_url = remote_instance.add_volume(project_id)
 
-            response = remote_instance.fetch ( add_volume_url, postdata )
+            response = remote_instance.fetch(add_volume_url, postdata)
 
             if 'success' in response and response['success'] is True:
-                print("{0} of {1}: Export of mesh '{2}' successful".format(i, len(objects), vol_name))
+                print("{0} of {1}: Export of mesh '{2}' successful".format(i+1, len(objects), vol_name))
                 osd.show("Export successful" )
                 self.report({'INFO'},'Success!')
                 osd_timed = ClearOSDAfter(3)
                 osd_timed.start()
             else:
-                print("{0} of {1}: Export of mesh '{2}' failed:".format(i, len(objects), vol_name))
+                print("{0} of {1}: Export of mesh '{2}' failed:".format(i+1, len(objects), vol_name))
                 osd.show("Something went wrong - see console." )
                 self.report({'ERROR'},'See console!')
                 print(response)
