@@ -50,9 +50,11 @@ import urllib
 # Use requests if possible
 try:
     import requests
+    from requests.exceptions import HTTPError
     print('requests library found')
 except:
     requests = None
+    from urllib.error import HTTPError
     print('requests library not found - falling back to urllib')
 
 try:
@@ -310,7 +312,7 @@ class get_version_info(Operator):
     bl_idname = "check.version"
     bl_label = "Check Version on Github"
 
-    def execute(self,context):
+    def execute(self, context):
         self.check_version()
         return{'FINISHED'}
 
@@ -324,14 +326,14 @@ class get_version_info(Operator):
             update_file = urllib.request.urlopen(update_url)
             file_content = update_file.read().decode("utf-8")
             latest_version = re.search('current_version.*?{(.*?)}',file_content).group(1)
-            last_stable = re.search('last_stable.*?{(.*?)}',file_content).group(1)
+            last_stable = re.search('last_stable.*?{(.*?)}', file_content).group(1)
             new_features = re.search('new_features.*?{(.*?)}',file_content).group(1)
             message = re.search('message.*?{(.*?)}',file_content).group(1)
             print('Latest version on Github: ', latest_version)
             print('Last stable version: ', last_stable)
         except:
             print('Error fetching info on latest version')
-            self.report({'ERROR'},'Error fetching latest info')
+            #self.report({'ERROR'}, 'Error fetching latest info')
             latest_version = 'NA'
             last_stable = 'NA'
             new_features = ''
@@ -390,7 +392,31 @@ class CatmaidInstance:
             else:
                 r = self._session.get(url)
 
-            r.raise_for_status()
+            # Check for errors
+            if r.status_code != 200:
+                # CATMAID internal server errors return useful error messages
+                if str(r.status_code).startswith('5'):
+                    # Try extracting error:
+                    try:
+                        msg = r.json().get('error', 'No error message.')
+                        det = r.json().get('detail', None)
+                    except BaseException:
+                        msg = r.reason
+                        det = None
+                # Parse all other errors
+                else:
+                    msg = r.reason
+                    det = None
+
+                error = '{} Server Error: {} for url "{}"'.format(r.status_code,
+                                                                  msg,
+                                                                  r.url)
+
+                if det:
+                    error += '. See above for details.'
+                    print('Error details: {}'.format(det))
+
+                raise HTTPError(error)
 
             return r.json()
         else:
@@ -11299,9 +11325,12 @@ def get_volume_list(project_id):
     if 'data' in response:
         available_volumes += [(str(e[0]), e[1], str(e[2])) for e in response['data']]
     else:
-        available_volumes += [(str(e['id']), e['name'], str(e['comment'])) for e in response]
+        try:
+            available_volumes += [(str(e['id']), e['name'], str(e['comment'])) for e in response]
+        except:
+            raise ValueError()
 
-    return sorted( available_volumes, key = lambda x : x[1] )
+    return sorted(available_volumes, key=lambda x: x[1])
 
 def availableVolumes(self, context):
     """ Retrieves available volumes from CATMAID server.
@@ -11695,10 +11724,18 @@ class AnimateHistory(Operator):
 
         print('Extracting all timestamps...')
         #Get nodes that survived downsampling
-        self.existing_nodes = { s: [ n for sp in self.skid_to_obj[skid]['node_ids'] for n in sp  ] for s in neurons_to_load }
+        self.existing_nodes = {s: [n for sp in self.skid_to_obj[s]['node_ids'] for n in sp] for s in neurons_to_load}
 
         #Extract node timestamps
-        self.node_timestamps = {s: [ (n[0], datetime.datetime.strptime( n[9][:16] , '%Y-%m-%d %H:%M' ), 'creation') for n in self.skdata[s][0] if n[0] in self.existing_nodes[s]] for s in self.skdata }
+        self.node_timestamps = {s: [(n[0], datetime.datetime.strptime( n[9][:16] , '%Y-%m-%d %H:%M'), 'creation') for n in self.skdata[s][0] if n[0] in self.existing_nodes[s]] for s in self.skdata}
+
+        #n = '67408' #list(neurons_to_load)[0]
+        #print('Data for neuron: ', n)
+        #print('Existing nodes: ', self.existing_nodes[n][:10])
+        #print('Skdata: ', self.skdata[n][0][:10])
+        #print('TS: ', self.node_timestamps[n][:10])
+
+        #return {'FINISHED'}
 
         #Extract review timestamps
         self.rev_timestamps = {s: [(n[0], n[2], 'review') for n in self.review_details[s] if n[0] in self.existing_nodes[s]] for s in self.review_details}
