@@ -3,31 +3,49 @@ CATMAID-to-Blender
 
 Plugin for [Blender](http://www.blender.org "Blender Homepage") to interface
 with [CATMAID](https://github.com/catmaid/CATMAID "CATMAID Repo") servers,
-request and analyze data. Tested with Blender 2.79 and CATMAID 2020.02.15
+request and analyze data. Tested with Blender 2.92 and CATMAID 2020.02.15
 
 ## Important notice
-This plugin still works for the time being but is not actively developed at the moment.
-You are welcome to open an issue or contact me directly if you run into problems
-but I highly recommend you check out [pymaid](https://github.com/schlegelp/pymaid)
-and [navis](https://github.com/schlegelp/navis) which - in combination -
-let you import neurons programmatically into Blender
+Version `7.0.0` is the first version compatible with Blender 2.8x or later
+(I recommend 2.9x). It is unfortunately also incompatible with older
+Blender versions.
+
+I took the opportunity to do a full refactor of the code to make things
+faster and easier to maintain. In the process I also dropped a bunch of
+functionality that I thought were too niche or are too much effort to
+re-write. Notably I removed:
+
+- coloring neurons by user
+- coloring neurons by Strahler
+- exporting neurons as SVGs - please use [pymaid](https://github.com/schlegelp/pymaid)
+  and [navis](https://github.com/schlegelp/navis) for this
+
+If for some reason you really really need some function that got dropped,
+please open an issue here on Github.
+
+In general: this plugin works for the time being but is not actively developed
+at this points. You are welcome to open an issue or contact me directly if you
+run into problems but I highly recommend you check out
+[pymaid](https://github.com/schlegelp/pymaid) and [navis](https://github.com/schlegelp/navis)
+which - in combination - let you import neurons programmatically into Blender
 (see the [tutorials](https://navis.readthedocs.io/en/latest/source/gallery.html)).
-These package also work with Blender >=2.8 while this plugin doesn't.
 
 ## Installation:
 First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/CATMAIDImport.py), then:
 
 #### Option A:
+1. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
+2. Activate by ticking check box and click **Save User Setting**
+
+#### Option B:
 1. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
 2. Start Blender -> **File** -> **User Preferences** -> **Addons** -> Search for **CATMAIDImport** addon
 3. Activate the script by ticking the check box and click **Save User Settings** (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
-#### Option B:
-1. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
-2. Activate by ticking check box and click **Save User Setting**
-
 #### Dependencies:
-None! [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS brings its own Python distribution and the plugin is written such that it works (mostly) without any external libraries.
+None! [Blender](http://www.blender.org "Blender Homepage") for Windows and MacOS
+brings its own Python distribution and the plugin is written such that it
+works without any external libraries.
 
 #### Optional Python packages:
 On Windows/MacOs:
@@ -56,7 +74,7 @@ pip.main(['install','scipy'])
 **There appears to be a bug with macOS 10.12 Sierra which makes above steps fail if run from within Blender.** In that case try:
 1. Make sure Blender is in your Applications folder
 2. Right click on Blender icon -> **Show Package Contents**
-3. Navigate to **Contents/Resources/2.78/python/bin** and run **python3.5m** by drag&dropping it into a Terminal
+3. Navigate to **Contents/Resources/2.92/python/bin** and run **python3.7m** by drag & dropping it into a Terminal
 4. Try above steps from the Terminal
 
 ## Before First Use:
@@ -68,16 +86,13 @@ For Information on how to retrieve your Token look [here](http://catmaid.github.
 ![server_url](https://cloud.githubusercontent.com/assets/7161148/13985056/9b915b22-f0fa-11e5-8b8f-ecac97405708.PNG)
 
 ## Quickstart Guide:
-Import/Export panel will show up under the **Scene** tab in the **Properties** windows
+Import/Export panel will show up in the **Sidebar** (keyboard shortcut "N") in the 3D view
 
 ![import_panel](https://cloud.githubusercontent.com/assets/7161148/23852692/fafcf71c-07e0-11e7-9e64-69ecdc3a3af0.png)
 
 - Functions (e.g. Retrieving skeletons/connectors) that need you to be logged into your CATMAID server will be grayed-out until you did so by hitting 'Connect 2 CATMAID'
 - Skeletons can be retrieved by their skeleton ID, by annotations or based on connectivity (Retrieve Partners)
-  - Important side node: in order to identify cell bodies, the script searches for nodes with a radius > 10
-- Once imported, skeleton/connector data can be readily exported to vector graphics (SVG) with a broad range of options (e.g. coloring, filters, scaling). Look at lower left panel when exporting for these options.
-
-![export_options](https://cloud.githubusercontent.com/assets/7161148/5356716/bf994da4-7f9f-11e4-8e10-c5c628baab47.PNG)
+  - important side node: in order to identify cell bodies, the plugin searches for nodes with a `soma` tag
 
 ## Tutorials:
 Please check out the Github [Wiki](https://github.com/schlegelp/CATMAID-to-Blender/wiki) for additional information and tutorials.
