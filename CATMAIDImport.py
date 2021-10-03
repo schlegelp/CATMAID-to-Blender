@@ -20,7 +20,10 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 import bmesh
 import bpy
 import collections
+import colorsys
 import json
+import math
+import re
 import requests
 import six
 import time
@@ -57,6 +60,8 @@ bl_info = {
 
 client = None
 
+catmaid_volumes = [('None', 'None', 'Do not import volume from this list')]
+
 DEFAULTS = {
  "connectors": {0: {'color': (0, 0.8, 0.8, 1),  # postsynapses
                     'name': 'Presynapses'},
@@ -74,19 +79,19 @@ DEFAULTS = {
 ########################################
 
 
-class CATMAID_PT_MAIN_PANEL(Panel):
+class CATMAID_PT_import_panel(Panel):
     """Creates import menu in viewport side menu."""
 
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_label = "CATMAID import"
-    bl_category = "CATMAID import"
+    bl_label = "Import"
+    bl_category = "CATMAID"
 
     def draw(self, context):
         layout = self.layout
 
         ver_str = '.'.join([str(i) for i in bl_info['version']])
-        layout.label(text=f'CATMAID Import (v{ver_str})')
+        layout.label(text=f'CATMAID plugin version v{ver_str}')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -96,6 +101,73 @@ class CATMAID_PT_MAIN_PANEL(Panel):
         row.alignment = 'EXPAND'
         row.operator("fetch.neuron", text="Import Neuron(s)", icon='ARMATURE_DATA')
 
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("import.volume", text='Import Volume', icon='IMPORT')
+
+
+class CATMAID_PT_export_panel(Panel):
+    """Creates export menu in viewport side menu."""
+
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_label = "Export"
+    bl_category = "CATMAID"
+
+    def draw(self, context):
+        layout = self.layout
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("export.volume", text='Export Volume', icon='EXPORT')
+
+
+class CATMAID_PT_properties_panel(Panel):
+    """Creates properties menu in viewport side menu."""
+
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_label = "Neuron Properties"
+    bl_category = "CATMAID"
+
+    def draw(self, context):
+        layout = self.layout
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("material.change", text="Change Materials",
+                     icon='COLOR_BLUE')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'change.material'
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("material.randomize", text="Randomize Color", icon='COLOR')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("material.kmeans", text="By Spatial Distr.", icon='LIGHT_SUN')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'material.kmeans'
+
+        """
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_annotation", text = "By Annotation", icon ='SORTALPHA')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_strahler", text = "By Strahler Index", icon ='MOD_ARRAY')
+        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_strahler'
+        """
 
 ########################################
 #  Operators
@@ -152,19 +224,25 @@ class CATMAID_OP_connect(Operator):
                                project_id=self.local_project_id,
                                max_threads=self.max_threads)
 
-        #Retrieve user list, to test if PW was correct:
+        # Retrieve volumes, to test if connection is good:
         try:
-            _ = client.get_user_list()
+            volumes = client.get_volume_list()
             self.report({'INFO'}, 'Connection successful')
             print('Test call successful')
-        except BaseException as e:
+        except BaseException:
             self.report({'ERROR'}, 'Connection failed: see console')
             raise
+
+        global catmaid_volumes
+        catmaid_volumes = [('None', 'None', 'Do not import volume from list')]
+        catmaid_volumes += [(str(e[0]), e[1], str(e[2])) for e in volumes]
 
         return {'FINISHED'}
 
 
 class CATMAID_OP_fetch_neuron(Operator):
+    """Fetch neurons."""
+
     bl_idname = "fetch.neuron"
     bl_label = 'Fetch neurons'
     bl_description = "Fetch given neurons from global server."
@@ -207,8 +285,8 @@ class CATMAID_OP_fetch_neuron(Operator):
                                   description="Import abutting connectors.")
     downsampling: IntProperty(name="Downsampling Factor", default=2, min=1, max=20,
                               description="Will reduce number of nodes by given "
-                                           "factor. Root, ends and forks are "
-                                           "preserved.")
+                                          "factor. Root, ends and forks are "
+                                          "preserved.")
     use_radius: BoolProperty(name="Use node radii", default=False,
                              description="If true, neuron will use node radii "
                                          "for thickness. If false, radius is "
@@ -353,6 +431,487 @@ class CATMAID_OP_fetch_neuron(Operator):
         print(f'Finished Import in {time.time()-start:.1f}s')
 
         return {'FINISHED'}
+
+
+def _get_available_volumes(self, context):
+    """Simply returns parsed list of available volumes."""
+    # Must be defined before CATMAID_OP_fetch_volume
+    return catmaid_volumes
+
+
+class CATMAID_OP_fetch_volume(Operator):
+    """Imports a volume as mesh from CATMAID."""
+
+    bl_idname = "import.volume"
+    bl_label = "Import volumes from CATMAID"
+    bl_description = "Fetch volume from server."
+
+    volume: EnumProperty(name='Import from List',
+                         items=_get_available_volumes,
+                         description='Select volume to be imported. List will '
+                                     'refresh on (re-)connecting to CATMAID '
+                                     'server.')
+    by_name: StringProperty(name='Import by Name', default='',
+                            description='Name of volume to import.')
+    allow_partial: BoolProperty(name='Allow partial match', default=True,
+                                description='If True, name can be a partial match.')
+
+    @classmethod
+    def poll(cls, context):
+        if client:
+            return True
+        return False
+
+    def draw(self, context):
+        layout = self.layout
+        row = layout.row()
+        row.alignment = 'CENTER'
+        row.label(text="Reconnect to CATMAID server to refresh list")
+        row = layout.row()
+        row.prop(self, "volume")
+        row = layout.row()
+        row.prop(self, "by_name")
+        row = layout.row()
+        row.prop(self, "allow_partial")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        volumes_to_retrieve = []
+
+        if self.volume != 'None':
+            volumes_to_retrieve.append(self.volume)
+
+        if self.by_name:
+            if self.allow_partial:
+                volumes_to_retrieve += [v[0] for v in catmaid_volumes if self.by_name.lower() in v[1].lower()]
+            else:
+                volumes_to_retrieve += [v[0] for v in catmaid_volumes if self.by_name.lower() == v[1].lower()]
+
+        for k, vol in enumerate(volumes_to_retrieve):
+            vertices, faces, name = client.get_volume(vol)
+
+            print(f'Importing volume {k} of {len(volumes_to_retrieve)}: '
+                  f'{name} (ID {vol}) - {len(vertices)} vertices/'
+                  f'{len(faces)} faces after clean-up')
+
+            import_mesh(vertices, faces, name=name)
+
+        return{'FINISHED'}
+
+
+class CATMAID_OP_upload_volume(Operator):
+    """Export a mesh as volume to CATMAID."""
+
+    bl_idname = "export.volume"
+    bl_label = "Export mesh to CATMAID"
+    bl_description = "Export mesh to CATMAID as volume."
+
+    volume_name: StringProperty(name='Name', default='',
+                                description='If not explicitly provided, will '
+                                            'use the Blender object name.')
+    comment: StringProperty(name='Comment', default='',
+                            description='Add comment to volume.')
+
+    @classmethod
+    def poll(cls, context):
+        if client:
+            return True
+        return False
+
+    def draw(self, context):
+        layout = self.layout
+        if not len(self.selected):
+            layout.label(text='Must have one or more meshes selected!')
+            return
+        elif len(self.selected) == 1:
+            layout.label(text='Single mesh selected for export:')
+            layout.prop(self, "volume_name")
+        else:
+            layout.label(text=f"{len(self.selected)} meshes selected: using objects' names for export:")
+        layout.prop(self, "comment")
+        layout.label(text="Meshes will show up in CATMAID 3D viewer and volume manager.")
+        layout.label(text="Requires CATMAID version 2016.04.18 or higher.")
+        layout.label(text="Polygon faces will be converted into triangles - please save Blender file before clicking OK!")
+
+    def invoke(self, context, event):
+        # Set selected objects at draw time
+        self.selected = [o for o in bpy.context.selected_objects if o.type == 'MESH']
+        if len(self.selected) == 1:
+            self.volume_name = self.selected[0].name
+
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        if not self.selected:
+            print("No meshes selected!")
+            return{'FINISHED'}
+
+        for i, obj in enumerate(self.selected):
+            if self.volume_name == '':
+                vol_name = obj.name
+            else:
+                vol_name = self.volume_name
+
+            # Make this object the active one
+            bpy.context.view_layer.objects.active = obj
+
+            # Check if mesh is trimesh:
+            is_trimesh = np.all([len(f.vertices) == 3 for f in obj.data.polygons])
+            if not is_trimesh:
+                print('Mesh not a trimesh - trying to convert')
+                # First go out of edit mode and select all vertices while in object mode
+                if obj.mode != 'OBJECT':
+                    bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Select all vertices
+                for v in obj.data.vertices:
+                    v.select = True
+
+                # Now go to edit mode and convert to trimesh
+                bpy.ops.object.mode_set(mode='EDIT')
+                bpy.ops.mesh.quads_convert_to_tris()
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Check if again mesh is trimesh:
+                is_trimesh = np.all([len(f.vertices) == 3 for f in obj.data.polygons])
+                if all(is_trimesh):
+                    print(f"{i} of {len(self.selected)}: Mesh '{vol_name}"
+                          'successfully converted to trimesh!')
+                else:
+                    print(f"{i} of {len(self.selected)}: Error during "
+                          f"conversion of '{vol_name}' to trimesh "
+                          "- try manually!")
+                    continue
+
+            # Now create postdata
+            verts = np.empty(len(obj.data.vertices) * 3)
+            obj.data.vertices.foreach_get('co', verts)  # this fills above array
+            verts = verts.reshape(len(obj.data.vertices), 3)
+
+            faces = np.empty(len(obj.data.polygons) * 3)
+            obj.data.polygons.foreach_get('vertices', faces)
+            faces = faces.reshape(len(obj.data.polygons), 3)
+
+            resp = client.upload_volume(verts, faces,
+                                        name=vol_name, comment=self.comment)
+
+            if 'success' in resp and resp['success'] is True:
+                print(f"{i} of {len(self.selected)}: Export of mesh '{vol_name}' "
+                      "successful")
+                self.report({'INFO'}, 'Success!')
+            else:
+                print(f"{i} of {len(self.selected)}: Export of mesh '{vol_name}' "
+                      "failed!")
+                self.report({'ERROR'}, 'See console for details!')
+                print(resp)
+        return{'FINISHED'}
+
+
+class CATMAID_OP_display_help(Operator):
+    """Displays popup with additional help"""
+    bl_idname = "display.help"
+    bl_label = "Advanced Tooltip"
+
+    entry: StringProperty(name="which entry to show",
+                          default='', options={'HIDDEN'})
+
+    def execute (self, context):
+        return {'FINISHED'}
+
+    def draw(self, context):
+        layout = self.layout
+        if self.entry == 'color.by_similarity':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Color Neurons by Similarity - Tooltip')
+            box = layout.box()
+            box.label(text='This function colors neurons based on how similar they are in respect to either: morphology, synapse placement, connectivity or paired connectivity.')
+            box.label(text='It is highly recommended to have SciPy installed - this will increase speed of calculation a lot!')
+            box.label(text='See https://github.com/schlegelp/CATMAID-to-Blender on how to install SciPy in Blender.')
+            box.label(text='Use <Settings> button to set parameters, then <Start Calculation>.')
+            layout.label(text='Morphology:')
+            box = layout.box()
+            box.label(text='Neurons that have close-by projections with similar orientation are')
+            box.label(text='similar. See Kohl et al. (2013, Cell).')
+            layout.label(text='Synapses:')
+            box = layout.box()
+            box.label(text='Neurons that have similar numbers of synapses in the same area')
+            box.label(text='are similar. See Schlegel et al (2016, bioRxiv).')
+            layout.label(text='Connectivity:')
+            box = layout.box()
+            box.label(text='Neurons that connects with similar number of synapses to the same')
+            box.label(text='partners are similar. See Schlegel et al (2016, bioRxiv).')
+            layout.label(text='Paired Connectivity:')
+            box = layout.box()
+            box.label(text='Neurons that mirror (left/right comparison) each others connectivity')
+            box.label(text='are similar. This requires synaptic partners to be paired with a')
+            box.label(text='<paired with #skeleton_id> annotation.')
+        elif self.entry == 'color.by_pairs':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Color Neurons by Pairs - Tooltip')
+            box = layout.box()
+            box.label(text='Gives paired neurons the same color. Pairing is based on annotations:')
+            box.label(text='Neuron needs to have a <paired with #skeleton_id> annotation.')
+            box.label(text='For example <paired with #1874652>.')
+        elif self.entry == 'material.kmeans':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Color by Spatial Distribution - Tooltip')
+            box = layout.box()
+            box.label(text='This function colors neurons based on spatial clustering of their somas.')
+            box.label(text='Uses the k-Mean algorithm. You need to set the number of clusters you')
+            box.label(text='expect and the algorithm finds clusters with smallest variance.')
+        elif self.entry == 'retrieve.by_pairs':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Retrieve Pairs of Neurons - Tooltip')
+            box = layout.box()
+            box.label(text='Retrieves neurons paired with already the loaded neurons. Pairing is')
+            box.label(text='based on annotations: neuron needs to have a <paired with #skeleton_id>')
+            box.label(text='annotation. For example neuron #1234 has annotation')
+            box.label(text='<paired with #5678> and neuron 5678 has annotation')
+            box.label(text='<paired with #1234>.')
+        elif self.entry == 'retrieve.connectors':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Retrieve Connectors - Tooltip')
+            box = layout.box()
+            box.label(text='Retrieves connectors as spheres. Outgoing (presynaptic) connectors can be')
+            box.label(text='scaled (weighted) based on the number of postsynaptically connected')
+            box.label(text='neurons. Incoming (postsynaptic) connectors always have base radius.')
+        elif self.entry == 'change.material':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Change Materials - Tooltip')
+            box = layout.box()
+            box.label(text='By default, all imported neurons have a standard material with random')
+            box.label(text='color. You can change the material of individual neurons in the ')
+            box.label(text='material tab or in bulk using this function. For more options')
+            box.label(text='see material tab.')
+        elif self.entry == 'color.by_strahler':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Color by Strahler - Tooltip')
+            box = layout.box()
+            box.label(text='Colors neurons by strahler index. Result may will look odd')
+            box.label(text='in the viewport unless viewport shading is set to <render> or')
+            box.label(text='<material>. In any case, if you render it will look awesome!')
+        elif self.entry == 'animate.history':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Animate history - Tooltip')
+            box = layout.box()
+            box.label(text='This works essentially like the corresponding function of CATMAIDs 3D viewer: nodes and connectors pop into existence ')
+            box.label(text='as they were traced originally. Attention: using the <Skip idle phases> option will compromise relation between neurons')
+            box.label(text='because idle phases are currently calculated for each neuron individually. The <Show timer> will also be affected!')
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_popup(self, width=400)
+
+
+class CATMAID_OP_material_change(Operator):
+    """Change material -> this is for convenience only."""
+
+    bl_idname = "material.change"
+    bl_label = "Change materials."
+    bl_options = {'UNDO'}
+
+    which_neurons: EnumProperty(name="Which Objects?",
+                                items=[('Selected', 'Selected', 'Selected'),
+                                       ('All', 'All', 'All')],
+                                default='Selected',
+                                description="Assign common material to which neurons")
+    to_neurons: BoolProperty(name='Neurons',
+                             default=True,
+                             description='Include neurons?')
+    to_outputs: BoolProperty(name='Presynapses',
+                             default=False,
+                             description='Include presynaptic sites (outgoing)?')
+    to_inputs: BoolProperty(name='Postsynapses',
+                            default=False,
+                            description='Include postsynaptic sites (incoming)?')
+    change_color: BoolProperty(name='Color', default=True, description='Change color?')
+    new_color: FloatVectorProperty(name="", description="Set new color",
+                                   default=(0.0, 1, 0.0), min=0.0, max=1.0,
+                                   subtype='COLOR')
+    change_bevel: BoolProperty(name='Thickness', default=False,
+                               description='Change neuron thickness?')
+    new_bevel: FloatProperty(name="", description="Set new thickness.",
+                             default=0.015, min=0)
+
+    def check(self, context):
+        return True
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.label(text="Apply to")
+        box = layout.box()
+        row = box.row(align=False)
+        row.prop(self, "which_neurons")
+        row = box.row(align=False)
+        row.prop(self, "to_neurons")
+        row.prop(self, "to_outputs")
+        row.prop(self, "to_inputs")
+
+        layout.label(text="Change")
+        box = layout.box()
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "change_color")
+        if self.change_color:
+            col = row.column()
+            col.prop(self, "new_color")
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "change_bevel")
+        if self.change_bevel:
+            col = row.column()
+            col.prop(self, "new_bevel")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        if self.which_neurons == 'Selected':
+            ob_list = bpy.context.selected_objects
+        elif self.which_neurons == 'All':
+            ob_list = bpy.data.objects
+
+        filtered_ob_list = []
+
+        # First find the objects
+        for ob in ob_list:
+            if 'subtype' not in ob:
+                continue
+            if ob['subtype'] in ('NEURITES', 'SOMA') and not self.to_neurons:
+                continue
+            if ob['subtype'] in ('CONNECTORS'):
+                if ob['cn_type'] == 'Presynapses' and not self.to_outputs:
+                    continue
+                if ob['cn_type'] == 'Postsynapses' and not self.to_inputs:
+                    continue
+
+            filtered_ob_list.append(ob)
+
+        # Now apply cahnges
+        for ob in filtered_ob_list:
+            if self.change_color:
+                ob.active_material.diffuse_color = (self.new_color[0],
+                                                    self.new_color[1],
+                                                    self.new_color[2],
+                                                    1)
+            if self.change_bevel and ob.type == 'CURVE':
+                ob.data.bevel_depth = self.new_bevel
+
+        self.report({'INFO'}, f'{len(filtered_ob_list)} materials changed')
+
+        return {'FINISHED'}
+
+
+class CATMAID_OP_material_randomize(Operator):
+    """Assigns Random Materials to Neurons"""
+    bl_idname = "material.randomize"
+    bl_label = "Assign Random Materials"
+    bl_options = {'UNDO'}
+
+    which_neurons: EnumProperty(name="Which Neurons?",
+                                items=[('Selected', 'Selected', 'Selected'),
+                                       ('All', 'All', 'All')],
+                                description="Choose which neurons to give random color.",
+                                default='All')
+    color_range: EnumProperty(name="Range",
+                              items=(('RGB', 'RGB', 'RGB'),
+                                     ("Grayscale", "Grayscale", "Grayscale"),),
+                              default="RGB",
+                              description="Choose mode of randomizing colors")
+    start_color: FloatVectorProperty(name="Color range start",
+                                     description="Set start of color range (for RGB). Keep start and end the same to use full range.",
+                                     default=(1, 0.0, 0.0), min=0.0, max=1.0,
+                                     subtype='COLOR')
+    end_color: FloatVectorProperty(name="Color range end",
+                                   description="Set end of color range (for RGB). Keep start and end the same to use full range.",
+                                   default=(1, 0.0, 0.0), min=0.0, max=1.0,
+                                   subtype='COLOR')
+
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        if self.which_neurons == 'All':
+            to_process = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_process = bpy.context.selected_objects
+
+        to_process = [o for o in to_process if 'type' in o]
+        to_process = [o for o in to_process if o['type'] == 'NEURON']
+
+        neurons = set([o['id'] for o in to_process])
+
+        colors = random_colors(len(neurons),
+                               color_range=self.color_range,
+                               start_rgb=self.start_color,
+                               end_rgb=self.end_color,
+                               alpha=1)
+        colormap = dict(zip(neurons, colors))
+
+        for ob in to_process:
+            ob.active_material.diffuse_color = colormap[ob['id']]
+        return {'FINISHED'}
+
+
+class CATMAID_OP_material_spatial(Operator):
+    """Color neurons by spatially clustering their somas"""
+    bl_idname = "material.kmeans"
+    bl_label = "Color neurons by spatially clustering of their somas (k-Means algorithm)."
+    bl_options = {'UNDO'}
+
+    # Number of clusters the algorithm tries to create
+    n_clusters: IntProperty(name="# of clusters", default=4)
+    # Fade colours by distance to cluster center
+    fade_color: BoolProperty(name="Fade colors", default=True,
+                             description='If true, neuron color will fade with distance from cluster center.')
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute (self, context):
+        neurons = []
+        coords = []
+        for obj in bpy.data.objects:
+            if 'subtype' not in obj:
+                continue
+            if obj['subtype'] != 'SOMA':
+                continue
+            neurons.append(obj)
+            coords.append(obj.location)
+            # Set color to black -> this means that all neurons without somata
+            # will remain black
+            obj.active_material.diffuse_color = (0, 0, 0, 1)
+
+        clusters, centers, dists = cluster_kmeans(coords, n_clusters=self.n_clusters)
+        max_dist = dists.max()
+
+        colors = random_colors(self.n_clusters)
+
+        for obj, cl, d in zip(neurons, clusters, dists):
+            c = colors[cl]
+
+            if self.fade_color:
+                c = list(colorsys.rgb_to_hsv(*c[:3]))
+                c[2] = 1 - (0.5 * d / max_dist)
+                c = list(colorsys.hsv_to_rgb(*c))
+                c.append(1)  # add alpha
+
+            obj.active_material.diffuse_color = c
+
+        return{'FINISHED'}
 
 
 ########################################
@@ -611,7 +1170,7 @@ class CatmaidClient:
         #and put into standard compact-skeleton format: [treenode_id, connector_id, relation_type, x, y, z]
         abutting = {}
         for s in skeleton_ids:
-            abbutting[s] = [[e[7], e[1], 3, e[2], e[3], e[4]] for e in data if str(e[0]) == s]
+            abutting[s] = [[e[7], e[1], 3, e[2], e[3], e[4]] for e in data if str(e[0]) == s]
 
         return abutting
 
@@ -660,6 +1219,73 @@ class CatmaidClient:
                 skdata[s][1] += abutting.get(s, [])
 
         return skdata
+
+    def get_volume_list(self):
+        """Retrieves list of available volumes."""
+        url = self.make_url(f"/{self.project_id}/volumes/")
+        response = self.fetch(url)
+        # Data is list of lists:
+        # id, name, comment, user_id, editor_id, project_id, creation_time,
+        # edition_time, annotations, area, volume, watertight, meta_computed
+        return sorted(response['data'], key=lambda x: x[1])
+
+    def get_volume(self, volume_id):
+        """Fetch given volume."""
+        url = self.make_url(f"/{self.project_id}/volumes/{volume_id}")
+        r = self.fetch(url)
+
+        mesh_str = r['mesh']
+        mesh_name = r['name']
+        mesh_type = re.search('<(.*?) ', mesh_str).group(1)
+
+        # Now reverse engineer the mesh
+        if mesh_type == 'IndexedTriangleSet':
+            t = re.search("index='(.*?)'", mesh_str).group(1).split(' ')
+            faces = [(int(t[i]), int(t[i + 1]), int(t[i + 2]))
+                     for i in range(0, len(t) - 2, 3)]
+
+            v = re.search("point='(.*?)'", mesh_str).group(1).split(' ')
+            vertices = [(float(v[i]), float(v[i + 1]), float(v[i + 2]))
+                        for i in range(0, len(v) - 2, 3)]
+
+        elif mesh_type == 'IndexedFaceSet':
+            # For this type, each face is indexed and an index of -1 indicates
+            # the end of this face set
+            t = re.search("coordIndex='(.*?)'", mesh_str).group(1).split(' ')
+            faces = []
+            this_face = []
+            for f in t:
+                if int(f) != -1:
+                    this_face.append(int(f))
+                else:
+                    faces.append(this_face)
+                    this_face = []
+
+            # Make sure the last face is also appended
+            faces.append(this_face)
+
+            v = re.search("point='(.*?)'", mesh_str).group(1).split(' ')
+            vertices = [(float(v[i]), float(v[i + 1]), float(v[i + 2]))
+                        for i in range(0, len(v) - 2, 3)]
+        else:
+            print(f"Unknown volume type: {mesh_type}")
+            raise TypeError(f"Unknown volume type: {mesh_type}")
+
+        # Collapse to unique vertices
+        verts, inv = np.unique(vertices, return_inverse=True, axis=0)
+        faces = np.array(faces)
+        faces_new = faces.copy()
+        for i in range(inv.shape[0]):
+            faces_new[faces == i] = inv[i]
+
+        # Scale vertices
+        scale_factor = get_pref('scale_factor', 10_0000)
+        verts /= scale_factor
+
+        # Invert y axis
+        verts *= [1, -1, 1]
+
+        return verts, faces_new, mesh_name
 
     def search_annotations(self, annotations, allow_partial=False, intersect=False):
         """Find skeleton IDs by annotation(s)."""
@@ -717,6 +1343,24 @@ class CatmaidClient:
                     matches += e['skeleton_ids']
 
         return np.unique(matches).astype(str)
+
+    def upload_volume(self, vertices, faces, name, comment):
+        """Upload volume to CATMAID."""
+        vertices = np.asarray(vertices)
+        vertices *= get_pref('scale_factor', 10_000)
+        vertices *= [1, -1, 1]
+        vertices = vertices.round()
+
+        faces = np.asarray(faces).astype(int)
+
+        postdata = {'title': name,
+                    'type': 'trimesh',
+                    'mesh': json.dumps([vertices.tolist(), faces.tolist()]),
+                    'comment': comment
+                    }
+
+        url = self.make_url(f"/{self.project_id}/volumes/add")
+        return self.fetch(url, postdata)
 
 ########################################
 #  Utility functions
@@ -807,6 +1451,7 @@ def import_skeleton(compact_skeleton,
     ob.location = (0, 0, 0)
     ob.show_name = True
     ob['type'] = 'NEURON'
+    ob['subtype'] = 'NEURITES'
     ob['CATMAID_object'] = True
     ob['id'] = str(skeleton_id)
     cu.dimensions = '3D'
@@ -817,7 +1462,7 @@ def import_skeleton(compact_skeleton,
     if use_radii:
         cu.bevel_depth = 1
     else:
-        cu.bevel_depth = 0.007
+        cu.bevel_depth = 0.015
 
     # DO NOT touch this: lookup via dict is >10X faster!
     tn_coords = {n: co for n, co in zip(node_ids, coords)}
@@ -887,7 +1532,8 @@ def import_skeleton(compact_skeleton,
         mesh.polygons.foreach_set('use_smooth', [True] * len(mesh.polygons))
 
         soma_ob.name = f'Soma of #{skeleton_id}'
-        soma_ob['type'] = 'SOMA'
+        soma_ob['type'] = 'NEURON'
+        soma_ob['subtype'] = 'SOMA'
         soma_ob['CATMAID_object'] = True
         soma_ob['id'] = str(skeleton_id)
 
@@ -956,7 +1602,8 @@ def import_skeleton(compact_skeleton,
                 sp.points.foreach_set('co', cn.T.ravel())
             bpy.context.scene.collection.objects.link(ob)
 
-            ob['type'] = 'CONNECTORS'
+            ob['type'] = 'NEURON'
+            ob['subtype'] = 'CONNECTORS'
             ob['CATMAID_object'] = True
             ob['cn_type'] = t
             ob['id'] = str(skeleton_id)
@@ -969,6 +1616,23 @@ def import_skeleton(compact_skeleton,
             mat.diffuse_color = settings['color']
             ob.active_material = mat
 
+
+def import_mesh(vertices, faces, name='mesh'):
+    """Import mesh into scene."""
+    if isinstance(vertices, np.ndarray):
+        vertices = vertices.tolist()
+
+    if isinstance(faces, np.ndarray):
+        faces = faces.tolist()
+
+    # Now create the mesh
+    me = bpy.data.meshes.new(name + '_mesh')
+    ob = bpy.data.objects.new(name, me)
+
+    bpy.context.scene.collection.objects.link(ob)
+
+    me.from_pydata(vertices, [], faces)
+    me.update()
 
 
 def make_iterable(x, force_type=None):
@@ -1005,6 +1669,78 @@ def get_pref(key, default=None):
             return default
         else:
             raise KeyError(f'Could not find `CatmaidImport` preferences.')
+
+
+def random_colors(color_count, color_range='RGB',
+                  start_rgb=None, end_rgb=None, alpha=1):
+    """Create evenly spaced colors in given color space."""
+    # Make count_color an even number
+    if color_count % 2 != 0:
+        color_count += 1
+
+    if start_rgb and end_rgb and start_rgb != end_rgb:
+        # Convert RGBs to HSVs
+        start_hue = colorsys.rgb_to_hsv(*start_rgb)[0]
+        end_hue = colorsys.rgb_to_hsv(*end_rgb)[0]
+    else:
+        start_hue = 0
+        end_hue = 1
+
+    colors = []
+    if color_range == 'RGB':
+        interval = (end_hue - start_hue) / color_count
+        for i in range(color_count):
+            saturation = 1
+            brightness = 1
+            hue = start_hue + (interval * i)
+            colors.append(colorsys.hsv_to_rgb(hue, saturation, brightness))
+
+            if brightness == 1:
+                brightness = .5
+            else:
+                brightness = 1
+    elif color_range == 'Grayscale':
+        saturation = 1
+        brightness = 1
+        hue = 0
+        for i in range(color_count):
+            v = 1 / color_count * i
+            colors.append(colorsys.hsv_to_rgb(hue, saturation, v))
+
+    if not isinstance(alpha, type(None)):
+        colors = [[c[0], c[1], c[2], alpha] for c in colors]
+
+    print(f'{len(colors)} random colors created')
+
+    return colors
+
+
+def cluster_kmeans(points, n_clusters):
+    """Produce a k-means clustering for given coordinates."""
+    points = np.asarray(points)
+    # Assign each point to a random cluster but make sure each cluster shows
+    # up at least once
+    clust = list(range(n_clusters)) * math.ceil(len(points) / n_clusters)
+    clust = np.array(clust)[:len(points)]
+    np.random.shuffle(clust)
+
+    while True:
+        # Get cluster centers
+        centers = np.array([points[clust == i].mean(axis=0) for i in np.unique(clust)])
+
+        # For each point get the distance to the cluster centers
+        dists = [np.linalg.norm(points - centers[i], axis=1) for i in np.unique(clust)]
+        dists = np.array(dists).T
+
+        new_clust = np.argmin(dists, axis=1)
+
+        if np.all(new_clust == clust):
+            break
+
+        clust = new_clust
+
+    return clust, centers, dists.min(axis=1)
+
 
 ########################################
 #  Preferences
@@ -1051,7 +1787,7 @@ class CATMAID_preferences(AddonPreferences):
     def draw(self, context):
         layout = self.layout
         layout.label(text="CATMAID Import Preferences. Add your credentials "
-                           "to not have to enter them again after each restart.")
+                          "to not have to enter them again after each restart.")
         layout.prop(self, "server_url")
         layout.prop(self, "api_token")
         layout.prop(self, "project_id")
@@ -1065,9 +1801,18 @@ class CATMAID_preferences(AddonPreferences):
 #  Registeration stuff
 ########################################
 
-classes = (CATMAID_PT_MAIN_PANEL,
+
+classes = (CATMAID_PT_import_panel,
+           CATMAID_PT_export_panel,
+           CATMAID_PT_properties_panel,
            CATMAID_OP_connect,
            CATMAID_OP_fetch_neuron,
+           CATMAID_OP_fetch_volume,
+           CATMAID_OP_upload_volume,
+           CATMAID_OP_display_help,
+           CATMAID_OP_material_change,
+           CATMAID_OP_material_randomize,
+           CATMAID_OP_material_spatial,
            CATMAID_preferences)
 
 
