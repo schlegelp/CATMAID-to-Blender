@@ -135,9 +135,15 @@ class CATMAID_PT_properties_panel(Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("material.change", text="Change Materials",
+        row.operator("material.change", text="Materials",
                      icon='COLOR_BLUE')
         row.operator("display.help", text="", icon='QUESTION').entry = 'change.material'
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("curve.change", text="Curve properties",
+                     icon='COLOR_BLUE')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'curve.change'
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -175,7 +181,7 @@ class CATMAID_PT_properties_panel(Panel):
 class CATMAID_OP_connect(Operator):
     bl_idname = "catmaid.connect"
     bl_label = 'Connect CATMAID'
-    bl_description = "Connect to given CATMAID server."
+    bl_description = "Connect to given CATMAID server"
 
     local_http_user: StringProperty(name="HTTP User")
     local_http_pw: StringProperty(name="HTTP Password",
@@ -244,7 +250,7 @@ class CATMAID_OP_fetch_neuron(Operator):
 
     bl_idname = "fetch.neuron"
     bl_label = 'Fetch neurons'
-    bl_description = "Fetch given neurons from global server."
+    bl_description = "Fetch given neurons from global server"
 
     names: StringProperty(name="Name(s)",
                           description="Search by neuron names. Separate "
@@ -443,7 +449,7 @@ class CATMAID_OP_fetch_volume(Operator):
 
     bl_idname = "import.volume"
     bl_label = "Import volumes from CATMAID"
-    bl_description = "Fetch volume from server."
+    bl_description = "Fetch volume from server"
 
     volume: EnumProperty(name='Import from List',
                          items=_get_available_volumes,
@@ -505,7 +511,7 @@ class CATMAID_OP_upload_volume(Operator):
 
     bl_idname = "export.volume"
     bl_label = "Export mesh to CATMAID"
-    bl_description = "Export mesh to CATMAID as volume."
+    bl_description = "Export mesh to CATMAID as volume"
 
     volume_name: StringProperty(name='Name', default='',
                                 description='If not explicitly provided, will '
@@ -706,17 +712,28 @@ class CATMAID_OP_display_help(Operator):
             box.label(text='This works essentially like the corresponding function of CATMAIDs 3D viewer: nodes and connectors pop into existence ')
             box.label(text='as they were traced originally. Attention: using the <Skip idle phases> option will compromise relation between neurons')
             box.label(text='because idle phases are currently calculated for each neuron individually. The <Show timer> will also be affected!')
+        elif self.entry == 'curve.change':
+            row = layout.row()
+            row.alignment = 'CENTER'
+            row.label(text='Change Curve Properties - Tooltip')
+            box = layout.box()
+            box.label(text='Skeletons are created using curves. Bevel depth determines the ')
+            box.label(text='thickness of the curves. Radial (bevel) and curve resolution ')
+            box.label(text='determine how detailed the curves are - lower to improve ')
+            box.label(text='render performance.')
+
 
     def invoke(self, context, event):
         return context.window_manager.invoke_popup(self, width=400)
 
 
 class CATMAID_OP_material_change(Operator):
-    """Change material -> this is for convenience only."""
+    """Change color and bevel."""
 
     bl_idname = "material.change"
     bl_label = "Change materials."
     bl_options = {'UNDO'}
+    bl_description = "Change color"
 
     which_neurons: EnumProperty(name="Which Objects?",
                                 items=[('Selected', 'Selected', 'Selected'),
@@ -736,10 +753,6 @@ class CATMAID_OP_material_change(Operator):
     new_color: FloatVectorProperty(name="", description="Set new color",
                                    default=(0.0, 1, 0.0), min=0.0, max=1.0,
                                    subtype='COLOR')
-    change_bevel: BoolProperty(name='Thickness', default=False,
-                               description='Change neuron thickness?')
-    new_bevel: FloatProperty(name="", description="Set new thickness.",
-                             default=0.015, min=0)
 
     def check(self, context):
         return True
@@ -765,13 +778,6 @@ class CATMAID_OP_material_change(Operator):
         if self.change_color:
             col = row.column()
             col.prop(self, "new_color")
-
-        row = box.row(align=False)
-        col = row.column()
-        col.prop(self, "change_bevel")
-        if self.change_bevel:
-            col = row.column()
-            col.prop(self, "new_bevel")
 
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
@@ -805,10 +811,121 @@ class CATMAID_OP_material_change(Operator):
                                                     self.new_color[1],
                                                     self.new_color[2],
                                                     1)
-            if self.change_bevel and ob.type == 'CURVE':
-                ob.data.bevel_depth = self.new_bevel
 
         self.report({'INFO'}, f'{len(filtered_ob_list)} materials changed')
+
+        return {'FINISHED'}
+
+
+class CATMAID_OP_curve_change(Operator):
+    """Change curve settings."""
+
+    bl_idname = "curve.change"
+    bl_label = "Change curve properties."
+    bl_options = {'UNDO'}
+    bl_description = "Change curve properties"
+
+    which_neurons: EnumProperty(name="Which Objects?",
+                                items=[('Selected', 'Selected', 'Selected'),
+                                       ('All', 'All', 'All')],
+                                default='Selected',
+                                description="Assign common material to which neurons")
+    to_neurons: BoolProperty(name='Neurons',
+                             default=True,
+                             description='Include neurons?')
+    to_outputs: BoolProperty(name='Presynapses',
+                             default=False,
+                             description='Include presynaptic sites (outgoing)?')
+    to_inputs: BoolProperty(name='Postsynapses',
+                            default=False,
+                            description='Include postsynaptic sites (incoming)?')
+    change_bevel: BoolProperty(name='Thickness', default=False,
+                               description='Change neuron thickness (bevel)?')
+    new_bevel: FloatProperty(name="", description="Set new thickness.",
+                             default=0.015, min=0)
+    change_bevel_res: BoolProperty(name='Radial resolution', default=False,
+                                   description='Change radial (bevel) resolution?')
+    new_bevel_res: IntProperty(name="", description="Set new resolution.",
+                               default=5, min=0)
+    change_curve_res: BoolProperty(name='Curve resolution', default=False,
+                                   description='Change curve resolution?')
+    new_curve_res: IntProperty(name="", description="Set new resolution.",
+                               default=10, min=0)
+
+    def check(self, context):
+        return True
+
+    def draw(self, context):
+        layout = self.layout
+
+        layout.label(text="Apply to")
+        box = layout.box()
+        row = box.row(align=False)
+        row.prop(self, "which_neurons")
+        row = box.row(align=False)
+        row.prop(self, "to_neurons")
+        row.prop(self, "to_outputs")
+        row.prop(self, "to_inputs")
+
+        layout.label(text="Change")
+        box = layout.box()
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "change_bevel")
+        if self.change_bevel:
+            col = row.column()
+            col.prop(self, "new_bevel")
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "change_bevel_res")
+        if self.change_bevel_res:
+            col = row.column()
+            col.prop(self, "new_bevel_res")
+
+        row = box.row(align=False)
+        col = row.column()
+        col.prop(self, "change_curve_res")
+        if self.change_curve_res:
+            col = row.column()
+            col.prop(self, "new_curve_res")
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        if self.which_neurons == 'Selected':
+            ob_list = bpy.context.selected_objects
+        elif self.which_neurons == 'All':
+            ob_list = bpy.data.objects
+
+        filtered_ob_list = []
+
+        # First find the objects
+        for ob in ob_list:
+            if 'subtype' not in ob:
+                continue
+            if ob['subtype'] in ('NEURITES', 'SOMA') and not self.to_neurons:
+                continue
+            if ob['subtype'] in ('CONNECTORS'):
+                if ob['cn_type'] == 'Presynapses' and not self.to_outputs:
+                    continue
+                if ob['cn_type'] == 'Postsynapses' and not self.to_inputs:
+                    continue
+
+            filtered_ob_list.append(ob)
+
+        # Now apply cahnges
+        for ob in filtered_ob_list:
+            if self.change_bevel and ob.type == 'CURVE':
+                ob.data.bevel_depth = self.new_bevel
+            if self.change_bevel_res and ob.type == 'CURVE':
+                ob.data.bevel_resolution = self.new_bevel_res
+            if self.change_curve_res and ob.type == 'CURVE':
+                ob.data.resolution_u = self.new_curve_res
+
+        self.report({'INFO'}, f'{len(filtered_ob_list)} curves changed')
 
         return {'FINISHED'}
 
@@ -1957,6 +2074,7 @@ classes = (CATMAID_PT_import_panel,
            CATMAID_OP_material_randomize,
            CATMAID_OP_material_spatial,
            CATMAID_OP_material_annotation,
+           CATMAID_OP_curve_change,
            CATMAID_preferences)
 
 
