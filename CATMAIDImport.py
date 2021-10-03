@@ -148,12 +148,11 @@ class CATMAID_PT_properties_panel(Panel):
         row.operator("material.kmeans", text="By Spatial Distr.", icon='LIGHT_SUN')
         row.operator("display.help", text="", icon='QUESTION').entry = 'material.kmeans'
 
-        """
-
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("color.by_annotation", text = "By Annotation", icon ='SORTALPHA')
+        row.operator("color.by_annotation", text="By Annotation", icon='SORTALPHA')
 
+        """
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
@@ -914,6 +913,85 @@ class CATMAID_OP_material_spatial(Operator):
         return{'FINISHED'}
 
 
+class CATMAID_OP_material_annotation(Operator):
+    """Color neurons by annotation."""
+
+    bl_idname = "color.by_annotation"
+    bl_label = "Color Neurons based on whether they have given annotation."
+    bl_options = {'UNDO'}
+
+    annotation: StringProperty(name="Annotation",
+                               description="Seperate multiple annotations by "
+                                           "comma without space. Must be exact! "
+                                           "Case-sensitive!")
+    exclude_annotation: StringProperty(name="Exclude",
+                                       description="Seperate multiple annotations "
+                                                   " by comma without space. "
+                                                   "Must be exact! Case-sensitive!")
+    color: FloatVectorProperty(name="Color",
+                               description="Color value.",
+                               default=(1, 0.0, 0.0),
+                               min=0.0, max=1.0, subtype='COLOR')
+    variation: BoolProperty(name="Vary color",
+                            description="Add small variation in color to each "
+                                        "individual neuron.",
+                            default=False)
+    make_non_matched_grey: BoolProperty(name="Color others grey",
+                                        description="If unchecked, color of "
+                                                    "neurons without given "
+                                                    "annotation(s) will not be "
+                                                    "changed.",
+                                        default=False)
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    @classmethod
+    def poll(cls, context):
+        if client:
+            return True
+        return False
+
+    def execute(self, context):
+        skids = get_skids()
+
+        annotations = client.get_annotations(skids)
+
+        include_annotations = [a.strip() for a in self.annotation.split(',')]
+        exclude_annotations = [a.strip() for a in self.exclude_annotation.split(',')]
+
+        for s in skids:
+            objects = skeleton_id_objects(s)
+
+            include = False
+            exclude = False
+            for an in annotations.get(s, []):
+                if an in include_annotations:
+                    include = True
+                if an in exclude_annotations:
+                    exclude = True
+            if not include or exclude:
+                if self.make_non_matched_grey:
+                    for obj in objects:
+                        obj.active_material.diffuse_color = (0.4, 0.4, 0.4, 1)
+                continue
+
+            if self.variation is False:
+                color = self.color
+            elif self.variation is True:
+                color = list(self.color)
+                for i in range(3):
+                    color[i] += np.random.randint(-10, 10) / 100
+
+            if len(color) == 3:
+                color = list(color) + [1]
+
+            for obj in objects:
+                obj.active_material.diffuse_color = color
+
+        return{'FINISHED'}
+
+
 ########################################
 #  CATMAID/neuron-related functions
 ########################################
@@ -1178,6 +1256,28 @@ class CatmaidClient:
         """Return list with annotations."""
         url = self.make_url(f"{self.project_id}/annotations/")
         return self.fetch(url)['annotations']
+
+    def get_annotations(self, skeleton_ids):
+        """Return dictionary with annotations for given skeleton IDs."""
+        skeleton_ids = make_iterable(skeleton_ids, force_type=str)
+
+        url = self.make_url(f'{self.project_id}/skeleton/annotationlist')
+
+        post = {'metaannotations': 0, 'neuronnames': 0}
+        post.update({f'skeleton_ids[{i}]': s for i, s in enumerate(skeleton_ids)})
+
+        response = self.fetch(url, post=post)
+
+        annotations = {}
+        for skid in response['skeletons']:
+            annotations[skid] = []
+            # for entry in annotation_list_temp['skeletons'][skid]:
+            for entry in response['skeletons'][skid]['annotations']:
+                annotation_id = entry['id']
+                annotations[skid].append(
+                    response['annotations'][str(annotation_id)])
+
+        return annotations
 
     def get_user_list(self):
         """Fetch list of CATMAID users."""
@@ -1742,6 +1842,49 @@ def cluster_kmeans(points, n_clusters):
     return clust, centers, dists.min(axis=1)
 
 
+def get_skids():
+    """Return all unique skeleton IDs in the scene."""
+    skids = set()
+    for obj in bpy.data.objects:
+        if 'type' in obj and obj['type'] == 'NEURON':
+            skids.add(obj['id'])
+    return skids
+
+
+def get_neuron_objects(neurites=True, somas=True, connectors=False):
+    """Return all neuron objects in the scene."""
+    objects = []
+    for obj in bpy.data.objects:
+        if 'CATMAID_object' not in obj:
+            continue
+        if 'type' not in obj:
+            continue
+        if obj['type'] == 'NEURON':
+            if obj['subtype'] == 'NEURITES' and not neurites:
+                continue
+            if obj['subtype'] == 'SOMA' and not somas:
+                continue
+            if obj['subtype'] == 'CONNECTORS' and not connectors:
+                continue
+        objects.append(obj)
+    return objects
+
+
+def skeleton_id_objects(skeleton_id, neurites=True, somas=True, connectors=False):
+    """Get all objects matching the given skeleton ID."""
+    skeleton_id = str(skeleton_id)
+    objects = get_neuron_objects(neurites=neurites, somas=somas, connectors=connectors)
+
+    matches = []
+    for obj in objects:
+        if 'id' not in obj:
+            continue
+        if obj['id'] != skeleton_id:
+            continue
+        matches.append(obj)
+    return matches
+
+
 ########################################
 #  Preferences
 ########################################
@@ -1813,6 +1956,7 @@ classes = (CATMAID_PT_import_panel,
            CATMAID_OP_material_change,
            CATMAID_OP_material_randomize,
            CATMAID_OP_material_spatial,
+           CATMAID_OP_material_annotation,
            CATMAID_preferences)
 
 
