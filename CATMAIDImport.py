@@ -138,19 +138,19 @@ class CATMAID_PT_properties_panel(Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("material.change", text="Materials",
-                     icon='COLOR_BLUE')
-        row.operator("display.help", text="", icon='QUESTION').entry = 'change.material'
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
         row.operator("curve.change", text="Curve properties",
                      icon='COLOR_BLUE')
         row.operator("display.help", text="", icon='QUESTION').entry = 'curve.change'
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("material.randomize", text="Colorize", icon='COLOR')
+        row.operator("material.change", text="Set colors",
+                     icon='COLOR_BLUE')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'change.material'
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("material.randomize", text="Randomize colors", icon='COLOR')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -619,6 +619,7 @@ class CATMAID_OP_display_help(Operator):
 
     bl_idname = "display.help"
     bl_label = "Advanced Tooltip"
+    bl_description = "Display help tooltip"
 
     entry: StringProperty(name="which entry to show",
                           default='', options={'HIDDEN'})
@@ -729,10 +730,10 @@ class CATMAID_OP_display_help(Operator):
 
 
 class CATMAID_OP_material_change(Operator):
-    """Change color and bevel."""
+    """Change colors."""
 
     bl_idname = "material.change"
-    bl_label = "Change materials."
+    bl_label = "Change colors"
     bl_options = {'UNDO'}
     bl_description = "Change color"
 
@@ -822,7 +823,7 @@ class CATMAID_OP_curve_change(Operator):
     """Change curve settings."""
 
     bl_idname = "curve.change"
-    bl_label = "Change curve properties."
+    bl_label = "Change curve properties"
     bl_options = {'UNDO'}
     bl_description = "Change curve properties"
 
@@ -934,7 +935,8 @@ class CATMAID_OP_curve_change(Operator):
 class CATMAID_OP_material_randomize(Operator):
     """Assigns new semi-random colors to neurons"""
     bl_idname = "material.randomize"
-    bl_label = "Assign (semi-) random colors."
+    bl_label = "Assign (semi-) random colors"
+    bl_description = "Assign (semi-) random colors"
     bl_options = {'UNDO'}
 
     which_neurons: EnumProperty(name="Which Neurons?",
@@ -984,9 +986,10 @@ class CATMAID_OP_material_randomize(Operator):
 
 
 class CATMAID_OP_material_spatial(Operator):
-    """Color neurons by spatially clustering their somas"""
+    """Color neurons by spatially clustering their somas."""
     bl_idname = "material.kmeans"
-    bl_label = "Color neurons by spatially clustering of their somas (k-Means algorithm)."
+    bl_label = "Color neurons by spatially clustering of their somas (k-Means algorithm)"
+    bl_description = "Color neurons by spatially clustering of their somas (k-Means algorithm)"
     bl_options = {'UNDO'}
 
     # Number of clusters the algorithm tries to create
@@ -1035,7 +1038,8 @@ class CATMAID_OP_material_annotation(Operator):
     """Color neurons by annotation."""
 
     bl_idname = "color.by_annotation"
-    bl_label = "Color Neurons based on whether they have given annotation."
+    bl_label = "Color Neurons based on whether they have given annotation"
+    bl_description = "Color neurons by annotation"
     bl_options = {'UNDO'}
 
     annotation: StringProperty(name="Annotation",
@@ -1118,7 +1122,7 @@ class CATMAID_OP_material_strahler(Operator):
     """
 
     bl_idname = "color.by_strahler"
-    bl_label = "Color neuron(s) by strahler index."
+    bl_label = "Color neuron(s) by strahler index"
     bl_description = "Color neuron(s) by strahler index"
     bl_options = {'UNDO'}
 
