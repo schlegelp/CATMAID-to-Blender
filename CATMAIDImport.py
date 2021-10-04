@@ -36,6 +36,7 @@ from bpy.props import (FloatVectorProperty, FloatProperty, StringProperty,
                        BoolProperty, EnumProperty, IntProperty,
                        CollectionProperty)
 
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from requests.exceptions import HTTPError
 
@@ -51,7 +52,7 @@ bl_info = {
  "version": (7, 0, 0),
  "for_catmaid_version": '2020.02.15-684-gcbe37bd',
  "blender": (2, 9, 2),
- "location": "Properties > Scene > CATMAID Import",
+ "location": "View3D > Sidebar (N) > CATMAID",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
  "warning": "",
  "wiki_url": "",
@@ -60,15 +61,17 @@ bl_info = {
 
 client = None
 
+# Will populate this later
 catmaid_volumes = [('None', 'None', 'Do not import volume from this list')]
 
 DEFAULTS = {
- "connectors": {0: {'color': (0, 0.8, 0.8, 1),  # postsynapses
+ "connectors": {
+                0: {'color': (0, 0.8, 0.8, 1),  # postsynapses
                     'name': 'Presynapses'},
                 1: {'color': (1, 0, 0, 1),  # presynapses
                     'name': 'Postsynapses'},
                 2: {'color': (0, 1, 0, 1),  # gap junctions
-                    'name': 'GapJunction'},
+                    'name': 'GapJunctions'},
                 3: {'color': (0.5, 0, 0.5, 1),  # abutting
                     'name': 'Abutting'},
                }
@@ -147,31 +150,26 @@ class CATMAID_PT_properties_panel(Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("material.randomize", text="Randomize Color", icon='COLOR')
+        row.operator("material.randomize", text="Colorize", icon='COLOR')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("material.kmeans", text="By Spatial Distr.", icon='LIGHT_SUN')
+        row.operator("material.kmeans", text="Color by clusters", icon='LIGHT_SUN')
         row.operator("display.help", text="", icon='QUESTION').entry = 'material.kmeans'
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
-        row.operator("color.by_annotation", text="By Annotation", icon='SORTALPHA')
+        row.operator("color.by_annotation", text="Color by Annotation", icon='SORTALPHA')
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
+        row.operator("color.by_strahler", text="Color by Strahler Index", icon='MOD_ARRAY')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'color.by_strahler'
 
         """
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
         row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("color.by_pairs", text = "By Pairs", icon ='MOD_ARRAY')
-        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_pairs'
-
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("color.by_strahler", text = "By Strahler Index", icon ='MOD_ARRAY')
-        row.operator("display.help", text = "", icon ='QUESTION').entry = 'color.by_strahler'
         """
 
 ########################################
@@ -259,12 +257,12 @@ class CATMAID_OP_fetch_neuron(Operator):
     partial_match: BoolProperty(name="Allow partial matches?", default=False,
                                 description="Allow partial matches for neuron "
                                             "names and annotations! Will also "
-                                            "become case-insensitive.")
+                                            "become case-insensitive")
     annotations: StringProperty(name="Annotations(s)",
                                 description="Search by skeleton IDs. Separate "
                                             "multiple annotations by commas. For "
                                             "example: 'annotation 1,annotation2"
-                                            ",annotation3'.")
+                                            ",annotation3'")
     intersect: BoolProperty(name="Intersect", default=False,
                             description="If true, all identifiers (e.g. two "
                                         "annotations or name + annotation) "
@@ -274,10 +272,10 @@ class CATMAID_OP_fetch_neuron(Operator):
                                  description="Search by skeleton IDs. Separate "
                                              "multiple IDs by commas. "
                                              "Does not accept more than 400 "
-                                             "characters in total!")
+                                             "characters in total")
     minimum_nodes: IntProperty(name="Minimum node count", default=1, min=1,
                                description="Neurons with fewer nodes than this "
-                                           " will be ignored.")
+                                           " will be ignored")
     import_synapses: BoolProperty(name="Synapses", default=True,
                                   description="Import chemical synapses (pre- "
                                               "and postsynapses), similarly to "
@@ -287,23 +285,23 @@ class CATMAID_OP_fetch_neuron(Operator):
                                                    "similarly to 3D Viewer in "
                                                    "CATMAID")
     import_abutting: BoolProperty(name="Abutting Connectors", default=False,
-                                  description="Import abutting connectors.")
+                                  description="Import abutting connectors")
     downsampling: IntProperty(name="Downsampling Factor", default=2, min=1, max=20,
                               description="Will reduce number of nodes by given "
                                           "factor. Root, ends and forks are "
-                                          "preserved.")
+                                          "preserved")
     use_radius: BoolProperty(name="Use node radii", default=False,
                              description="If true, neuron will use node radii "
                                          "for thickness. If false, radius is "
-                                         "assumed to be 70nm (for visibility).")
+                                         "assumed to be 70nm (for visibility)")
     neuron_mat_for_connectors: BoolProperty(name="Connector color as neuron",
                                             default=False,
                                             description="If true, connectors "
                                                         "will have the same "
-                                                        "color as the neuron.")
+                                                        "color as the neuron")
     skip_existing: BoolProperty(name="Skip existing", default=True,
                                 description="If True, will not add neurons that "
-                                            "are already in the scene.")
+                                            "are already in the scene")
 
     # ATTENTION:
     # using check() in an operator that uses threads, will lead to segmentation faults!
@@ -410,7 +408,7 @@ class CATMAID_OP_fetch_neuron(Operator):
             counts = client.get_node_counts(skeletons_to_retrieve)
             skeletons_to_retrieve = [e for e in skeletons_to_retrieve if counts.get(str(e), 0) >= self.minimum_nodes]
 
-        ### Extract skeleton IDs from skeleton_id string
+        # Extract skeleton IDs from skeleton_id string
         print(f'{len(skeletons_to_retrieve)} neurons found - resolving names...')
         neuron_names = client.get_names(skeletons_to_retrieve)
 
@@ -423,9 +421,11 @@ class CATMAID_OP_fetch_neuron(Operator):
         print(f"Importing for {len(skdata)} skeletons into Blender")
 
         for skid in skdata:
+            # Create an object name
+            object_name = f'#{skid} - {neuron_names[str(skid)]}'
             import_skeleton(skdata[skid],
                             skeleton_id=str(skid),
-                            neuron_name=neuron_names[str(skid)],
+                            object_name=object_name,
                             downsampling=self.downsampling,
                             import_synapses=self.import_synapses,
                             import_gap_junctions=self.import_gap_junctions,
@@ -615,7 +615,8 @@ class CATMAID_OP_upload_volume(Operator):
 
 
 class CATMAID_OP_display_help(Operator):
-    """Displays popup with additional help"""
+    """Displays popup with additional help."""
+
     bl_idname = "display.help"
     bl_label = "Advanced Tooltip"
 
@@ -632,7 +633,7 @@ class CATMAID_OP_display_help(Operator):
             row.alignment = 'CENTER'
             row.label(text='Color Neurons by Similarity - Tooltip')
             box = layout.box()
-            box.label(text='This function colors neurons based on how similar they are in respect to either: morphology, synapse placement, connectivity or paired connectivity.')
+            box.label(text='This function colors neurons based on how similar they are with respect to either: morphology, synapse placement, connectivity or paired connectivity.')
             box.label(text='It is highly recommended to have SciPy installed - this will increase speed of calculation a lot!')
             box.label(text='See https://github.com/schlegelp/CATMAID-to-Blender on how to install SciPy in Blender.')
             box.label(text='Use <Settings> button to set parameters, then <Start Calculation>.')
@@ -643,11 +644,11 @@ class CATMAID_OP_display_help(Operator):
             layout.label(text='Synapses:')
             box = layout.box()
             box.label(text='Neurons that have similar numbers of synapses in the same area')
-            box.label(text='are similar. See Schlegel et al (2016, bioRxiv).')
+            box.label(text='are similar. See Schlegel et al. (2016, eLife).')
             layout.label(text='Connectivity:')
             box = layout.box()
             box.label(text='Neurons that connects with similar number of synapses to the same')
-            box.label(text='partners are similar. See Schlegel et al (2016, bioRxiv).')
+            box.label(text='partners are similar. See Schlegel et al. (2016, eLife).')
             layout.label(text='Paired Connectivity:')
             box = layout.box()
             box.label(text='Neurons that mirror (left/right comparison) each others connectivity')
@@ -701,7 +702,7 @@ class CATMAID_OP_display_help(Operator):
             row.alignment = 'CENTER'
             row.label(text='Color by Strahler - Tooltip')
             box = layout.box()
-            box.label(text='Colors neurons by strahler index. Result may will look odd')
+            box.label(text='Colors neurons by Strahler index. Result may will look odd')
             box.label(text='in the viewport unless viewport shading is set to <render> or')
             box.label(text='<material>. In any case, if you render it will look awesome!')
         elif self.entry == 'animate.history':
@@ -931,9 +932,9 @@ class CATMAID_OP_curve_change(Operator):
 
 
 class CATMAID_OP_material_randomize(Operator):
-    """Assigns Random Materials to Neurons"""
+    """Assigns new semi-random colors to neurons"""
     bl_idname = "material.randomize"
-    bl_label = "Assign Random Materials"
+    bl_label = "Assign (semi-) random colors."
     bl_options = {'UNDO'}
 
     which_neurons: EnumProperty(name="Which Neurons?",
@@ -1107,6 +1108,103 @@ class CATMAID_OP_material_annotation(Operator):
                 obj.active_material.diffuse_color = color
 
         return{'FINISHED'}
+
+
+class CATMAID_OP_material_strahler(Operator):
+    """Colors a neuron by strahler index.
+
+    This essentially just triggers a reload a reload of these neurons with
+    Strahler coloring.
+    """
+
+    bl_idname = "color.by_strahler"
+    bl_label = "Color neuron(s) by strahler index."
+    bl_description = "Color neuron(s) by strahler index"
+    bl_options = {'UNDO'}
+
+    which_neurons:  EnumProperty(name="Which Neurons?",
+                                 items=[('All', 'All', 'All'),
+                                        ('Selected', 'Selected', 'Selected')],
+                                 description="Choose which neurons to color by similarity",
+                                 default='All')
+    color_code: EnumProperty(name="Color code",
+                             items=(('grey_alpha', 'Shades of grey', 'use shades of grey + alpha values'),
+                                    ('color_alpha', 'New random color', 'use shades of a random color + alpha values'),
+                                    ('this_color', 'Use current color', 'use shades of current color + alpha values')),
+                             default="this_color",
+                             description="Choose how Strahler index is encoded")
+    white_background: BoolProperty(name="White background", default=False,
+                                   description="Inverts color scheme for white background")
+
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    @classmethod
+    def poll(cls, context):
+        if client:
+            return True
+        return False
+
+    def execute(self, context):
+        # Gather skeleton IDs
+        if self.which_neurons == 'All':
+            skids = get_skids()
+        elif self.which_neurons == 'Selected':
+            skids = get_skids(selected_only=True)
+        elif self.which_neurons == 'Active':
+            ob = bpy.context.active_object
+            skids = []
+            if 'type' in ob and 'id' in ob:
+                skids.append(ob['id'])
+
+        # Collect current colors and downsampling factors
+        downsampling = {}
+        current_colors = {}
+        names = {}
+        use_radii = {}
+        for s in skids:
+            objects = skeleton_id_objects(s, somas=False, neurites=True, connectors=False)
+            downsampling[s] = 2
+            for obj in objects:
+                downsampling[s] = obj.get('downsampling', 2)
+                current_colors[s] = tuple(obj.active_material.diffuse_color)
+                names[s] = obj.name
+
+                if any([p.radius != 1 for p in obj.data.splines[0].points]):
+                    use_radii[s] = True
+                else:
+                    use_radii[s] = False
+
+        # Delete these neurons
+        delete_neuron_objects(skids, connectors=False)
+
+        skdata = client.get_skeletons(list(skids),
+                                      with_history=False,
+                                      with_abutting=False)
+
+        for s in skdata:
+            if self.color_code == 'this_color':
+                color = current_colors[s]
+            elif self.color_code == 'grey_alpha':
+                if self.white_background:
+                    color = (0, 0, 0, 1)
+                else:
+                    color = (1, 1, 1, 1)
+            else:
+                color = (np.random.randint(0, 255, 4) / 255).tolist()
+
+            import_skeleton(skdata[s],
+                            skeleton_id=str(s),
+                            object_name=names[s],
+                            downsampling=downsampling[s],
+                            import_synapses=False,
+                            import_gap_junctions=False,
+                            import_abutting=False,
+                            color_by_strahler=color,
+                            use_radii=use_radii[s])
+
+        return {'FINISHED'}
 
 
 ########################################
@@ -1586,19 +1684,18 @@ class CatmaidClient:
 
 def import_skeleton(compact_skeleton,
                     skeleton_id,
-                    neuron_name='',
+                    object_name,
                     downsampling=None,
                     import_synapses=False,
                     import_gap_junctions=False,
                     import_abutting=False,
                     use_radii=False,
+                    color_by_strahler=False,
                     neuron_mat_for_connectors=False):
     """Import given skeleton into Blender."""
-    # Create an object name
-    object_name = f'#{skeleton_id} - {neuron_name}'
-    #Truncate object name is necessary
+    # Truncate object name is necessary
     if len(object_name) >= 60:
-        cellname = object_name[:56] + '...'
+        object_name = object_name[:55] + '[..]'
 
     # Extract nodes, connectors and tags from compact_skeleton
     nodes = np.array(compact_skeleton[0])
@@ -1618,40 +1715,14 @@ def import_skeleton(compact_skeleton,
     parent_ids[parent_ids == None] = -1
     parent_ids = parent_ids.astype(int)
 
-    # Create child -> parent dict
-    lop = dict(zip(node_ids, parent_ids))
-
-    # Create segments:
-    # 1. Find leafs
-    leafs = node_ids[~np.isin(node_ids, parent_ids)]
-    # 2. For each leaf get the distance to root
-    dists = dict()
-    for l in leafs:
-        d = 1
-        p = lop[l]
-        while p >= 0:
-            d += 1
-            p = lop[p]
-        dists[l] = d
-    # 3. Sort leafs by distance to roots
-    leafs = sorted(leafs, key=lambda x: dists.get(x, 0), reverse=True)
-    # 4. Extract segments
-    seen: set = set()
-    segments = []
-    for node in leafs:
-        segment = [node]
-        parent = lop[node]
-        while parent >= 0:
-            segment.append(parent)
-            if parent in seen:
-                break
-            seen.add(parent)
-            parent = lop[parent]
-
-        if len(segment) > 1:
-            segments.append(segment)
-
-    segments = sorted(segments, key=lambda x: len(x), reverse=True)
+    if color_by_strahler:
+        segments = extract_short_segments(node_ids, parent_ids)
+        SI = strahler_index(node_ids, parent_ids)
+        prepare_strahler_mats(skeleton_id,
+                              max_strahler_index=max(SI.values()),
+                              color=color_by_strahler)
+    else:
+        segments = extract_long_segments(node_ids, parent_ids)
 
     # Find soma
     soma_node = None
@@ -1670,6 +1741,7 @@ def import_skeleton(compact_skeleton,
     ob['type'] = 'NEURON'
     ob['subtype'] = 'NEURITES'
     ob['CATMAID_object'] = True
+    ob['downsampling'] = downsampling if downsampling else 0
     ob['id'] = str(skeleton_id)
     cu.dimensions = '3D'
     cu.fill_mode = 'FULL'
@@ -1688,7 +1760,8 @@ def import_skeleton(compact_skeleton,
 
     # Collect fix nodes
     if isinstance(downsampling, int) and downsampling > 1:
-        fix_nodes = [root_node] + leafs
+        leafs = node_ids[~np.isin(node_ids, parent_ids)]
+        fix_nodes = [root_node] + leafs.tolist()
         _nodes, _counts = np.unique(parent_ids, return_counts=True)
         branch_points = _nodes[_counts > 1]
         fix_nodes += branch_points.tolist()
@@ -1720,11 +1793,32 @@ def import_skeleton(compact_skeleton,
             r = [tn_radii[tn] for tn in seg]
             sp.points.foreach_set('radius', r)
 
+        if color_by_strahler:
+            # This Strahler's material name
+            mat_name = f'#{skeleton_id} StrahlerMat {SI[seg[0]]}'
+            # Grab the corresponding material
+            mat = bpy.data.materials[mat_name]
+
+            if mat_name not in ob.data.materials:
+                ob.data.materials.append(bpy.data.materials[mat_name])
+                slot = len(ob.data.materials)
+            else:
+                slot = [mat.name for mat in ob.data.materials].index(mat_name)
+
+            # Set this material for this spline
+            sp.material_index = slot
+
     # Take care of the material
-    mat_name = (f'M#{skeleton_id}')[:59]
-    mat = bpy.data.materials.get(mat_name,
-                                 bpy.data.materials.new(mat_name))
-    ob.active_material = mat
+    if not color_by_strahler:
+        mat_name = f'M#{skeleton_id}'[:59]
+        mat = bpy.data.materials.get(mat_name,
+                                     bpy.data.materials.new(mat_name))
+        ob.active_material = mat
+    elif 'soma' in tags:
+        # Select the appropriate material for use at soma
+        soma_node = tags['soma'][0]
+        mat_name = f'#{skeleton_id} StrahlerMat {SI[soma_node]}'
+        mat = bpy.data.materials[mat_name]
 
     # Link curve to scene
     bpy.context.scene.collection.objects.link(ob)
@@ -1832,6 +1926,76 @@ def import_skeleton(compact_skeleton,
                                          bpy.data.materials.new(mat_name))
             mat.diffuse_color = settings['color']
             ob.active_material = mat
+
+
+def extract_short_segments(node_ids, parent_ids):
+    """Extract linear segments for given neuron.
+
+    This only goes from branches/leafs to the next branch or leaf - hence
+    "short segments".
+    """
+    # 1. Find leafs and branch points
+    leafs = node_ids[~np.isin(node_ids, parent_ids)]
+    _parents, counts = np.unique(parent_ids, return_counts=True)
+    branch_points = _parents[counts > 1]
+    # Combine into seeds
+    seeds = np.append(leafs, branch_points)
+
+    # Add root to stop condition
+    root = node_ids[parent_ids < 0]
+    stops = set(np.append(seeds, root))
+
+    segments = []
+    lop = dict(zip(node_ids, parent_ids))
+    for node in seeds:
+        this_seg = [node]
+        parent = lop[node]
+        while parent not in stops:
+            this_seg.append(parent)
+            parent = lop[parent]
+        segments.append(this_seg)
+
+    return sorted(segments, key=lambda x: len(x), reverse=True)
+
+
+def extract_long_segments(node_ids, parent_ids):
+    """Extract linear segments for given neuron maximizing length."""
+    # Create child -> parent dict
+    lop = dict(zip(node_ids, parent_ids))
+
+    # Create segments:
+    # 1. Find leafs
+    leafs = node_ids[~np.isin(node_ids, parent_ids)]
+    # 2. For each leaf get the distance to root
+    dists = dict()
+    for l in leafs:
+        d = 1
+        p = lop[l]
+        while p >= 0:
+            d += 1
+            p = lop[p]
+        dists[l] = d
+    # 3. Sort leafs by distance to roots
+    leafs = sorted(leafs, key=lambda x: dists.get(x, 0), reverse=True)
+    # 4. Extract segments
+    seen: set = set()
+    segments = []
+    for node in leafs:
+        segment = [node]
+        parent = lop[node]
+        while parent >= 0:
+            segment.append(parent)
+            if parent in seen:
+                break
+            seen.add(parent)
+            parent = lop[parent]
+
+        if len(segment) > 1:
+            segments.append(segment)
+
+    segments = sorted(segments, key=lambda x: len(x), reverse=True)
+
+    return segments
 
 
 def import_mesh(vertices, faces, name='mesh'):
@@ -1959,19 +2123,30 @@ def cluster_kmeans(points, n_clusters):
     return clust, centers, dists.min(axis=1)
 
 
-def get_skids():
+def get_skids(selected_only=False):
     """Return all unique skeleton IDs in the scene."""
+    if selected_only:
+        to_check = bpy.context.selected_objects
+    else:
+        to_check = bpy.data.objects
+
     skids = set()
-    for obj in bpy.data.objects:
+    for obj in to_check:
         if 'type' in obj and obj['type'] == 'NEURON':
             skids.add(obj['id'])
     return skids
 
 
-def get_neuron_objects(neurites=True, somas=True, connectors=False):
+def get_neuron_objects(neurites=True, somas=True, connectors=False,
+                       selected_only=False):
     """Return all neuron objects in the scene."""
+    if selected_only:
+        to_check = bpy.context.selected_objects
+    else:
+        to_check = bpy.data.objects
+
     objects = []
-    for obj in bpy.data.objects:
+    for obj in to_check:
         if 'CATMAID_object' not in obj:
             continue
         if 'type' not in obj:
@@ -1987,10 +2162,37 @@ def get_neuron_objects(neurites=True, somas=True, connectors=False):
     return objects
 
 
-def skeleton_id_objects(skeleton_id, neurites=True, somas=True, connectors=False):
+def delete_neuron_objects(skeleton_ids, neurites=True, somas=True, connectors=True):
+    """Delete neuron objects for given skeleton ID(s)."""
+    skeleton_ids = make_iterable(skeleton_ids)
+
+    # First deselect all objects
+    for obj in bpy.data.objects:
+        obj.select_set(False)
+
+    # Now select objects to delete
+    for skid in skeleton_ids:
+        to_delete = skeleton_id_objects(skid,
+                                        neurites=neurites,
+                                        somas=somas,
+                                        connectors=connectors)
+        for obj in to_delete:
+            obj.select_set(True)
+
+    print(f'Deleting {len(bpy.context.selected_objects)} from scene')
+
+    # Delete selected objects
+    bpy.ops.object.delete(use_global=False)
+
+
+def skeleton_id_objects(skeleton_id, neurites=True, somas=True, connectors=False,
+                        selected_only=False):
     """Get all objects matching the given skeleton ID."""
     skeleton_id = str(skeleton_id)
-    objects = get_neuron_objects(neurites=neurites, somas=somas, connectors=connectors)
+    objects = get_neuron_objects(neurites=neurites,
+                                 somas=somas,
+                                 connectors=connectors,
+                                 selected_only=selected_only)
 
     matches = []
     for obj in objects:
@@ -2000,6 +2202,92 @@ def skeleton_id_objects(skeleton_id, neurites=True, somas=True, connectors=False
             continue
         matches.append(obj)
     return matches
+
+
+def strahler_index(node_ids, parent_ids):
+    """Calculate Strahler index for all treenodes
+
+    - starts with index of 1 at each leaf
+    - at forks with varying incoming strahler index, the highest index
+      is continued
+    - at forks with the same incoming strahler index, highest index + 1 is
+      continued
+    """
+    node_ids = np.asarray(node_ids)
+    parent_ids = np.asarray(parent_ids)
+
+    # Find leaf and branch points
+    leafs = node_ids[~np.isin(node_ids, parent_ids)]
+
+    _parents, counts = np.unique(parent_ids, return_counts=True)
+    branch_points = _parents[counts > 1]
+
+    list_of_parents = dict(zip(node_ids, parent_ids))
+    list_of_childs = defaultdict(list)
+    for n, p in zip(node_ids, parent_ids):
+        list_of_childs[p].append(n)
+
+    strahler_index = {}
+    seeds = set(np.append(leafs, branch_points).tolist())
+    while seeds:
+        seen = set()
+        for i, node in enumerate(seeds):
+
+            # First check, if all childs of this starting point have already
+            # been processed and skip this node for now if that's not yet the
+            # case
+            skip = False
+            for child in list_of_childs[node]:
+                if child not in strahler_index:
+                    skip = True
+                    break
+            if skip:
+                continue
+
+            # Calculate index for this branch
+            previous_indices = []
+            for child in list_of_childs[node]:
+                previous_indices.append(strahler_index[child])
+
+            if len(previous_indices) == 0:
+                this_branch_index = 1
+            elif len(previous_indices) == 1:  # this actually should not happen
+                this_branch_index = previous_indices[0]
+            elif len(set(previous_indices)) == 1:
+                this_branch_index = previous_indices[0] + 1
+            else:
+                this_branch_index = max(previous_indices)
+
+            strahler_index[node] = this_branch_index
+            seen.add(node)
+
+            # Now propagate Strahler indices
+            parent = list_of_parents.get(node, -1)
+            while parent >= 0 and parent not in seeds:
+                strahler_index[parent] = this_branch_index
+                parent = list_of_parents.get(parent, -1)
+
+        # Drop those seeds that we were able to process in this run
+        for node in seen:
+            seeds.remove(node)
+
+    return strahler_index
+
+
+def prepare_strahler_mats(skid, max_strahler_index, color):
+    """Create set of Strahler index materials for this neuron."""
+    for i in range(1, (max_strahler_index + 1)):
+        mat_name = f'#{skid} StrahlerMat {i}'
+
+        cfactor = i / max_strahler_index
+        this_color = [c * cfactor for c in color]
+
+        if len(this_color) == 3:
+            this_color.append(1)
+
+        mat = bpy.data.materials.get(mat_name,
+                                     bpy.data.materials.new(mat_name))
+        mat.diffuse_color = this_color
 
 
 ########################################
@@ -2075,6 +2363,7 @@ classes = (CATMAID_PT_import_panel,
            CATMAID_OP_material_spatial,
            CATMAID_OP_material_annotation,
            CATMAID_OP_curve_change,
+           CATMAID_OP_material_strahler,
            CATMAID_preferences)
 
 
