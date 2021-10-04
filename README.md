@@ -34,12 +34,12 @@ plugin (see the [tutorials](https://navis.readthedocs.io/en/latest/source/galler
 First download [CATMAIDImport.py](https://raw.githubusercontent.com/schlegelp/CATMAID-to-Blender/master/CATMAIDImport.py), then:
 
 #### Option A:
-1. Start Blender -> **File** -> **User Preferences** -> **Addons** -> **Install from File** and select CATMAIDImport.py
+1. Start Blender -> **Edit** -> **Preferences** -> **Addons** -> **Install from File** and select `CATMAIDImport.py`
 2. Activate by ticking check box and click **Save User Setting**
 
 #### Option B:
-1. Directly place CATMAIDImport.py in \Blender\...\scripts\addons
-2. Start Blender -> **File** -> **User Preferences** -> **Addons** -> Search for **CATMAIDImport** addon
+1. Directly place `CATMAIDImport.py` in `\Blender\...\scripts\addons`
+2. Start Blender -> **Edit** -> **Preferences** -> **Addons** -> Search for the **CATMAID** addon
 3. Activate the script by ticking the check box and click **Save User Settings** (see [here](http://wiki.blender.org/index.php/Doc:2.6/Manual/Extensions/Python/Add-Ons) for more detailed description)
 
 #### Dependencies:
@@ -48,8 +48,8 @@ brings its own Python distribution and the plugin is written such that it
 works without any external libraries.
 
 ## Setting a default connection:
-Open **File** -> **User Preferences**, navigate to **Add-ons** ->
-**CATMAIDImport** and change **CATMAID Server URL** in **preferences** to
+Open **Edit** -> **Preferences**, navigate to **Add-ons** ->
+**CATMAID Import** and change **CATMAID Server URL** in **preferences** to
 your server. I also recommend saving your credentials for convenience:
 
 Public CATMAID instances (like that hosted by
