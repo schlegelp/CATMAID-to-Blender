@@ -105,6 +105,11 @@ class CATMAID_PT_import_panel(Panel):
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
+        row.operator("fetch.connectors", text="Import Connectors", icon='PMARKER_SEL')
+        row.operator("display.help", text="", icon='QUESTION').entry = 'retrieve.connectors'
+
+        row = layout.row(align=True)
+        row.alignment = 'EXPAND'
         row.operator("import.volume", text='Import Volume', icon='IMPORT')
 
 
@@ -285,6 +290,9 @@ class CATMAID_OP_fetch_neuron(Operator):
                                                    "CATMAID")
     import_abutting: BoolProperty(name="Abutting Connectors", default=False,
                                   description="Import abutting connectors")
+    cn_spheres: BoolProperty(name="Connectors as spheres", default=False,
+                             description="Import connectors as spheres instead "
+                                         "of curves")
     downsampling: IntProperty(name="Downsampling Factor", default=2, min=1, max=20,
                               description="Will reduce number of nodes by given "
                                           "factor. Root, ends and forks are "
@@ -293,7 +301,7 @@ class CATMAID_OP_fetch_neuron(Operator):
                              description="If true, neuron will use node radii "
                                          "for thickness. If false, radius is "
                                          "assumed to be 70nm (for visibility)")
-    neuron_mat_for_connectors: BoolProperty(name="Connector color as neuron",
+    neuron_mat_for_connectors: BoolProperty(name="Connectors same color as neuron",
                                             default=False,
                                             description="If true, connectors "
                                                         "will have the same "
@@ -340,6 +348,10 @@ class CATMAID_OP_fetch_neuron(Operator):
         row.prop(self, "import_synapses")
         row.prop(self, "import_gap_junctions")
         row.prop(self, "import_abutting")
+
+        row = box.row(align=False)
+        row.prop(self, "cn_spheres")
+        row.enabled = True if self.import_synapses or self.import_gap_junctions or self.import_abutting else False
 
         row = box.row(align=False)
         row.prop(self, "neuron_mat_for_connectors")
@@ -430,6 +442,7 @@ class CATMAID_OP_fetch_neuron(Operator):
                             import_gap_junctions=self.import_gap_junctions,
                             import_abutting=self.import_abutting,
                             use_radii=self.use_radius,
+                            cn_as_curves=not self.cn_spheres,
                             neuron_mat_for_connectors=self.neuron_mat_for_connectors)
 
         print(f'Finished Import in {time.time()-start:.1f}s')
@@ -1210,6 +1223,151 @@ class CATMAID_OP_material_strahler(Operator):
         return {'FINISHED'}
 
 
+class CATMAID_OP_fetch_connectors(Operator):
+    """Retrieves connectors of given neuron(s)."""
+    bl_idname = "fetch.connectors"
+    bl_label = "Retrieve Connectors"
+    bl_description = "Import connectors for given neurons/connections."
+
+    which_neurons: EnumProperty(name="For which neuron(s)?",
+                                items=[('Selected', 'Selected', 'Selected'),
+                                       ('All', 'All', 'All')],
+                                description="Choose for which neurons to retrieve connectors")
+    color_prop: EnumProperty(name="Colors",
+                             items=[('Black', 'Black', 'Black'),
+                                    ('Mesh-color', 'Mesh-color', 'Mesh-color'),
+                                    ('Random', 'Random', 'Random')],
+                             description="How to color the connectors")
+    create_as: EnumProperty(name="Create as",
+                            items=[('Spheres', 'Spheres', 'Spheres'),
+                                   ('Curves', 'Curves', 'Curves')],
+                            description="As what to create them")
+    base_radius: FloatProperty(name="Base radius", default=0.05,
+                               description="Base radius for connector spheres")
+    get_inputs: BoolProperty(name="Retrieve inputs", default=True)
+    get_outputs: BoolProperty(name="Retrieve outputs", default=True)
+    restr_sources: StringProperty(name="Restrict sources",
+                                  description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those that target this set of neurons')
+    restr_targets: StringProperty(name="Restrict targets",
+                                  description='Use e.g. "12345,6789" or "annotation:glomerulus DA1" to restrict connectors to those coming from this set of neurons')
+
+    @classmethod
+    def poll(cls, context):
+        if client:
+            return True
+        return False
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+    def execute(self, context):
+        if self.which_neurons == 'All':
+            to_search = bpy.data.objects
+        elif self.which_neurons == 'Selected':
+            to_search = bpy.context.selected_objects
+
+        filtered_ob_list = []
+        filtered_skids = set()
+        for ob in to_search:
+            if 'type' in ob and ob['type'] == 'NEURON':
+                if 'id' in ob:
+                    filtered_skids.add(ob['id'])
+                    filtered_ob_list.append(ob)
+
+        if not filtered_skids:
+            print('Error - no neurons found! Cancelled')
+            self.report({'ERROR'}, 'No neurons found!')
+            return {'FINISHED'}
+
+        start = time.clock()
+        print(f"Retrieving connector data for {len(filtered_ob_list)} neurons")
+
+        # First get the connector IDs for each neuron
+        skdata = client.get_skeletons(filtered_skids)
+
+        # Extract connectors
+        all_cn_ids = []
+        for s in skdata:
+            for c in skdata[s][1]:
+                if c[2] == 1 and self.get_inputs:
+                    all_cn_ids.append(c[1])
+                elif c[2] == 0 and self.get_outputs:
+                    all_cn_ids.append(c[1])
+        all_cn_ids = set(all_cn_ids)
+
+        if self.restr_sources or self.restr_targets:
+            # Get connector details.
+            # Data: [[2211855,  # connector ID
+            #         {'presynaptic_to': 16,
+            #          'postsynaptic_to': [15614, 10474885],
+            #          'presynaptic_to_node': 124396,
+            #          'postsynaptic_to_node': [2211846, 32891740]}], ...]
+            cn_details = client.get_connector_details(all_cn_ids)
+
+            if self.restr_sources:
+                source_skids = eval_skids(self.restr_sources)
+                source_skids = set([int(s) for s in source_skids])
+                source_allowed = set()
+                for cn in cn_details:
+                    if set(cn[1]['postsynaptic_to']) & source_skids:
+                        source_allowed.add(cn[0])
+                all_cn_ids = all_cn_ids & source_allowed
+
+            if self.restr_targets:
+                target_skids = set(eval_skids(self.restr_targets))
+                target_skids = set([int(s) for s in target_skids])
+                target_allowed = set()
+                for cn in cn_details:
+                    if cn[1]['presynaptic_to'] in target_skids:
+                        target_allowed.add(cn[0])
+                all_cn_ids = all_cn_ids & target_allowed
+
+        if not len(all_cn_ids):
+            self.report({'ERROR'}, 'No connectors left after filtering!')
+            return {'FINISHED'}
+
+        # Drop connectors that didn't meet the criteria
+        for s in skdata:
+            skdata[s][1] = [cn for cn in skdata[s][1] if cn[1] in all_cn_ids]
+
+        for s in skdata:
+            # Extract nodes, connectors and tags from compact_skeleton
+            nodes = np.array(skdata[s][0])
+            connectors = np.array(skdata[s][1])
+
+            # Extract coords
+            coords = nodes[:, 3:6].astype('float32')
+            # Apply scaling
+            coords /= get_pref('scale_factor', 10_000)
+            # Invert y-axis
+            coords *= [1, -1, 1]
+
+            # Get node and parent IDs
+            node_ids = nodes[:, 0].astype(int)
+
+            tn_coords = {n: co for n, co in zip(node_ids, coords)}
+
+            if self.color_prop == 'Random':
+                color = (np.random.randint(0, 255, 3) / 255).tolist()
+            elif self.color_prop == 'Mesh-color':
+                obj = skeleton_id_objects(s, neurites=True, somas=False, connectors=False)[0]
+                color = list(obj.active_material.diffuse_color)
+            else:
+                color = [0, 0, 0]
+
+            import_connectors(connectors,
+                              tn_coords,
+                              skeleton_id=s,
+                              color=color,
+                              import_synapses=True,
+                              import_gap_junctions=True,
+                              import_abutting=True,
+                              base_radius=self.base_radius,
+                              as_curves=self.create_as == 'Curves')
+
+        return {'FINISHED'}
+
+
 ########################################
 #  CATMAID/neuron-related functions
 ########################################
@@ -1497,6 +1655,30 @@ class CatmaidClient:
 
         return annotations
 
+    def get_connector_details(self, connector_ids):
+        """Return details for given connectors."""
+        connector_ids = make_iterable(connector_ids, force_type=str)
+        connector_ids = list(set(connector_ids))
+
+        url = self.make_url(f'{self.project_id}/connector/skeletons')
+
+        CHUNK_SIZE = min(50000, len(connector_ids))
+
+        connectors = []
+        for ch in range(0, len(connector_ids), CHUNK_SIZE):
+            post = {}
+            for i, s in enumerate(connector_ids[ch:ch + CHUNK_SIZE]):
+                post[f'connector_ids[{i}]'] = s
+
+            connectors += self.fetch(url, post=post)
+
+        # Data: [[2211855,  # connector ID
+        #         {'presynaptic_to': 16,
+        #          'postsynaptic_to': [15614, 10474885],
+        #          'presynaptic_to_node': 124396,
+        #          'postsynaptic_to_node': [2211846, 32891740]}], ...]
+        return connectors
+
     def get_user_list(self):
         """Fetch list of CATMAID users."""
         url = self.make_url('user-list')
@@ -1694,6 +1876,7 @@ def import_skeleton(compact_skeleton,
                     import_abutting=False,
                     use_radii=False,
                     color_by_strahler=False,
+                    cn_as_curves=False,
                     neuron_mat_for_connectors=False):
     """Import given skeleton into Blender."""
     # Truncate object name is necessary
@@ -1857,40 +2040,61 @@ def import_skeleton(compact_skeleton,
         bpy.context.scene.collection.objects.link(soma_ob)
 
     if len(connectors):
-        # Compile the connector types to plot
-        to_add = []
-        if import_synapses:
-            to_add += [0, 1]
-        if import_gap_junctions:
-            to_add += [2]
-        if import_abutting:
-            to_add += [3]
+        import_connectors(connectors,
+                          tn_coords,
+                          skeleton_id,
+                          color=None,
+                          as_curves=cn_as_curves,
+                          import_synapses=import_synapses,
+                          import_gap_junctions=import_gap_junctions,
+                          import_abutting=import_abutting)
 
-        # Parse the actual data
-        cn_types = connectors[:, 2].astype(int)
-        cn_nodes = connectors[:, 0].astype(int)
-        cn_coords = connectors[:, 3:6].astype('float32')
-        cn_coords /= get_pref('scale_factor', 10_000)
-        cn_coords *= [1, -1, 1]
 
-        for t in to_add:
-            # Load the default properties for this connector type
-            settings = DEFAULTS['connectors'][t]
+def import_connectors(connectors,
+                      tn_coords,
+                      skeleton_id,
+                      color=None,
+                      import_synapses=True,
+                      import_gap_junctions=True,
+                      import_abutting=True,
+                      base_radius=0.1,
+                      as_curves=True):
+    """Import connectors."""
+    # Compile the connector types to plot
+    to_add = []
+    if import_synapses:
+        to_add += [0, 1]
+    if import_gap_junctions:
+        to_add += [2]
+    if import_abutting:
+        to_add += [3]
 
-            # Which connectors are of this type
-            is_this_type = cn_types == t
+    # Parse the actual data
+    cn_types = connectors[:, 2].astype(int)
+    cn_nodes = connectors[:, 0].astype(int)
+    cn_coords = connectors[:, 3:6].astype('float32')
+    cn_coords /= get_pref('scale_factor', 10_000)
+    cn_coords *= [1, -1, 1]
 
-            # If none, just skip
-            if not np.any(is_this_type):
-                continue
+    for t in to_add:
+        # Load the default properties for this connector type
+        settings = DEFAULTS['connectors'][t]
 
-            ob_name = f'{settings["name"]} of {skeleton_id}'
+        # Which connectors are of this type
+        is_this_type = cn_types == t
 
-            # Only plot as lines if this is a TreeNeuron
-            this_cn_coords = cn_coords[is_this_type]
-            this_tn_coords = np.array([tn_coords[tn] for tn in cn_nodes[is_this_type]])
+        # If none, just skip
+        if not np.any(is_this_type):
+            continue
 
-            # Add 4th coordinate for Blender
+        ob_name = f'{settings["name"]} of {skeleton_id}'
+
+        # Get this subtype's coordinates
+        this_cn_coords = cn_coords[is_this_type]
+        this_tn_coords = np.array([tn_coords[tn] for tn in cn_nodes[is_this_type]])
+
+        if as_curves:
+            # Add 4th coordinate for Blender's curves
             this_cn_coords = np.c_[this_cn_coords, [0] * this_cn_coords.shape[0]]
             this_tn_coords = np.c_[this_tn_coords, [0] * this_tn_coords.shape[0]]
 
@@ -1914,21 +2118,61 @@ def import_skeleton(compact_skeleton,
 
                 # Move points
                 sp.points.foreach_set('co', cn.T.ravel())
-            bpy.context.scene.collection.objects.link(ob)
+        else:
+            # Get & scale coordinates and invert y
+            coords = this_cn_coords
 
-            ob['type'] = 'NEURON'
-            ob['subtype'] = 'CONNECTORS'
-            ob['CATMAID_object'] = True
-            ob['cn_type'] = t
-            ob['id'] = str(skeleton_id)
-            ob.location = (0, 0, 0)
-            ob.show_name = False
+            # Generate a base sphere
+            base_mesh = bpy.data.meshes.new(f'_connector base mesh')
+            bm = bmesh.new()
+            bmesh.ops.create_icosphere(bm, subdivisions=2,
+                                       diameter=base_radius)
+            bm.to_mesh(base_mesh)
+            bm.free()
 
-            mat_name = f'{settings["name"]} of #{skeleton_id}'
-            mat = bpy.data.materials.get(mat_name,
-                                         bpy.data.materials.new(mat_name))
-            mat.diffuse_color = settings['color']
-            ob.active_material = mat
+            base_verts = np.vstack([v.co for v in base_mesh.vertices])
+            base_faces = np.vstack([list(v.vertices) for v in base_mesh.polygons])
+
+            # Repeat sphere vertices
+            sp_verts = np.tile(base_verts.T, coords.shape[0]).T
+            # Add coords offsets to each sphere
+            offsets = np.repeat(coords, base_verts.shape[0], axis=0)
+            sp_verts += offsets
+
+            # Repeat sphere faces and offset vertex indices
+            sp_faces = np.tile(base_faces.T, coords.shape[0]).T
+            face_offsets = np.repeat(np.arange(coords.shape[0]),
+                                     base_faces.shape[0], axis=0)
+            face_offsets *= base_verts.shape[0]
+            sp_faces += face_offsets.reshape((face_offsets.size, 1))
+
+            # Generate mesh
+            mesh = bpy.data.meshes.new(ob_name + ' mesh')
+            mesh.from_pydata(sp_verts, [], sp_faces.tolist())
+            mesh.polygons.foreach_set('use_smooth', [True] * len(mesh.polygons))
+            ob = bpy.data.objects.new(ob_name, mesh)
+
+        bpy.context.scene.collection.objects.link(ob)
+
+        ob['type'] = 'NEURON'
+        ob['subtype'] = 'CONNECTORS'
+        ob['CATMAID_object'] = True
+        ob['cn_type'] = t
+        ob['id'] = str(skeleton_id)
+        ob.location = (0, 0, 0)
+        ob.show_name = False
+
+        mat_name = f'{settings["name"]} of #{skeleton_id}'
+        mat = bpy.data.materials.get(mat_name,
+                                     bpy.data.materials.new(mat_name))
+
+        if not color:
+            color = settings['color']
+        elif len(color) == 3:
+            color = list(color) + [1]
+
+        mat.diffuse_color = color
+        ob.active_material = mat
 
 
 def extract_short_segments(node_ids, parent_ids):
@@ -2293,9 +2537,60 @@ def prepare_strahler_mats(skid, max_strahler_index, color):
         mat.diffuse_color = this_color
 
 
+def eval_skids(x):
+    """Evalutate parameters passed as skeleton IDs.
+
+    Will turn annotations and neuron names into skeleton IDs.
+
+    Parameters
+    ----------
+    x :             int | str | list thereof
+                    Your options are either:
+                     1. int or list of ints will be assumed to be skeleton IDs
+                     2. str or list of str:
+                         - if convertible to int, will be interpreted as skid
+                         - if starts with 'annotation:' will be assumed to be
+                           annotations
+                         - else, will be assumed to be neuron names
+
+    Returns
+    -------
+    skeleton_ids :  list
+                    List containing skeleton IDs as strings.
+
+    """
+    if ',' in x:
+        x = x.split(',')
+
+    if isinstance(x, (int, np.int64, np.int32, np.int)):
+        return [str(x)]
+    elif isinstance(x, (str, np.str)):
+        try:
+            return [str(int(x))]
+        except ValueError:
+            if x.startswith('annotation:'):
+                return client.search_annotations(x[11:])
+            elif x.startswith('name:'):
+                return client.search_names(x[5:], allow_partial=False)
+            else:
+                return client.search_names(x, allow_partial=False)
+    elif isinstance(x, (list, np.ndarray)):
+        skids = []
+        for e in x:
+            temp = eval_skids(e)
+            if isinstance(temp, (list, np.ndarray)):
+                skids += temp
+            else:
+                skids.append(temp)
+        return list(set(skids))
+    else:
+        raise TypeError(f'Unable to parse skeleton IDs from type "{type(x)}"')
+
+
 ########################################
 #  Preferences
 ########################################
+
 
 class CATMAID_preferences(AddonPreferences):
     bl_idname = 'CATMAIDImport'
@@ -2357,6 +2652,7 @@ classes = (CATMAID_PT_import_panel,
            CATMAID_PT_export_panel,
            CATMAID_PT_properties_panel,
            CATMAID_OP_connect,
+           CATMAID_OP_fetch_connectors,
            CATMAID_OP_fetch_neuron,
            CATMAID_OP_fetch_volume,
            CATMAID_OP_upload_volume,
