@@ -50,7 +50,7 @@ bl_info = {
  "author": "Philipp Schlegel",
  "version": (7, 0, 0),
  "for_catmaid_version": '2020.02.15-684-gcbe37bd',
- "blender": (2, 9, 2),
+ "blender": (2, 80, 0),  # this MUST be 2.80.0 (i.e. not 2.9x)
  "location": "View3D > Sidebar (N) > CATMAID",
  "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
  "warning": "",
@@ -93,7 +93,7 @@ class CATMAID_PT_import_panel(Panel):
         layout = self.layout
 
         ver_str = '.'.join([str(i) for i in bl_info['version']])
-        layout.label(text=f'CATMAID plugin version v{ver_str}')
+        layout.label(text=f'CATMAID plugin v{ver_str}')
 
         row = layout.row(align=True)
         row.alignment = 'EXPAND'
@@ -2349,7 +2349,7 @@ class CATMAID_preferences(AddonPreferences):
         layout.prop(self, "max_requests")
 
 ########################################
-#  Registeration stuff
+#  Registration stuff
 ########################################
 
 
