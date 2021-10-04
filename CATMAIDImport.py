@@ -25,7 +25,6 @@ import json
 import math
 import re
 import requests
-import six
 import time
 import urllib
 
@@ -2026,7 +2025,7 @@ def make_iterable(x, force_type=None):
     For dicts, keys will be turned into array.
 
     """
-    if not isinstance(x, collections.Iterable) or isinstance(x, six.string_types):
+    if not isinstance(x, collections.Iterable) or isinstance(x, str):
         x = [x]
 
     if isinstance(x, dict) or isinstance(x, set):
