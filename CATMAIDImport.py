@@ -1279,7 +1279,6 @@ class CATMAID_OP_fetch_connectors(Operator):
             self.report({'ERROR'}, 'No neurons found!')
             return {'FINISHED'}
 
-        start = time.clock()
         print(f"Retrieving connector data for {len(filtered_ob_list)} neurons")
 
         # First get the connector IDs for each neuron
