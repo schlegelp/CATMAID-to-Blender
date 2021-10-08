@@ -1283,6 +1283,11 @@ class CATMAID_OP_fetch_connectors(Operator):
         # Extract connectors
         all_cn_ids = []
         for s in skdata:
+            if not skdata[s] or not len(skdata[s]) >= 2:
+                print(f'Neuron {s} has no connectors! Import cancelled.')
+                self.report({'ERROR'}, f'Neuron {s} has no connectors! Import cancelled.')
+                return {'FINISHED'}
+
             for c in skdata[s][1]:
                 if c[2] == 1 and self.get_inputs:
                     all_cn_ids.append(c[1])
