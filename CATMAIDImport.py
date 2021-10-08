@@ -34,6 +34,8 @@ from bpy.types import Panel, Operator, AddonPreferences
 from bpy.props import (FloatVectorProperty, FloatProperty, StringProperty,
                        BoolProperty, EnumProperty, IntProperty,
                        CollectionProperty)
+from bpy_extras.io_utils import orientation_helper, axis_conversion
+from mathutils import Matrix
 
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -169,12 +171,6 @@ class CATMAID_PT_properties_panel(Panel):
         row.alignment = 'EXPAND'
         row.operator("color.by_strahler", text="Color by Strahler Index", icon='MOD_ARRAY')
         row.operator("display.help", text="", icon='QUESTION').entry = 'color.by_strahler'
-
-        """
-        row = layout.row(align=True)
-        row.alignment = 'EXPAND'
-        row.operator("color.by_synapse_count", text = "By Synapse Count", icon ='IPO_QUART')
-        """
 
 ########################################
 #  Operators
@@ -1336,10 +1332,9 @@ class CATMAID_OP_fetch_connectors(Operator):
 
             # Extract coords
             coords = nodes[:, 3:6].astype('float32')
-            # Apply scaling
-            coords /= get_pref('scale_factor', 10_000)
-            # Invert y-axis
-            coords *= [1, -1, 1]
+
+            # Apply global transforms
+            coords = apply_global_xforms(coords)
 
             # Get node and parent IDs
             node_ids = nodes[:, 0].astype(int)
@@ -1778,11 +1773,7 @@ class CatmaidClient:
             faces_new[faces == i] = inv[i]
 
         # Scale vertices
-        scale_factor = get_pref('scale_factor', 10_0000)
-        verts /= scale_factor
-
-        # Invert y axis
-        verts *= [1, -1, 1]
+        verts = apply_global_xforms(verts)
 
         return verts, faces_new, mesh_name
 
@@ -1846,9 +1837,9 @@ class CatmaidClient:
     def upload_volume(self, vertices, faces, name, comment):
         """Upload volume to CATMAID."""
         vertices = np.asarray(vertices)
-        vertices *= get_pref('scale_factor', 10_000)
-        vertices *= [1, -1, 1]
-        vertices = vertices.round()
+
+        # Invert global transforms
+        vertices = apply_global_xforms(vertices, inverse=True).round()
 
         faces = np.asarray(faces).astype(int)
 
@@ -1889,10 +1880,9 @@ def import_skeleton(compact_skeleton,
 
     # Extract coords
     coords = nodes[:, 3:6].astype('float32')
-    # Apply scaling
-    coords /= get_pref('scale_factor', 10_000)
-    # Invert y-axis
-    coords *= [1, -1, 1]
+
+    # Apply global transforms
+    coords = apply_global_xforms(coords)
 
     # Get node and parent IDs
     node_ids = nodes[:, 0].astype(int)
@@ -2072,8 +2062,9 @@ def import_connectors(connectors,
     cn_types = connectors[:, 2].astype(int)
     cn_nodes = connectors[:, 0].astype(int)
     cn_coords = connectors[:, 3:6].astype('float32')
-    cn_coords /= get_pref('scale_factor', 10_000)
-    cn_coords *= [1, -1, 1]
+
+    # Apply global transforms
+    cn_coords = apply_global_xforms(cn_coords)
 
     for t in to_add:
         # Load the default properties for this connector type
@@ -2118,7 +2109,6 @@ def import_connectors(connectors,
                 # Move points
                 sp.points.foreach_set('co', cn.T.ravel())
         else:
-            # Get & scale coordinates and invert y
             coords = this_cn_coords
 
             # Generate a base sphere
@@ -2586,11 +2576,33 @@ def eval_skids(x):
         raise TypeError(f'Unable to parse skeleton IDs from type "{type(x)}"')
 
 
+def apply_global_xforms(points, inverse=False):
+    """Apply globally defined transforms to coordinates."""
+    global_scale = 1 / get_pref('scale_factor', 10_000)
+    up = get_pref('axis_up', 'Z')
+    forward = get_pref('axis_forward', 'Y')
+
+    # Note: `Matrix` is available at global namespace in Blender
+    global_matrix = axis_conversion(from_forward=forward,
+                                    from_up=up,
+                                    ).to_4x4() @ Matrix.Scale(global_scale, 4)
+
+    if inverse:
+        global_matrix = np.linalg.inv(global_matrix)
+
+    # Add a fourth column to points
+    points_mat = np.ones((points.shape[0], 4))
+    points_mat[:, :3] = points
+
+    return np.dot(global_matrix, points_mat.T).T[:, :3]
+
+
 ########################################
 #  Preferences
 ########################################
 
 
+@orientation_helper(axis_forward='-Z', axis_up='-Y')
 class CATMAID_preferences(AddonPreferences):
     bl_idname = 'CATMAIDImport'
 
@@ -2613,13 +2625,9 @@ class CATMAID_preferences(AddonPreferences):
                                            "username (top right) on the project "
                                            "selection screen. Leave empty if "
                                            "no token required.")
-    scale_factor: IntProperty(name="CATMAID to Blender unit conversion Factor",
-                                   default=10000,
-                                   description='CATMAID units will be divided '
-                                               'by this factor when imported '
-                                               'into Blender.')
+
     time_out: IntProperty(name="Time to Server Timeout [s]",
-                          default=20,
+                          default=30,
                           description='Server requests will be timed out '
                                       'after this duration to prevent '
                                       'Blender from freezing indefinitely.')
@@ -2629,18 +2637,34 @@ class CATMAID_preferences(AddonPreferences):
                                           'requests can help if you get errors '
                                           'when loading loads of neurons.')
 
+    scale_factor: IntProperty(name="CATMAID to Blender unit conversion Factor",
+                              default=10000,
+                              description='CATMAID units will be divided '
+                                          'by this factor when imported '
+                                          'into Blender.')
+
     def draw(self, context):
         layout = self.layout
-        layout.label(text="CATMAID Import Preferences. Add your credentials "
-                          "to not have to enter them again after each restart.")
-        layout.prop(self, "server_url")
-        layout.prop(self, "api_token")
-        layout.prop(self, "project_id")
-        layout.prop(self, "http_user")
-        layout.prop(self, "http_pw")
-        layout.prop(self, "scale_factor")
-        layout.prop(self, "time_out")
-        layout.prop(self, "max_requests")
+
+        box = layout.box()
+        box.label(text="CATMAID credentials:")
+        box.prop(self, "server_url")
+        box.prop(self, "api_token")
+        box.prop(self, "project_id")
+        box.prop(self, "http_user")
+        box.prop(self, "http_pw")
+
+        box = layout.box()
+        box.label(text="Connection settings:")
+        box.prop(self, "time_out")
+        box.prop(self, "max_requests")
+
+        box = layout.box()
+        box.label(text="Import options:")
+        box.prop(self, "scale_factor")
+        box.prop(self, "axis_forward")
+        box.prop(self, "axis_up")
+
 
 ########################################
 #  Registration stuff
