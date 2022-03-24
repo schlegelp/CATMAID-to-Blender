@@ -6,15 +6,15 @@ with [CATMAID](https://github.com/catmaid/CATMAID "CATMAID Repo") servers,
 request and analyze data. Tested with Blender 2.92 and CATMAID 2020.02.15
 
 ## Important notice
-As of version `7.0.0` this plugin is compatible with Blender 2.9x (2.8x should
-also work but I haven't tested it). This unfortunately also makes it
-incompatible with older Blender versions (i.e. 2.7x).
+As of version `7.0.0` this plugin is compatible with Blender 2.9x (2.8x and 3.x
+should also work but I haven't tested it). This unfortunately also makes it
+incompatible with older Blender <=2.7x.
 
 I took this opportunity to do a full refactor of the code to make things
 faster and easier to maintain. This includes dropping a bunch of functionality
 and to focus on the visualization aspects.
 
-Notably I removed:
+Notably, I removed:
 
 - coloring neurons by user
 - importing pairs of neurons
@@ -24,7 +24,7 @@ Notably I removed:
 - similarity metrics
 - animation of history
 
-If for some reason you really really need a function that got dropped,
+If, for some reason, you really really need a function that got dropped,
 please open an issue here on Github. I also highly recommend you check out
 [pymaid](https://github.com/schlegelp/pymaid) and [navis](https://github.com/schlegelp/navis)
 which - in combination - let you do all the stuff that was dropped from this
@@ -52,8 +52,8 @@ Open **Edit** -> **Preferences**, navigate to **Add-ons** ->
 **CATMAID Import** and change **CATMAID Server URL** in **preferences** to
 your server. I also recommend saving your credentials for convenience:
 
-Public CATMAID instances (like that hosted by
-[VirtualFlyBrain](https://catmaid.virtualflybrain.org/)) to not require an API
+Public CATMAID instances (like the one hosted by
+[VirtualFlyBrain](https://catmaid.virtualflybrain.org/)) do not require an API
 token or HTTP users/passwords. If you want to connect to a private instance
 however, chances are you will need to add credentials. For Information on how
 to retrieve your Token look [here](http://catmaid.github.io/dev/api.html#api-token).
@@ -72,6 +72,8 @@ A couple notes:
 - functions that need you to be logged into your CATMAID server will be
   disabled (greyed out) until you did so by using 'Connect to CATMAID'
 - in order to identify cell bodies, the plugin searches for nodes with a `soma` tag
+- try hovering over a button/field or click on the "?" next to it to get a helpful
+  tooltip
 
 ## Tutorials:
 Please check out the Github [Wiki](https://github.com/schlegelp/CATMAID-to-Blender/wiki) for additional information and tutorials.
