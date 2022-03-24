@@ -1354,6 +1354,9 @@ class CATMAID_OP_fetch_connectors(Operator):
             else:
                 color = [0, 0, 0]
 
+            if not len(connectors):
+                continue
+
             import_connectors(connectors,
                               tn_coords,
                               skeleton_id=s,
