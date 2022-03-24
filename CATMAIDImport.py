@@ -2564,7 +2564,7 @@ def eval_skids(x):
     if ',' in x:
         x = x.split(',')
 
-    if isinstance(x, (int, np.int64, np.int32, np.int)):
+    if isinstance(x, (int, np.int64, np.int32, np.int16)):
         return [str(x)]
     elif isinstance(x, (str, np.str)):
         try:
