@@ -1796,6 +1796,7 @@ class CatmaidClient:
             matches = [x for x in all_ann if True in [y.lower() in x['name'].lower() for y in annotations]]
 
         if not matches:
+            print('Found no annotation(s) matching', annotations)
             return []
 
         url = self.make_url(f"{self.project_id}/annotations/query-targets")
