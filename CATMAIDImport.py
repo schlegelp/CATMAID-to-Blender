@@ -2295,7 +2295,7 @@ def get_pref(key, default=None):
         else:
             raise KeyError(f'`CatmaidImport` has no preference "{key}"')
     else:
-        if default:
+        if not isinstance(default, type(None)):
             return default
         else:
             raise KeyError(f'Could not find `CatmaidImport` preferences.')
