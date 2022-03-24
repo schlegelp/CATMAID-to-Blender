@@ -2019,7 +2019,10 @@ def import_skeleton(compact_skeleton,
 
         # Construct the bmesh cube and assign it to the blender mesh.
         bm = bmesh.new()
-        bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, diameter=rad)
+        try:
+            bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, diameter=rad)
+        except TypeError:
+            bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, radius=rad)
         bm.to_mesh(mesh)
         bm.free()
 
@@ -2122,8 +2125,10 @@ def import_connectors(connectors,
             # Generate a base sphere
             base_mesh = bpy.data.meshes.new(f'_connector base mesh')
             bm = bmesh.new()
-            bmesh.ops.create_icosphere(bm, subdivisions=2,
-                                       diameter=base_radius)
+            try:
+                bmesh.ops.create_icosphere(bm, subdivisions=2, diameter=base_radius)
+            except TypeError:
+                bmesh.ops.create_icosphere(bm, subdivisions=2, radius=base_radius)
             bm.to_mesh(base_mesh)
             bm.free()
 
