@@ -1257,6 +1257,11 @@ class CATMAID_OP_fetch_connectors(Operator):
         return context.window_manager.invoke_props_dialog(self)
 
     def execute(self, context):
+        if not self.get_inputs and not self.get_outputs:
+            print(f'Must not exclude inputs AND outputs from import - there is nothing left.')
+            self.report({'ERROR'}, 'Must not exclude inputs AND outputs from import - there is nothing left.')
+            return {'FINISHED'}
+
         if self.which_neurons == 'All':
             to_search = bpy.data.objects
         elif self.which_neurons == 'Selected':
@@ -1275,60 +1280,72 @@ class CATMAID_OP_fetch_connectors(Operator):
             self.report({'ERROR'}, 'No neurons found!')
             return {'FINISHED'}
 
-        print(f"Retrieving connector data for {len(filtered_ob_list)} neurons")
+        print(f"Retrieving connector data for {len(filtered_ob_list)} objects")
 
         # First get the connector IDs for each neuron
         skdata = client.get_skeletons(filtered_skids)
 
-        # Extract connectors
-        all_cn_ids = []
-        for s in skdata:
-            if not skdata[s] or not len(skdata[s]) >= 2:
-                print(f'Neuron {s} has no connectors! Import cancelled.')
-                self.report({'ERROR'}, f'Neuron {s} has no connectors! Import cancelled.')
-                return {'FINISHED'}
+        # Drop inputs or outputs
+        if not self.get_inputs:
+            for s in skdata:
+                if not skdata[s] or len(skdata[s]) < 2:
+                    continue
+                skdata[s][1] = [c for c in skdata[s][1] if c[2] != 1]
 
-            for c in skdata[s][1]:
-                if c[2] == 1 and self.get_inputs:
-                    all_cn_ids.append(c[1])
-                elif c[2] == 0 and self.get_outputs:
-                    all_cn_ids.append(c[1])
-        all_cn_ids = set(all_cn_ids)
+        if not self.get_outputs:
+            for s in skdata:
+                if not skdata[s] or len(skdata[s]) < 2:
+                    continue
+                skdata[s][1] = [c for c in skdata[s][1] if c[2] != 0]
 
         if self.restr_sources or self.restr_targets:
+            all_cn_ids = []
+            for s in skdata:
+                if not skdata[s] or len(skdata[s]) < 2:
+                    continue
+                all_cn_ids += [c[1] for c in skdata[s][1]]
+
             # Get connector details.
             # Data: [[2211855,  # connector ID
             #         {'presynaptic_to': 16,
             #          'postsynaptic_to': [15614, 10474885],
             #          'presynaptic_to_node': 124396,
             #          'postsynaptic_to_node': [2211846, 32891740]}], ...]
-            cn_details = client.get_connector_details(all_cn_ids)
+            cn_details = client.get_connector_details(list(set(all_cn_ids)))
 
-            if self.restr_sources:
+            allowed_cn_in = set()
+            if self.restr_sources and self.get_inputs:
                 source_skids = eval_skids(self.restr_sources)
                 source_skids = set([int(s) for s in source_skids])
-                source_allowed = set()
                 for cn in cn_details:
-                    if set(cn[1]['postsynaptic_to']) & source_skids:
-                        source_allowed.add(cn[0])
-                all_cn_ids = all_cn_ids & source_allowed
+                    if cn[1]['presynaptic_to'] in source_skids:
+                        allowed_cn_in.add(cn[0])
 
-            if self.restr_targets:
+                print(f'{len(allowed_cn_in)} incoming connectors left after filtering')
+
+            allowed_cn_out = set()
+            if self.restr_targets and self.get_outputs:
                 target_skids = set(eval_skids(self.restr_targets))
                 target_skids = set([int(s) for s in target_skids])
-                target_allowed = set()
                 for cn in cn_details:
-                    if cn[1]['presynaptic_to'] in target_skids:
-                        target_allowed.add(cn[0])
-                all_cn_ids = all_cn_ids & target_allowed
+                    if set(cn[1]['postsynaptic_to']) & target_skids:
+                        allowed_cn_out.add(cn[0])
 
-        if not len(all_cn_ids):
-            self.report({'ERROR'}, 'No connectors left after filtering!')
-            return {'FINISHED'}
+                print(f'{len(allowed_cn_out)} outgoing connectors left after filtering')
 
-        # Drop connectors that didn't meet the criteria
-        for s in skdata:
-            skdata[s][1] = [cn for cn in skdata[s][1] if cn[1] in all_cn_ids]
+            # Drop connectors that didn't meet the criteria
+            for s in skdata:
+                if not skdata[s] or len(skdata[s]) < 2:
+                    continue
+                cn_keep = []
+                for cn in skdata[s][1]:
+                    if cn[2] == 0:
+                        if not self.restr_targets or cn[1] in allowed_cn_out:
+                            cn_keep.append(cn)
+                    elif cn[2] == 1:
+                        if not self.restr_sources or cn[1] in allowed_cn_in:
+                            cn_keep.append(cn)
+                skdata[s][1] = cn_keep
 
         for s in skdata:
             # Extract nodes, connectors and tags from compact_skeleton
@@ -2639,7 +2656,6 @@ class CATMAID_preferences(AddonPreferences):
                                            "username (top right) on the project "
                                            "selection screen. Leave empty if "
                                            "no token required.")
-
     time_out: IntProperty(name="Time to Server Timeout [s]",
                           default=30,
                           description='Server requests will be timed out '
@@ -2650,7 +2666,6 @@ class CATMAID_preferences(AddonPreferences):
                               description='Restricting the number of parallel '
                                           'requests can help if you get errors '
                                           'when loading loads of neurons.')
-
     scale_factor: IntProperty(name="CATMAID to Blender unit conversion Factor",
                               default=10000,
                               description='CATMAID units will be divided '
