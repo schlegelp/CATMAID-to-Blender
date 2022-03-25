@@ -2567,7 +2567,7 @@ def eval_skids(x):
 
     if isinstance(x, (int, np.int64, np.int32, np.int16)):
         return [str(x)]
-    elif isinstance(x, (str, np.str)):
+    elif isinstance(x, str):
         try:
             return [str(int(x))]
         except ValueError:
