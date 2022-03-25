@@ -50,7 +50,7 @@ from requests.exceptions import HTTPError
 bl_info = {
  "name": "CATMAID Import",
  "author": "Philipp Schlegel",
- "version": (7, 0, 1),
+ "version": (7, 0, 2),
  "for_catmaid_version": '2020.02.15-684-gcbe37bd',
  "blender": (2, 80, 0),  # this MUST be 2.80.0 (i.e. not 2.9x)
  "location": "View3D > Sidebar (N) > CATMAID",
