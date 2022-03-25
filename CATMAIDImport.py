@@ -1835,7 +1835,7 @@ class CatmaidClient:
                     'range_length': 500,
                     'with_annotations': False}
             results = self.fetch(url, post)['entities']
-            for e in results['entities']:
+            for e in results:
                 if allow_partial and e['type'] == 'neuron' and n.lower() in e['name'].lower():
                     matches += e['skeleton_ids']
                 if not allow_partial and e['type'] == 'neuron' and e['name'] == n:
