@@ -38,6 +38,7 @@ from bpy_extras.io_utils import orientation_helper, axis_conversion
 from mathutils import Matrix
 
 from collections import defaultdict
+from collections.abc import  Iterable
 from concurrent.futures import ThreadPoolExecutor
 from requests.exceptions import HTTPError
 
@@ -2289,7 +2290,7 @@ def make_iterable(x, force_type=None):
     For dicts, keys will be turned into array.
 
     """
-    if not isinstance(x, collections.Iterable) or isinstance(x, str):
+    if not isinstance(x, Iterable) or isinstance(x, str):
         x = [x]
 
     if isinstance(x, dict) or isinstance(x, set):
