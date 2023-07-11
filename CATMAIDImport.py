@@ -19,7 +19,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import bmesh
 import bpy
-import collections
 import colorsys
 import json
 import math
@@ -32,8 +31,7 @@ import numpy as np
 
 from bpy.types import Panel, Operator, AddonPreferences
 from bpy.props import (FloatVectorProperty, FloatProperty, StringProperty,
-                       BoolProperty, EnumProperty, IntProperty,
-                       CollectionProperty)
+                       BoolProperty, EnumProperty, IntProperty,)
 from bpy_extras.io_utils import orientation_helper, axis_conversion
 from mathutils import Matrix
 
@@ -51,11 +49,11 @@ from requests.exceptions import HTTPError
 bl_info = {
  "name": "CATMAID Import",
  "author": "Philipp Schlegel",
- "version": (7, 0, 2),
+ "version": (7, 1, 0),
  "for_catmaid_version": '2020.02.15-684-gcbe37bd',
  "blender": (2, 80, 0),  # this MUST be 2.80.0 (i.e. not 2.9x)
  "location": "View3D > Sidebar (N) > CATMAID",
- "description": "Imports Neuron from CATMAID server, Analysis tools, Export to SVG",
+ "description": "Imports Neuron from CATMAID server, Analysis tools",
  "warning": "",
  "wiki_url": "",
  "tracker_url": "",
@@ -274,9 +272,12 @@ class CATMAID_OP_fetch_neuron(Operator):
                                              "multiple IDs by commas. "
                                              "Does not accept more than 400 "
                                              "characters in total")
-    minimum_nodes: IntProperty(name="Minimum node count", default=1, min=1,
-                               description="Neurons with fewer nodes than this "
-                                           " will be ignored")
+    minimum_nodes: IntProperty(name="Minimum node count", default=0, min=0,
+                               description="Neurons matching above criteria but with "
+                                           "fewer nodes than this will be ignored. "
+                                           "If > 0 AND all other filters are "
+                                           "left empty will fetch all skeletons "
+                                           " with this many nodes or more.")
     import_synapses: BoolProperty(name="Synapses", default=True,
                                   description="Import chemical synapses (pre- "
                                               "and postsynapses), similarly to "
@@ -407,17 +408,28 @@ class CATMAID_OP_fetch_neuron(Operator):
                                               set(retrieve_by_names),
                                               set(retrieve_by_skids))
 
+        if self.minimum_nodes > 1 and skeletons_to_retrieve:
+            print(f'Filtering {len(skeletons_to_retrieve)} neurons for size')
+            counts = client.get_node_counts(skeletons_to_retrieve)
+            skeletons_to_retrieve = [e for e in skeletons_to_retrieve if counts.get(str(e), 0) >= self.minimum_nodes]
+
         if self.skip_existing:
             existing_skids = {ob['skeleton_id'] for ob in bpy.data.objects if 'skeleton_id' in ob}
             skeletons_to_retrieve = skeletons_to_retrieve - existing_skids
 
-        if self.minimum_nodes > 1 and skeletons_to_retrieve:
-            print(f'Filtering {{len(skeletons_to_retrieve)}} neurons for size')
-            counts = client.get_node_counts(skeletons_to_retrieve)
-            skeletons_to_retrieve = [e for e in skeletons_to_retrieve if counts.get(str(e), 0) >= self.minimum_nodes]
+        # Only if all other filters are empty AND a minimum node count has been
+        # provided, we will find skeletons by size
+        if not self.names and not self.annotations and not self.skeleton_ids and (self.minimum_nodes > 0):
+            skeletons_to_retrieve = set(list(client.search_size(self.minimum_nodes)))
+            if self.skip_existing:
+                existing_skids = {ob['skeleton_id'] for ob in bpy.data.objects if 'skeleton_id' in ob}
+                skeletons_to_retrieve = skeletons_to_retrieve - existing_skids
 
-        # Extract skeleton IDs from skeleton_id string
-        print(f'{len(skeletons_to_retrieve)} neurons found - resolving names...')
+        if not len(skeletons_to_retrieve):
+            raise ValueError('No skeletons matching the given criteria found!')
+
+        print(f'{len(skeletons_to_retrieve)} neurons found')
+        print('Resolving names...')
         neuron_names = client.get_names(skeletons_to_retrieve)
 
         print("Collecting skeleton data...")
@@ -426,7 +438,7 @@ class CATMAID_OP_fetch_neuron(Operator):
                                       with_history=False,
                                       with_abutting=self.import_abutting)
 
-        print(f"Importing for {len(skdata)} skeletons into Blender")
+        print(f"Importing {len(skdata)} skeletons into Blender...")
 
         for skid in skdata:
             # Create an object name
@@ -1860,6 +1872,12 @@ class CatmaidClient:
                     matches += e['skeleton_ids']
 
         return np.unique(matches).astype(str)
+
+    def search_size(self, size):
+        """Find skeletons above given size."""
+        url = self.make_url(f"{self.project_id}/skeletons", nodecount_gt=size - 1)
+        results = self.fetch(url)
+        return np.unique(results).astype(str)
 
     def upload_volume(self, vertices, faces, name, comment):
         """Upload volume to CATMAID."""

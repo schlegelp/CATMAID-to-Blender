@@ -1,10 +1,13 @@
 ### CATMAID to Blender Import Script - Version History:
 
+### V7.1 11/07/2023:
+    - allow importing skeletons above a given node count
+
 ### V7.0 04/10/2021:
     - re-write to work with Blender 2.9x (possibly also 2.8x)
     - dropped support for Blender 2.7x
     - moved plugin to sidebar of 3d view
-    - dropped a bunch of functions    
+    - dropped a bunch of functions
 
 ### V6.2 26/02/2018:
     - use requests library if possible to prevent SSL handshake errors due to outdated OpenSSL version in Blender 2.79
